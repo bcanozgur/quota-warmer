@@ -34,7 +34,9 @@ QuotaWarmer reads the earliest message timestamp in the current window to determ
 
 1. Download the latest `QuotaWarmer.dmg` from [Releases](https://github.com/bcanozgur/quota-warmer/releases)
 2. Open the DMG and drag **QuotaWarmer.app** to Applications
-3. Right-click → **Open** on first launch to bypass Gatekeeper (ad-hoc signed build)
+3. Double-click **Install.command** inside the DMG — this removes the macOS quarantine flag and opens the app
+
+> The app is ad-hoc signed (no Apple Developer ID). The install script runs `xattr -cr` to clear Gatekeeper's quarantine so the app opens without warnings. Alternatively: **System Settings → Privacy & Security → Open Anyway**.
 
 ## Build from source
 
