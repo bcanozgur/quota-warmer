@@ -23,6 +23,9 @@ fastlane/Preview.html
 fastlane/screenshots/**/*.png
 fastlane/test_output
 
+# Local notes
+TODO.md
+
 # Generated
 *.dmg
 staging_dmg/
