@@ -33,10 +33,17 @@ QuotaWarmer reads the earliest message timestamp in the current window to determ
 ## Install
 
 1. Download the latest `QuotaWarmer.dmg` from [Releases](https://github.com/bcanozgur/quota-warmer/releases)
-2. Open the DMG
-3. Double-click **Install.command** — copies the app to Applications and removes the Gatekeeper quarantine automatically
+2. Open the DMG and drag **QuotaWarmer.app** to Applications
+3. Try to open the app — macOS will show a security warning
+4. Open **System Settings → Privacy & Security** → scroll down → click **Open Anyway**
 
-> Do not drag the app manually. Use Install.command so macOS does not block it on first launch.
+Alternatively, run this once in Terminal:
+
+```bash
+xattr -cr /Applications/QuotaWarmer.app
+```
+
+> QuotaWarmer is open source and ad-hoc signed. Apple requires a $99/year Developer ID to skip this step. The Homebrew Cask distribution (coming soon) will handle this automatically.
 
 ## Build from source
 

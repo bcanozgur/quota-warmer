@@ -88,10 +88,6 @@ jobs:
           cp -R "${{ steps.locate.outputs.app_path }}" "${STAGING}/"
           # Add symlink to Applications for drag-and-drop install
           ln -s /Applications "${STAGING}/Applications"
-          # Install script that removes quarantine flag (Gatekeeper bypass for ad-hoc signed builds)
-          cp scripts/Install.command "${STAGING}/Install.command"
-          chmod +x "${STAGING}/Install.command"
-
           hdiutil create \
             -volname "${{ env.APP_NAME }} ${{ steps.version.outputs.version }}" \
             -srcfolder "${STAGING}" \
