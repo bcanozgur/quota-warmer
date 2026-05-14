@@ -1,5 +1,21 @@
 import SwiftUI
+import AppKit
 import ServiceManagement
+
+// Makes the hosting NSWindow transparent so our rounded corners don't bleed.
+private struct WindowTransparencyConfigurator: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSView {
+        let view = NSView()
+        DispatchQueue.main.async {
+            guard let window = view.window else { return }
+            window.backgroundColor = .clear
+            window.isOpaque = false
+            window.hasShadow = true
+        }
+        return view
+    }
+    func updateNSView(_ nsView: NSView, context: Context) {}
+}
 
 enum AppTab: Hashable {
     case tool(ToolID)
@@ -23,11 +39,9 @@ struct MenuContent: View {
         }
         .frame(width: DS.totalWidth)
         .background(DS.C.bg)
-        .overlay(
-            RoundedRectangle(cornerRadius: 12)
-                .stroke(DS.C.border, lineWidth: 1)
-        )
-        .clipShape(RoundedRectangle(cornerRadius: 12))
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .shadow(color: .black.opacity(0.14), radius: 18, x: 0, y: 6)
+        .background(WindowTransparencyConfigurator())
     }
 
     // MARK: - Sidebar
@@ -43,7 +57,6 @@ struct MenuContent: View {
 
             Rectangle().fill(DS.C.border).frame(height: 1)
 
-            // Tool tabs
             ForEach(ToolID.allCases) { tool in
                 SidebarTab(
                     tool: tool,
@@ -56,7 +69,6 @@ struct MenuContent: View {
 
             Rectangle().fill(DS.C.border).frame(height: 1)
 
-            // Settings
             SidebarSettingsTab(isSelected: selectedTab == .settings) {
                 selectedTab = .settings
             }
@@ -101,7 +113,7 @@ struct MenuContent: View {
 
             if let update = appState.updateInfo {
                 Button(action: { NSWorkspace.shared.open(update.htmlURL) }) {
-                    HStack(spacing: 4) {
+                    HStack(spacing: 3) {
                         Image(systemName: "arrow.down.circle")
                             .font(.system(size: 9))
                         Text("v\(update.version) available")
@@ -146,7 +158,7 @@ struct SidebarTab: View {
                     .resizable()
                     .scaledToFit()
                     .frame(width: 22, height: 22)
-                    .opacity(toolState.isWindowActive || toolState.isWarming ? 1.0 : 0.30)
+                    .opacity(toolState.isWindowActive || toolState.isWarming ? 1.0 : 0.28)
 
                 if let dot = dotColor {
                     Circle()
@@ -157,7 +169,7 @@ struct SidebarTab: View {
                 }
             }
             .frame(width: DS.sidebarWidth, height: DS.sidebarWidth)
-            .background(isSelected ? accent.opacity(0.10) : Color.clear)
+            .background(isSelected ? accent.opacity(0.08) : Color.clear)
             .overlay(
                 RoundedRectangle(cornerRadius: 1)
                     .fill(isSelected ? accent : .clear)
