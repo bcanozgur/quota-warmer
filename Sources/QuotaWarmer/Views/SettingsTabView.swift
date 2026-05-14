@@ -8,7 +8,7 @@ struct SettingsTabView: View {
     @AppStorage("notifyWarning")     private var notifyWarning: Bool     = true
     @AppStorage("notifyActivated")   private var notifyActivated: Bool   = true
     @AppStorage("launchAtLogin")     private var launchAtLogin: Bool     = false
-    @AppStorage("windowDurationHrs") private var windowDurationHrs: Int  = 5
+    @AppStorage("windowDurationSecs") private var windowDurationSecs: Int = 5 * 3600
 
     private let refreshOptions: [(label: String, value: Int)] = [
         ("5s", 5), ("15s", 15), ("30s", 30), ("60s", 60), ("120s", 120)
@@ -31,14 +31,14 @@ struct SettingsTabView: View {
                     Divider().background(DS.C.border).padding(.leading, 36)
 
                     row(icon: "timer", title: "Window Duration",
-                        subtitle: "Match your plan's actual quota window") {
+                        subtitle: "Claude Code uses a rolling 5h window") {
                         segmentedPicker(
-                            options: [(label: "4h", value: 4*3600),
-                                      (label: "5h", value: 5*3600),
-                                      (label: "6h", value: 6*3600)],
+                            options: [(label: "4h", value: 4 * 3600),
+                                      (label: "5h", value: 5 * 3600),
+                                      (label: "6h", value: 6 * 3600)],
                             selected: .init(
-                                get: { windowDurationHrs },
-                                set: { windowDurationHrs = $0; appState.refreshAllActivity() }
+                                get: { windowDurationSecs },
+                                set: { windowDurationSecs = $0; appState.refreshAllActivity() }
                             )
                         ) {}
                     }

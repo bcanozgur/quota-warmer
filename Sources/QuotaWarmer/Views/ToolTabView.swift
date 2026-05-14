@@ -88,7 +88,7 @@ struct ToolTabView: View {
     private var windowSection: some View {
         VStack(alignment: .leading, spacing: DS.Space.sm) {
             HStack {
-                Text("WINDOW").dsLabel()
+                Text(windowLabel).dsLabel()
                 Spacer()
                 phaseLabel
             }
@@ -102,18 +102,18 @@ struct ToolTabView: View {
                         .fill(barGradient)
                         .frame(width: max(geo.size.width * toolState.windowProgress, 0), height: 4)
                         .animation(.easeInOut(duration: 1), value: toolState.windowProgress)
-                    ForEach([1, 2, 3, 4], id: \.self) { h in
+                    ForEach(1..<totalHours, id: \.self) { h in
                         Rectangle()
                             .fill(DS.C.bg.opacity(0.7))
                             .frame(width: 1, height: 4)
-                            .offset(x: geo.size.width * Double(h) / 5.0 - 0.5)
+                            .offset(x: geo.size.width * Double(h) / Double(totalHours) - 0.5)
                     }
                 }
             }
             .frame(height: 4)
 
             HStack {
-                ForEach(["0h", "1h", "2h", "3h", "4h", "5h"], id: \.self) { t in
+                ForEach(hourLabels, id: \.self) { t in
                     Text(t)
                         .font(.system(size: 8))
                         .foregroundStyle(DS.C.textMuted)
@@ -322,6 +322,17 @@ struct ToolTabView: View {
     }
 
     // MARK: - Helpers
+
+    private var totalHours: Int { Int(toolState.tool.windowDuration) / 3600 }
+
+    private var hourLabels: [String] {
+        (0...totalHours).map { "\($0)h" }
+    }
+
+    private var windowLabel: String {
+        let hrs = Int(toolState.tool.windowDuration) / 3600
+        return "\(hrs)H WINDOW"
+    }
 
     private var statusLabel: String {
         switch phase {
