@@ -2,13 +2,6 @@
 
 > Keep your Claude Code and Codex CLI quota windows alive — automatically.
 
-<p align="left">
-  <img src="https://img.shields.io/badge/macOS-14%2B-black?style=flat-square&logo=apple" />
-  <img src="https://img.shields.io/badge/Swift-5.9-orange?style=flat-square&logo=swift" />
-  <img src="https://img.shields.io/github/v/release/bcanozgur/quota-warmer?style=flat-square&color=orange" />
-  <img src="https://img.shields.io/github/license/bcanozgur/quota-warmer?style=flat-square" />
-</p>
-
 ---
 
 Claude Code and Codex CLI use a **5-hour rolling quota window** that starts when you send your first message. If you open the tool late, you burn a big chunk of that window doing nothing.
