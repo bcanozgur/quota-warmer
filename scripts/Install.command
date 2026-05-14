@@ -1,11 +1,20 @@
 #!/bin/bash
-APP="/Applications/QuotaWarmer.app"
-if [ ! -d "$APP" ]; then
-  echo "QuotaWarmer.app not found in /Applications."
-  echo "Please drag QuotaWarmer.app to the Applications folder first, then run this script."
-  read -p "Press Enter to exit..."
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+APP_SRC="$SCRIPT_DIR/QuotaWarmer.app"
+APP_DEST="/Applications/QuotaWarmer.app"
+
+echo "Installing QuotaWarmer..."
+
+if [ ! -d "$APP_SRC" ]; then
+  echo "Error: QuotaWarmer.app not found next to this script."
   exit 1
 fi
-xattr -cr "$APP"
-echo "Quarantine removed. Opening QuotaWarmer..."
-open "$APP"
+
+# Copy to /Applications (overwrite if exists)
+cp -R "$APP_SRC" "$APP_DEST"
+
+# Remove quarantine so Gatekeeper does not block the app
+xattr -cr "$APP_DEST"
+
+echo "Done. Opening QuotaWarmer..."
+open "$APP_DEST"
