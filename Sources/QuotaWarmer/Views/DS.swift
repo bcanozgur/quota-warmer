@@ -1,32 +1,32 @@
 import SwiftUI
 
 enum DS {
-    // MARK: - Colors (openusage-inspired macOS native dark)
+    // MARK: - Colors (clean light mode — white/black)
     enum C {
-        // Backgrounds — Apple's exact system dark surface colors
-        static let bg          = Color(red: 0.110, green: 0.110, blue: 0.118)  // #1c1c1e
-        static let surface     = Color(red: 0.165, green: 0.165, blue: 0.173)  // #2a2a2c
-        static let surfaceHigh = Color(red: 0.173, green: 0.173, blue: 0.181)  // #2c2c2e
+        // Backgrounds
+        static let bg          = Color(white: 1.00)          // pure white
+        static let surface     = Color(white: 0.965)         // #f7f7f7
+        static let surfaceHigh = Color(white: 0.935)         // #eeeeee
 
         // Borders
-        static let border      = Color(white: 1, opacity: 0.08)
-        static let borderFocus = Color(white: 1, opacity: 0.15)
+        static let border      = Color.black.opacity(0.08)
+        static let borderFocus = Color.black.opacity(0.16)
 
-        // Text hierarchy
-        static let text        = Color(red: 0.929, green: 0.929, blue: 0.929)  // #ededed
-        static let textSub     = Color(white: 0.533)                            // #888
-        static let textMuted   = Color(white: 0.380)                            // #616
+        // Text
+        static let text        = Color(white: 0.11)          // #1c1c1e near-black
+        static let textSub     = Color(white: 0.43)          // #6e6e73
+        static let textMuted   = Color(white: 0.64)          // #a3a3a3
 
         // Semantic
-        static let green  = Color(red: 0.22, green: 0.87, blue: 0.45)
-        static let yellow = Color(red: 0.97, green: 0.80, blue: 0.25)
-        static let red    = Color(red: 0.95, green: 0.37, blue: 0.37)
-        static let blue   = Color(red: 0.40, green: 0.62, blue: 1.00)
+        static let green  = Color(red: 0.13, green: 0.69, blue: 0.30)
+        static let yellow = Color(red: 0.82, green: 0.60, blue: 0.05)
+        static let red    = Color(red: 0.86, green: 0.20, blue: 0.20)
+        static let blue   = Color(red: 0.20, green: 0.46, blue: 0.95)
 
         static func accent(_ tool: ToolID) -> Color {
             tool == .claude
-                ? Color(red: 0.95, green: 0.46, blue: 0.13)   // Anthropic orange
-                : Color(red: 0.45, green: 0.32, blue: 0.96)   // OpenAI indigo
+                ? Color(red: 0.90, green: 0.38, blue: 0.05)   // Anthropic orange
+                : Color(red: 0.38, green: 0.24, blue: 0.90)   // OpenAI indigo
         }
     }
 
@@ -62,13 +62,13 @@ enum DS {
 extension View {
     func dsCard() -> some View {
         self
-            .background(DS.C.surface, in: RoundedRectangle(cornerRadius: DS.R.md))
+            .background(DS.C.bg, in: RoundedRectangle(cornerRadius: DS.R.md))
             .overlay(RoundedRectangle(cornerRadius: DS.R.md).stroke(DS.C.border, lineWidth: 1))
     }
 
     func dsLabel() -> some View {
         self.font(.system(size: 9, weight: .semibold))
             .foregroundStyle(DS.C.textMuted)
-            .tracking(0.5)
+            .tracking(0.4)
     }
 }

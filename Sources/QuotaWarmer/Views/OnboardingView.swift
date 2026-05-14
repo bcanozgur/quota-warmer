@@ -23,8 +23,8 @@ struct OnboardingView: View {
             }
             .padding(.horizontal, DS.Space.lg)
             .padding(.vertical, DS.Space.sm + 2)
-            .background(DS.C.yellow.opacity(0.06))
-            .overlay(Rectangle().frame(height: 1).foregroundStyle(DS.C.yellow.opacity(0.15)), alignment: .bottom)
+            .background(DS.C.yellow.opacity(0.10))
+            .overlay(Rectangle().frame(height: 1).foregroundStyle(DS.C.yellow.opacity(0.25)), alignment: .bottom)
 
             VStack(alignment: .leading, spacing: DS.Space.sm) {
                 Text("Some CLIs were not found in PATH. QuotaWarmer needs them to send warmup messages.")

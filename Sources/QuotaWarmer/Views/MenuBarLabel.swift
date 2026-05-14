@@ -13,7 +13,7 @@ struct MenuBarLabel: View {
             if isActive {
                 Image(systemName: "arrow.2.circlepath")
                     .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(DS.C.textSub)
+                    .foregroundStyle(.primary)
                     .rotationEffect(.degrees(spinDegrees))
                     .onAppear {
                         withAnimation(.linear(duration: 1).repeatForever(autoreverses: false)) {

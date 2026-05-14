@@ -302,10 +302,10 @@ struct ToolTabView: View {
             if toolState.warmupLogs.isEmpty {
                 Text("No warmups triggered yet")
                     .font(.system(size: 10))
-                    .foregroundStyle(DS.C.textMuted)
+                    .foregroundStyle(Color.white.opacity(0.40))
                     .frame(maxWidth: .infinity, alignment: .center)
                     .padding(.vertical, 20)
-                    .background(Color.black.opacity(0.55))
+                    .background(Color(white: 0.10))
             } else {
                 ScrollView(.vertical, showsIndicators: true) {
                     LazyVStack(alignment: .leading, spacing: 5) {
@@ -316,7 +316,7 @@ struct ToolTabView: View {
                     .padding(DS.Space.md)
                 }
                 .frame(maxHeight: 170)
-                .background(Color.black.opacity(0.75))
+                .background(Color(white: 0.10))
             }
         }
     }
