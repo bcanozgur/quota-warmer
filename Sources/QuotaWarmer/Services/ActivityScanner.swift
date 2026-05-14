@@ -21,7 +21,7 @@ class ActivityScanner {
 
     // MARK: - Public
 
-    /// Last message time across all logs (display only).
+    /// Most-recent message timestamp across all log files (display only).
     func lastActivity(for tool: ToolID) -> Date? {
         guard let base = tool.logDirectoryURL,
               FileManager.default.fileExists(atPath: base.path) else { return nil }
@@ -34,16 +34,20 @@ class ActivityScanner {
         return latest
     }
 
-    /// FIRST message timestamp in the current 5-hour window.
-    /// This is the correct anchor: window expires at windowStart + 5h.
-    /// Returns nil if no activity within the last windowDuration seconds.
+    /// Earliest message timestamp within the current rolling window.
+    /// This is the correct scheduling anchor: window expires at windowStart + windowDuration.
+    ///
+    /// Approach: scan all JSONL files touched in the last windowDuration seconds,
+    /// find the earliest ISO-8601 timestamp inside them that is also within the window.
+    /// The Anthropic API would give an exact `resets_at` but is ToS-restricted for
+    /// third-party use (Feb 2026). Log-based scanning is ≈ ±1 minute accurate.
     func windowStartTime(for tool: ToolID) -> Date? {
         guard let base = tool.logDirectoryURL,
               FileManager.default.fileExists(atPath: base.path) else { return nil }
 
-        let cutoff = Date().addingTimeInterval(-tool.windowDuration)
+        let windowDuration = tool.windowDuration
+        let cutoff = Date().addingTimeInterval(-windowDuration)
 
-        // Collect files that were touched within the current window
         var candidates: [(mtime: Date, url: URL)] = []
         enumerateJSONL(in: base) { url in
             if let mtime = self.mtime(of: url), mtime >= cutoff {
@@ -52,7 +56,7 @@ class ActivityScanner {
         }
 
         guard !candidates.isEmpty else { return nil }
-        // Sort oldest-first so we scan earliest sessions first
+        // Oldest files first — the window start is in the earliest active file
         candidates.sort { $0.mtime < $1.mtime }
 
         var windowStart: Date?
@@ -90,31 +94,44 @@ class ActivityScanner {
             .map { DayActivity(date: $0.key, sessionCount: $0.value) }
     }
 
-    // MARK: - Private helpers
+    // MARK: - Private
 
-    /// Reads first ~4 KB and returns the earliest timestamp >= cutoff.
+    /// Reads from the beginning of the file and returns the earliest complete-line
+    /// timestamp that is >= cutoff. Reads up to 16 KB to cover long first lines.
+    /// Discards any partial line at the buffer boundary to avoid parse errors.
     private func firstTimestampInWindow(_ url: URL, cutoff: Date) -> Date? {
         guard let handle = try? FileHandle(forReadingFrom: url) else { return nil }
         defer { try? handle.close() }
-        let data = handle.readData(ofLength: 4096)
+
+        // 16 KB is enough to cover the timestamp field even in very long JSONL lines,
+        // since the timestamp field appears in the first ~200 bytes of each record.
+        let data = handle.readData(ofLength: 16_384)
         guard let text = String(data: data, encoding: .utf8) else { return nil }
-        for line in text.components(separatedBy: "\n") {
+
+        // Split on newlines; drop the last element which may be a truncated line.
+        var lines = text.components(separatedBy: "\n")
+        if lines.count > 1 { lines.removeLast() }
+
+        for line in lines {
             if let ts = parseTimestamp(from: line), ts >= cutoff { return ts }
         }
         return nil
     }
 
-    /// Reads last ~4 KB and returns the most recent timestamp.
+    /// Reads last 8 KB and returns the most-recent timestamp (any line).
     private func lastTimestamp(in url: URL) -> Date? {
         guard let handle = try? FileHandle(forReadingFrom: url) else { return nil }
         defer { try? handle.close() }
         let fileSize = (try? handle.seekToEnd()) ?? 0
         guard fileSize > 0 else { return nil }
-        let readSize = UInt64(min(fileSize, 4096))
+        let readSize = UInt64(min(fileSize, 8_192))
         try? handle.seek(toOffset: fileSize - readSize)
         guard let data = try? handle.readToEnd(),
               let text = String(data: data, encoding: .utf8) else { return nil }
-        for line in text.components(separatedBy: "\n").reversed() {
+        // Reversed: first complete line from the end that has a timestamp wins
+        var lines = text.components(separatedBy: "\n")
+        if lines.count > 1 { lines.removeFirst() } // may be partial at start of buffer
+        for line in lines.reversed() {
             if let ts = parseTimestamp(from: line) { return ts }
         }
         return nil
@@ -126,7 +143,7 @@ class ActivityScanner {
 
     private func parseTimestamp(from jsonLine: String) -> Date? {
         let t = jsonLine.trimmingCharacters(in: .whitespaces)
-        guard !t.isEmpty,
+        guard !t.isEmpty, t.hasPrefix("{"),
               let data = t.data(using: .utf8),
               let obj  = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let ts   = obj["timestamp"] as? String else { return nil }
