@@ -1,0 +1,144 @@
+name: Build & Release DMG
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version string (e.g. 1.0.0)"
+        required: true
+        default: "1.0.0"
+
+env:
+  SCHEME: QuotaWarmer
+  APP_NAME: QuotaWarmer
+
+jobs:
+  build-dmg:
+    runs-on: macos-15
+    timeout-minutes: 30
+
+    steps:
+      # ── Checkout ──────────────────────────────────────────────────────────
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # ── Xcode version ─────────────────────────────────────────────────────
+      - name: Select Xcode
+        run: sudo xcode-select -s /Applications/Xcode_16.3.app
+
+      # ── Install xcodegen ──────────────────────────────────────────────────
+      - name: Install xcodegen
+        run: brew install xcodegen
+
+      # ── Generate Xcode project ────────────────────────────────────────────
+      - name: Generate project
+        run: xcodegen generate
+
+      # ── Determine version ─────────────────────────────────────────────────
+      - name: Determine version
+        id: version
+        run: |
+          if [[ "${{ github.event_name }}" == "push" ]]; then
+            VERSION="${GITHUB_REF_NAME#v}"
+          else
+            VERSION="${{ github.event.inputs.version }}"
+          fi
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "tag=v${VERSION}"    >> "$GITHUB_OUTPUT"
+
+      # ── Build (Release, ad-hoc signed) ────────────────────────────────────
+      - name: Build
+        run: |
+          xcodebuild \
+            -project "${{ env.APP_NAME }}.xcodeproj" \
+            -scheme   "${{ env.SCHEME }}" \
+            -configuration Release \
+            -derivedDataPath DerivedData \
+            MARKETING_VERSION="${{ steps.version.outputs.version }}" \
+            CODE_SIGNING_STYLE=Manual \
+            CODE_SIGN_IDENTITY="-" \
+            CODE_SIGNING_ALLOWED=YES \
+            build
+
+      # ── Locate .app ───────────────────────────────────────────────────────
+      - name: Locate .app
+        id: locate
+        run: |
+          APP_PATH=$(find DerivedData -name "${{ env.APP_NAME }}.app" -maxdepth 8 | head -1)
+          echo "app_path=${APP_PATH}" >> "$GITHUB_OUTPUT"
+          echo "Found: ${APP_PATH}"
+
+      # ── Ad-hoc code sign ──────────────────────────────────────────────────
+      - name: Ad-hoc sign
+        run: |
+          codesign --force --deep --sign - \
+            "${{ steps.locate.outputs.app_path }}"
+
+      # ── Create DMG ────────────────────────────────────────────────────────
+      - name: Create DMG
+        run: |
+          DMG_NAME="${{ env.APP_NAME }}-${{ steps.version.outputs.version }}.dmg"
+          STAGING="staging_dmg"
+          mkdir -p "${STAGING}"
+          cp -R "${{ steps.locate.outputs.app_path }}" "${STAGING}/"
+          # Add symlink to Applications for drag-and-drop install
+          ln -s /Applications "${STAGING}/Applications"
+
+          hdiutil create \
+            -volname "${{ env.APP_NAME }} ${{ steps.version.outputs.version }}" \
+            -srcfolder "${STAGING}" \
+            -ov \
+            -format UDZO \
+            "${DMG_NAME}"
+
+          echo "dmg_name=${DMG_NAME}" >> "$GITHUB_ENV"
+
+      # ── SHA-256 checksum ──────────────────────────────────────────────────
+      - name: Checksum
+        run: |
+          shasum -a 256 "${{ env.dmg_name }}" | tee "${{ env.dmg_name }}.sha256"
+
+      # ── Upload artifacts (for manual runs) ───────────────────────────────
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.APP_NAME }}-${{ steps.version.outputs.version }}
+          path: |
+            ${{ env.dmg_name }}
+            ${{ env.dmg_name }}.sha256
+          retention-days: 30
+
+      # ── Create GitHub Release ─────────────────────────────────────────────
+      - name: Create Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.tag }}
+          name: "QuotaWarmer ${{ steps.version.outputs.version }}"
+          body: |
+            ## QuotaWarmer ${{ steps.version.outputs.version }}
+
+            macOS menu bar app that keeps your Claude Code and Codex CLI quota windows alive.
+
+            ### Install
+
+            1. Download `${{ env.dmg_name }}` below
+            2. Open the DMG and drag **QuotaWarmer.app** to Applications
+            3. Right-click → Open (first launch — bypasses Gatekeeper for ad-hoc signed builds)
+
+            > **Note:** This is an ad-hoc signed build. macOS Gatekeeper will warn on first launch. Right-click the app and choose **Open** to proceed.
+
+            ### SHA-256
+            ```
+            $(cat ${{ env.dmg_name }}.sha256)
+            ```
+          files: |
+            ${{ env.dmg_name }}
+            ${{ env.dmg_name }}.sha256
+          draft: false
+          prerelease: ${{ contains(steps.version.outputs.version, '-') }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
