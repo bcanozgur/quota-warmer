@@ -88,6 +88,21 @@ jobs:
           cp -R "${{ steps.locate.outputs.app_path }}" "${STAGING}/"
           # Add symlink to Applications for drag-and-drop install
           ln -s /Applications "${STAGING}/Applications"
+          # Install script that removes quarantine flag (Gatekeeper bypass for ad-hoc signed builds)
+          cat > "${STAGING}/Install.command" << 'SCRIPT'
+#!/bin/bash
+APP="/Applications/QuotaWarmer.app"
+if [ ! -d "$APP" ]; then
+  echo "QuotaWarmer.app not found in /Applications."
+  echo "Please drag QuotaWarmer.app to the Applications folder first, then run this script."
+  read -p "Press Enter to exit..."
+  exit 1
+fi
+xattr -cr "$APP"
+echo "✓ Quarantine removed. QuotaWarmer is ready to open."
+open "$APP"
+SCRIPT
+          chmod +x "${STAGING}/Install.command"
 
           hdiutil create \
             -volname "${{ env.APP_NAME }} ${{ steps.version.outputs.version }}" \
