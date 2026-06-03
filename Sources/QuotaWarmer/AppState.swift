@@ -66,12 +66,12 @@ final class ToolState: ObservableObject {
     }
 
     var windowProgress: Double {
-        primaryMetric?.clampedUsed ?? 0
+        primaryMetric?.remainingFraction ?? 0
     }
 
     var canAutoWarmFromSnapshot: Bool {
         guard freshness == .fresh, let metric = primaryMetric else { return false }
-        let remaining = metric.remainingPercent ?? (1 - metric.clampedUsed)
+        let remaining = metric.remainingFraction
         if remaining >= 0.95 { return true }
         if let resetAt = metric.resetAt, resetAt <= Date().addingTimeInterval(60) { return true }
         return false
@@ -150,9 +150,14 @@ final class AppState: ObservableObject {
         Task { await triggerWarmup(tool: tool, mode: "manual") }
     }
 
-    func refreshAllActivity(allowAutomaticWarmup: Bool = false) {
+    func refreshAllActivity(allowAutomaticWarmup: Bool = false, includeInactive: Bool = false) {
         isRefreshing = true
-        for tool in ToolID.allCases {
+        let tools = ToolID.allCases.filter { includeInactive || state(for: $0).isActive }
+        guard !tools.isEmpty else {
+            isRefreshing = false
+            return
+        }
+        for tool in tools {
             let state = state(for: tool)
             state.lastLogActivity = scanner.lastActivity(for: tool)
             state.weeklyActivity = scanner.weeklyActivity(for: tool)
@@ -197,7 +202,9 @@ final class AppState: ObservableObject {
     func applyRefreshInterval() {
         startQuotaRefreshTimer()
         startUIRefreshTimer()
-        for tool in ToolID.allCases { state(for: tool).nextRefreshAt = Date().addingTimeInterval(refreshInterval) }
+        for tool in ToolID.allCases where state(for: tool).isActive {
+            state(for: tool).nextRefreshAt = Date().addingTimeInterval(refreshInterval)
+        }
     }
 
     func checkForAppUpdate() async {
@@ -298,6 +305,7 @@ final class AppState: ObservableObject {
         let state = state(for: tool)
         guard state.isActive, !globalPassive else {
             scheduler.invalidate(tool: tool)
+            state.nextRefreshAt = nil
             return
         }
         let nextDate = Date().addingTimeInterval(refreshInterval)
@@ -335,7 +343,7 @@ final class AppState: ObservableObject {
 
     private func addHistory(tool: ToolID?, kind: HistoryKind, title: String, detail: String) {
         history.insert(HistoryEvent(timestamp: Date(), tool: tool, kind: kind, title: title, detail: detail), at: 0)
-        if history.count > 80 { history.removeLast(history.count - 80) }
+        if history.count > 10 { history.removeLast(history.count - 10) }
     }
 
     private func nextBackoff(for state: ToolState) -> TimeInterval {

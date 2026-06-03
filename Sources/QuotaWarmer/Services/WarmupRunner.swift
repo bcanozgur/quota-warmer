@@ -26,15 +26,16 @@ class WarmupRunner {
 
     func warmup(_ tool: ToolID) async throws -> WarmupResult {
         let cliName = tool == .claude ? "claude" : "codex"
-        guard await cliExists(cliName) else {
+        guard let cliURL = await resolveCLI(named: cliName) else {
             throw WarmupError.cliNotFound(cliName)
         }
         let workspaceURL = try warmupWorkspaceURL()
+        let pathPrefix = cliURL.deletingLastPathComponent().path
 
         do {
-            return try await runWarmupCommand(tool.warmupCommand, cliName: cliName, workspaceURL: workspaceURL)
+            return try await runWarmupCommand(tool.warmupCommand, cliName: cliName, pathPrefix: pathPrefix, workspaceURL: workspaceURL)
         } catch WarmupError.exitCode where tool.fallbackWarmupCommand != nil {
-            let result = try await runWarmupCommand(tool.fallbackWarmupCommand!, cliName: cliName, workspaceURL: workspaceURL)
+            let result = try await runWarmupCommand(tool.fallbackWarmupCommand!, cliName: cliName, pathPrefix: pathPrefix, workspaceURL: workspaceURL)
             return WarmupResult(
                 date: result.date,
                 command: result.command,
@@ -43,12 +44,13 @@ class WarmupRunner {
         }
     }
 
-    private func runWarmupCommand(_ command: String, cliName: String, workspaceURL: URL) async throws -> WarmupResult {
+    private func runWarmupCommand(_ command: String, cliName: String, pathPrefix: String, workspaceURL: URL) async throws -> WarmupResult {
         return try await withCheckedThrowingContinuation { continuation in
             let process = Process()
             process.executableURL = URL(fileURLWithPath: "/bin/zsh")
             process.arguments = ["-lc", command]
             process.currentDirectoryURL = workspaceURL
+            process.environment = environment(prependingPath: pathPrefix)
 
             let outPipe = Pipe()
             let errPipe = Pipe()
@@ -97,20 +99,113 @@ class WarmupRunner {
 
     func cliMissing(_ tool: ToolID) async -> Bool {
         let name = tool == .claude ? "claude" : "codex"
-        return !(await cliExists(name))
+        return await resolveCLI(named: name) == nil
     }
 
-    private func cliExists(_ name: String) async -> Bool {
+    private func resolveCLI(named name: String) async -> URL? {
+        for url in candidateCLIURLs(named: name) {
+            if FileManager.default.isExecutableFile(atPath: url.path) {
+                return url
+            }
+        }
+
+        if let shellURL = await commandPath(named: name) {
+            return shellURL
+        }
+
+        return nil
+    }
+
+    private func commandPath(named name: String) async -> URL? {
         await withCheckedContinuation { continuation in
             let process = Process()
             process.executableURL = URL(fileURLWithPath: "/bin/zsh")
-            process.arguments = ["-lc", "which \(name)"]
-            process.standardOutput = FileHandle.nullDevice
+            process.arguments = ["-lc", "command -v \(name)"]
+            process.environment = environment(prependingPath: nil)
+
+            let outPipe = Pipe()
+            process.standardOutput = outPipe
             process.standardError  = FileHandle.nullDevice
             process.terminationHandler = { p in
-                continuation.resume(returning: p.terminationStatus == 0)
+                guard p.terminationStatus == 0 else {
+                    continuation.resume(returning: nil)
+                    return
+                }
+                let data = outPipe.fileHandleForReading.readDataToEndOfFile()
+                let path = String(data: data, encoding: .utf8)?
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                if let path, !path.isEmpty {
+                    continuation.resume(returning: URL(fileURLWithPath: path))
+                } else {
+                    continuation.resume(returning: nil)
+                }
             }
-            try? process.run()
+            do {
+                try process.run()
+            } catch {
+                continuation.resume(returning: nil)
+            }
+        }
+    }
+
+    private func candidateCLIURLs(named name: String) -> [URL] {
+        let fileManager = FileManager.default
+        let home = fileManager.homeDirectoryForCurrentUser
+        var dirs: [URL] = [
+            URL(fileURLWithPath: "/opt/homebrew/bin"),
+            URL(fileURLWithPath: "/usr/local/bin"),
+            home.appendingPathComponent(".local/bin"),
+            home.appendingPathComponent(".npm-global/bin"),
+            home.appendingPathComponent(".bun/bin")
+        ]
+
+        let nvmRoot = home.appendingPathComponent(".nvm/versions/node")
+        if let versions = try? fileManager.contentsOfDirectory(
+            at: nvmRoot,
+            includingPropertiesForKeys: nil,
+            options: [.skipsHiddenFiles]
+        ) {
+            dirs.append(contentsOf: versions.map { $0.appendingPathComponent("bin") })
+        }
+
+        let pathDirs = (ProcessInfo.processInfo.environment["PATH"] ?? "")
+            .split(separator: ":")
+            .map { URL(fileURLWithPath: String($0)) }
+        dirs.append(contentsOf: pathDirs)
+
+        var seen = Set<String>()
+        return dirs.compactMap { dir in
+            let candidate = dir.appendingPathComponent(name)
+            guard seen.insert(candidate.path).inserted else { return nil }
+            return candidate
+        }
+    }
+
+    private func environment(prependingPath pathPrefix: String?) -> [String: String] {
+        var env = ProcessInfo.processInfo.environment
+        var components: [String] = []
+        if let pathPrefix, !pathPrefix.isEmpty {
+            components.append(pathPrefix)
+        }
+        components.append(contentsOf: [
+            "/opt/homebrew/bin",
+            "/opt/homebrew/sbin",
+            "/usr/local/bin",
+            "\(FileManager.default.homeDirectoryForCurrentUser.path)/.local/bin",
+            "\(FileManager.default.homeDirectoryForCurrentUser.path)/.bun/bin"
+        ])
+        if let existing = env["PATH"], !existing.isEmpty {
+            components.append(existing)
+        }
+        env["PATH"] = uniquePath(components).joined(separator: ":")
+        return env
+    }
+
+    private func uniquePath(_ components: [String]) -> [String] {
+        var seen = Set<String>()
+        return components.filter { component in
+            guard !component.isEmpty else { return false }
+            return seen.insert(component).inserted
         }
     }
 

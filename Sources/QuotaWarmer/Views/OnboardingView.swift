@@ -7,7 +7,6 @@ struct OnboardingView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            // Header
             HStack(spacing: DS.Space.sm) {
                 Image(systemName: "exclamationmark.triangle.fill")
                     .foregroundStyle(DS.C.yellow).font(.system(size: 12))
@@ -21,13 +20,13 @@ struct OnboardingView: View {
                 }
                 .buttonStyle(.plain)
             }
-            .padding(.horizontal, DS.Space.lg)
-            .padding(.vertical, DS.Space.sm + 2)
+            .padding(.horizontal, DS.Space.md)
+            .padding(.vertical, 8)
             .background(DS.C.yellow.opacity(0.10))
             .overlay(Rectangle().frame(height: 1).foregroundStyle(DS.C.yellow.opacity(0.25)), alignment: .bottom)
 
             VStack(alignment: .leading, spacing: DS.Space.sm) {
-                Text("Some CLIs were not found in PATH. QuotaWarmer needs them to send warmup messages.")
+                Text("Warmup needs Claude/Codex binaries in the app environment. Credentials are checked separately below.")
                     .font(.system(size: 10)).foregroundStyle(DS.C.textSub)
                     .fixedSize(horizontal: false, vertical: true)
 
@@ -42,7 +41,8 @@ struct OnboardingView: View {
                     }
                 }
             }
-            .padding(DS.Space.lg)
+            .padding(.horizontal, DS.Space.md)
+            .padding(.vertical, DS.Space.sm)
 
             Divider().background(DS.C.border)
 
@@ -63,7 +63,7 @@ struct OnboardingView: View {
                 }
                 .buttonStyle(.plain)
             }
-            .padding(.horizontal, DS.Space.lg).padding(.vertical, DS.Space.sm + 2)
+            .padding(.horizontal, DS.Space.md).padding(.vertical, 8)
         }
         .background(DS.C.bg)
         .task { await runCheck() }
@@ -91,7 +91,7 @@ struct OnboardingView: View {
             }
         }
         .padding(.horizontal, DS.Space.sm)
-        .padding(.vertical, 6)
+        .padding(.vertical, 5)
         .background(DS.C.surface, in: RoundedRectangle(cornerRadius: DS.R.sm))
         .overlay(RoundedRectangle(cornerRadius: DS.R.sm).stroke(DS.C.border, lineWidth: 1))
     }

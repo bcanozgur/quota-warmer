@@ -150,13 +150,20 @@ final class QuotaProvider: QuotaProviding {
         message: String?
     ) -> QuotaSnapshot {
         let metrics = MetricExtractor(payload: payload).metrics()
-        let fiveHour = metrics.first { metric in
-            let name = metric.name.lowercased()
-            return name.contains("5h") || name.contains("5 hour") || name.contains("five") || name.contains("session")
-        } ?? metrics.first
+        let now = Date()
         let weekly = metrics.first { metric in
             let name = metric.name.lowercased()
-            return name.contains("week") || name.contains("weekly")
+            if name.contains("week") || name.contains("weekly") { return true }
+            if let resetAt = metric.resetAt, resetAt.timeIntervalSince(now) > 24 * 3600 { return true }
+            return false
+        }
+        let fiveHour = metrics.first { metric in
+            let name = metric.name.lowercased()
+            guard metric.id != weekly?.id else { return false }
+            if let resetAt = metric.resetAt, resetAt.timeIntervalSince(now) > 24 * 3600 { return false }
+            return name.contains("5h") || name.contains("5 hour") || name.contains("five") || name.contains("session")
+        } ?? metrics.first { metric in
+            metric.id != weekly?.id
         }
         let extras = metrics.filter { metric in
             metric.id != fiveHour?.id && metric.id != weekly?.id

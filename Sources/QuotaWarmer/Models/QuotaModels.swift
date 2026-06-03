@@ -83,6 +83,13 @@ struct QuotaMetric: Identifiable {
     var clampedUsed: Double {
         min(max(usedPercent, 0), 1)
     }
+
+    var remainingFraction: Double {
+        if let remainingPercent {
+            return min(max(remainingPercent, 0), 1)
+        }
+        return min(max(1 - clampedUsed, 0), 1)
+    }
 }
 
 struct QuotaSnapshot {
