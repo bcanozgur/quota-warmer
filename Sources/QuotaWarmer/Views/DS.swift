@@ -2,19 +2,19 @@ import SwiftUI
 
 enum DS {
     enum C {
-        static let bg          = Color(red: 0.985, green: 0.987, blue: 0.991)
-        static let sidebar     = Color(red: 0.946, green: 0.952, blue: 0.962)
-        static let track       = Color(red: 0.927, green: 0.932, blue: 0.941)
-        static let surface     = Color.white
-        static let surfaceHigh = Color(red: 0.966, green: 0.970, blue: 0.978)
-        static let ink         = Color(red: 0.045, green: 0.066, blue: 0.110)
+        static let bg          = Color(red: 0.982, green: 0.984, blue: 0.988)
+        static let sidebar     = Color(red: 0.950, green: 0.956, blue: 0.966)
+        static let track       = Color(red: 0.905, green: 0.912, blue: 0.926)
+        static let surface     = Color(red: 0.996, green: 0.997, blue: 0.999)
+        static let surfaceHigh = Color(red: 0.940, green: 0.946, blue: 0.958)
+        static let ink         = Color(red: 0.055, green: 0.080, blue: 0.130)
 
-        static let border      = Color(red: 0.842, green: 0.858, blue: 0.885)
+        static let border      = Color(red: 0.830, green: 0.850, blue: 0.885)
         static let borderFocus = Color.black.opacity(0.16)
 
         static let text        = Color(red: 0.040, green: 0.055, blue: 0.090)
         static let textSub     = Color(red: 0.400, green: 0.440, blue: 0.520)
-        static let textMuted   = Color(red: 0.560, green: 0.600, blue: 0.680)
+        static let textMuted   = Color(red: 0.540, green: 0.580, blue: 0.660)
 
         static let green  = Color(red: 0.13, green: 0.69, blue: 0.30)
         static let yellow = Color(red: 0.82, green: 0.60, blue: 0.05)
@@ -40,16 +40,16 @@ enum DS {
     // MARK: - Radii
     enum R {
         static let sm: CGFloat = 5
-        static let md: CGFloat = 8
+        static let md: CGFloat = 9
         static let lg: CGFloat = 12
     }
 
     // MARK: - Layout
-    static let panelScale: CGFloat = 1.0
-    static let sidebarWidth: CGFloat = 62
-    static let contentWidth: CGFloat = 418
+    static let panelScale: CGFloat = 0.90
+    static let sidebarWidth: CGFloat = 50
+    static let contentWidth: CGFloat = 372
     static let totalWidth:   CGFloat = sidebarWidth + contentWidth
-    static let totalHeight: CGFloat = 612
+    static let totalHeight: CGFloat = 490
 
     // MARK: - Typography
     static func mono(_ size: CGFloat, weight: Font.Weight = .regular) -> Font {

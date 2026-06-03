@@ -6,14 +6,14 @@ struct MainTabView: View {
 
     var body: some View {
         ScrollView(.vertical, showsIndicators: false) {
-            VStack(alignment: .leading, spacing: 18) {
+            VStack(alignment: .leading, spacing: 13) {
                 header
                 providerList
                 historySection
             }
-            .padding(.horizontal, 24)
-            .padding(.top, 26)
-            .padding(.bottom, 18)
+            .padding(.horizontal, 17)
+            .padding(.top, 17)
+            .padding(.bottom, 14)
         }
         .background(DS.C.bg)
     }
@@ -22,10 +22,10 @@ struct MainTabView: View {
         HStack {
             VStack(alignment: .leading, spacing: 2) {
                 Text("QuotaWarmer")
-                    .font(.system(size: 28, weight: .bold))
+                    .font(.system(size: 18, weight: .bold))
                     .foregroundStyle(DS.C.text)
                 Text("Choose a tool to keep warm.")
-                    .font(.system(size: 12, weight: .medium))
+                    .font(.system(size: 11.5, weight: .medium))
                     .foregroundStyle(DS.C.textMuted)
             }
             Spacer()
@@ -47,31 +47,31 @@ struct MainTabView: View {
             }
         }
         .padding(.vertical, 2)
-        .background(DS.C.surface, in: RoundedRectangle(cornerRadius: 12))
-        .overlay(RoundedRectangle(cornerRadius: 12).stroke(DS.C.border))
+        .background(DS.C.surface, in: RoundedRectangle(cornerRadius: DS.R.md))
+        .overlay(RoundedRectangle(cornerRadius: DS.R.md).stroke(DS.C.border))
     }
 
     private func providerRow(_ tool: ToolID) -> some View {
         let state = appState.state(for: tool)
-        return HStack(alignment: .top, spacing: 14) {
+        return HStack(alignment: .top, spacing: 12) {
             Image(tool == .claude ? "ClaudeCode" : "Codex")
                 .resizable()
                 .renderingMode(.template)
                 .scaledToFit()
-                .frame(width: 22, height: 22)
+                .frame(width: 20, height: 20)
                 .foregroundStyle(DS.C.text)
-                .padding(.top, 5)
+                .padding(.top, 4)
 
-            VStack(alignment: .leading, spacing: 8) {
+            VStack(alignment: .leading, spacing: 8.5) {
                 HStack(spacing: 6) {
-                    Text(tool.shortDisplayName)
-                        .font(.system(size: 15, weight: .semibold))
+                    Text(tool.displayName)
+                        .font(.system(size: 13.5, weight: .bold))
                         .foregroundStyle(DS.C.text)
                     Circle()
                         .fill(state.isActive ? DS.C.green : DS.C.red)
                         .frame(width: 5.5, height: 5.5)
                     Text(providerStatus(state))
-                        .font(.system(size: 12, weight: .medium))
+                        .font(.system(size: 11, weight: .medium))
                         .foregroundStyle(state.sourceHealth == .authFailure ? DS.C.red : DS.C.textMuted)
                         .lineLimit(1)
                     Spacer(minLength: 0)
@@ -81,7 +81,7 @@ struct MainTabView: View {
                 quotaLine("Week", metric: state.weeklyMetric, refreshing: state.isFetchingQuota)
             }
 
-            VStack(spacing: 7) {
+            VStack(spacing: 8) {
                 Toggle("", isOn: Binding(
                     get: { state.isActive },
                     set: { appState.setActive($0, for: tool) }
@@ -92,26 +92,26 @@ struct MainTabView: View {
 
                 Button(action: { Task { await appState.refreshQuota(for: tool) } }) {
                     Image(systemName: state.isFetchingQuota ? "hourglass" : "arrow.clockwise")
-                        .font(.system(size: 11, weight: .semibold))
+                        .font(.system(size: 11.5, weight: .semibold))
                         .foregroundStyle(DS.C.textSub)
-                        .frame(width: 26, height: 24)
+                        .frame(width: 29, height: 27)
                         .background(DS.C.bg, in: RoundedRectangle(cornerRadius: 6))
                         .overlay(RoundedRectangle(cornerRadius: DS.R.sm).stroke(DS.C.border))
                 }
                 .buttonStyle(.plain)
                 .disabled(state.isFetchingQuota)
             }
-            .frame(width: 42)
+            .frame(width: 44)
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 14)
+        .padding(.horizontal, 13)
+        .padding(.vertical, 12)
     }
 
     private var historySection: some View {
         VStack(alignment: .leading, spacing: 9) {
             Button(action: { historyExpanded.toggle() }) {
                 HStack {
-                    Text("History").font(.system(size: 12.5, weight: .semibold))
+                    Text("History").font(.system(size: 13, weight: .bold))
                     Spacer()
                     Text("\(appState.history.count)")
                         .font(.system(size: 10, weight: .semibold))
@@ -138,17 +138,17 @@ struct MainTabView: View {
                 }
             }
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 11)
-        .background(DS.C.surface, in: RoundedRectangle(cornerRadius: 12))
-        .overlay(RoundedRectangle(cornerRadius: 12).stroke(DS.C.border))
+        .padding(.horizontal, 13)
+        .padding(.vertical, 12)
+        .background(DS.C.surface, in: RoundedRectangle(cornerRadius: DS.R.md))
+        .overlay(RoundedRectangle(cornerRadius: DS.R.md).stroke(DS.C.border))
     }
 
     private func quotaLine(_ label: String, metric: QuotaMetric?, refreshing: Bool) -> some View {
         let remaining = metric?.remainingFraction ?? 0
         return HStack(spacing: 8) {
             Text(label)
-                .font(.system(size: 10.5, weight: .semibold))
+                .font(.system(size: 11, weight: .semibold))
                 .foregroundStyle(DS.C.textMuted)
                 .frame(width: 34, alignment: .leading)
             GeometryReader { geometry in
@@ -166,9 +166,9 @@ struct MainTabView: View {
                     }
                 }
             }
-            .frame(height: 7)
+            .frame(height: 8)
             Text(metric.map { "\(Int($0.remainingFraction * 100))%" } ?? "--")
-                .font(DS.mono(10.5, weight: .medium))
+                .font(DS.mono(10.5, weight: .semibold))
                 .foregroundStyle(DS.C.textSub)
                 .frame(width: 34, alignment: .trailing)
         }
@@ -196,15 +196,15 @@ struct HistoryRow: View {
     var body: some View {
         HStack(alignment: .top, spacing: DS.Space.sm) {
             Text(time(event.timestamp))
-                .font(DS.mono(9.5))
+                .font(DS.mono(10))
                 .foregroundStyle(DS.C.textMuted)
                 .frame(width: 45, alignment: .leading)
             VStack(alignment: .leading, spacing: 1) {
                 Text(title)
-                    .font(.system(size: 10.5, weight: .semibold))
+                    .font(.system(size: 11, weight: .semibold))
                     .foregroundStyle(DS.C.text)
                 Text(event.detail)
-                    .font(.system(size: 9.5))
+                    .font(.system(size: 10))
                     .foregroundStyle(DS.C.textMuted)
                     .lineLimit(2)
             }
