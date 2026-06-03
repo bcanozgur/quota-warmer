@@ -1,0 +1,41 @@
+docs:
+  - changed-files:
+      - any-glob-to-any-file:
+          - "**/*.md"
+          - "docs/**"
+
+github-actions:
+  - changed-files:
+      - any-glob-to-any-file:
+          - ".github/**"
+
+release:
+  - changed-files:
+      - any-glob-to-any-file:
+          - ".github/workflows/release.yml"
+          - "project.yml"
+          - "scripts/**"
+
+app:
+  - changed-files:
+      - any-glob-to-any-file:
+          - "Sources/QuotaWarmer/**"
+
+ui:
+  - changed-files:
+      - any-glob-to-any-file:
+          - "Sources/QuotaWarmer/Views/**"
+          - "Sources/QuotaWarmer/Assets.xcassets/**"
+
+quota:
+  - changed-files:
+      - any-glob-to-any-file:
+          - "Sources/QuotaWarmer/Services/QuotaProvider.swift"
+          - "Sources/QuotaWarmer/Services/CredentialStore.swift"
+          - "Sources/QuotaWarmer/Models/QuotaModels.swift"
+
+warmup:
+  - changed-files:
+      - any-glob-to-any-file:
+          - "Sources/QuotaWarmer/Services/WarmupRunner.swift"
+          - "Sources/QuotaWarmer/Models/ToolID.swift"

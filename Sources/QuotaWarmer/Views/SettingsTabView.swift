@@ -4,14 +4,14 @@ import ServiceManagement
 struct SettingsTabView: View {
     @EnvironmentObject var appState: AppState
 
-    @AppStorage("refreshInterval")   private var refreshInterval: Int    = 30
+    @AppStorage("refreshInterval")   private var refreshInterval: Int    = 300
     @AppStorage("notifyWarning")     private var notifyWarning: Bool     = true
     @AppStorage("notifyActivated")   private var notifyActivated: Bool   = true
     @AppStorage("launchAtLogin")     private var launchAtLogin: Bool     = false
-    @AppStorage("windowDurationSecs") private var windowDurationSecs: Int = 5 * 3600
+    @AppStorage("rateLimitGuard")    private var rateLimitGuard: Bool    = true
 
     private let refreshOptions: [(label: String, value: Int)] = [
-        ("5s", 5), ("15s", 15), ("30s", 30), ("60s", 60), ("120s", 120)
+        ("5m", 300), ("10m", 600), ("15m", 900), ("30m", 1800)
     ]
 
     var body: some View {
@@ -19,9 +19,9 @@ struct SettingsTabView: View {
             VStack(alignment: .leading, spacing: 0) {
                 settingsHeader
 
-                group("TIMING") {
-                    row(icon: "clock.arrow.2.circlepath", title: "UI Refresh Interval",
-                        subtitle: "How often the countdown updates") {
+                group("POLLING") {
+                    row(icon: "clock.arrow.2.circlepath", title: "Quota Refresh Interval",
+                        subtitle: "Default is 5 minutes; stale data cannot auto-warm") {
                         segmentedPicker(
                             options: refreshOptions,
                             selected: $refreshInterval
@@ -30,17 +30,25 @@ struct SettingsTabView: View {
 
                     Divider().background(DS.C.border).padding(.leading, 36)
 
-                    row(icon: "timer", title: "Window Duration",
-                        subtitle: "Claude Code uses a rolling 5h window") {
-                        segmentedPicker(
-                            options: [(label: "4h", value: 4 * 3600),
-                                      (label: "5h", value: 5 * 3600),
-                                      (label: "6h", value: 6 * 3600)],
-                            selected: .init(
-                                get: { windowDurationSecs },
-                                set: { windowDurationSecs = $0; appState.refreshAllActivity() }
-                            )
-                        ) {}
+                    row(icon: "shield.lefthalf.filled", title: "Rate-limit Guard",
+                        subtitle: "Back off after failed automatic warmups") {
+                        Toggle("", isOn: $rateLimitGuard)
+                            .toggleStyle(.switch).scaleEffect(0.75).tint(DS.C.accent(.claude))
+                    }
+
+                    Divider().background(DS.C.border).padding(.leading, 36)
+
+                    row(icon: "arrow.clockwise", title: "Manual Refresh",
+                        subtitle: "Fetch fresh quota from server sources") {
+                        Button(action: { appState.refreshAllActivity() }) {
+                            Text("Refresh")
+                                .font(.system(size: 10, weight: .semibold))
+                                .padding(.horizontal, 10).padding(.vertical, 4)
+                                .background(DS.C.surface, in: RoundedRectangle(cornerRadius: DS.R.sm))
+                                .foregroundStyle(DS.C.text)
+                                .overlay(RoundedRectangle(cornerRadius: DS.R.sm).stroke(DS.C.border, lineWidth: 1))
+                        }
+                        .buttonStyle(.plain)
                     }
                 }
 
@@ -72,10 +80,10 @@ struct SettingsTabView: View {
 
                     Divider().background(DS.C.border).padding(.leading, 36)
 
-                    row(icon: "arrow.clockwise", title: "Refresh Now",
-                        subtitle: "Re-scan log files immediately") {
-                        Button(action: { appState.refreshAllActivity() }) {
-                            Text("Refresh")
+                    row(icon: "arrow.triangle.2.circlepath", title: "Restart to Update",
+                        subtitle: "Quit and relaunch after installing a release") {
+                        Button(action: { NSApplication.shared.terminate(nil) }) {
+                            Text("Restart")
                                 .font(.system(size: 10, weight: .semibold))
                                 .padding(.horizontal, 10).padding(.vertical, 4)
                                 .background(DS.C.surface, in: RoundedRectangle(cornerRadius: DS.R.sm))
@@ -84,6 +92,19 @@ struct SettingsTabView: View {
                         }
                         .buttonStyle(.plain)
                     }
+                }
+
+                group("PRIVACY") {
+                    VStack(alignment: .leading, spacing: DS.Space.sm) {
+                        privacyLine("Claude", "Keychain Claude Code-credentials, CLAUDE_CONFIG_DIR variants, ~/.claude/.credentials.json")
+                        privacyLine("Codex", "CODEX_HOME/auth.json, ~/.config/codex/auth.json, ~/.codex/auth.json, Keychain Codex Auth")
+                        privacyLine("Endpoints", "Anthropic OAuth usage, Claude token refresh, Codex app-server rate limits, wham usage fallback")
+                        Text("Tokens, account ids, authorization headers, and raw credential payloads are never written to history or warmup logs.")
+                            .font(.system(size: 9))
+                            .foregroundStyle(DS.C.textMuted)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    .padding(DS.Space.md)
                 }
 
                 group("ABOUT") {
@@ -212,6 +233,18 @@ struct SettingsTabView: View {
         }
         .padding(.horizontal, DS.Space.md)
         .padding(.vertical, DS.Space.sm + 2)
+    }
+
+    private func privacyLine(_ title: String, _ detail: String) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(title)
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(DS.C.text)
+            Text(detail)
+                .font(.system(size: 9))
+                .foregroundStyle(DS.C.textMuted)
+                .fixedSize(horizontal: false, vertical: true)
+        }
     }
 
     private func segmentedPicker(

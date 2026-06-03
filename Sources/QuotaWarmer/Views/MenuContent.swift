@@ -1,6 +1,5 @@
 import SwiftUI
 import AppKit
-import ServiceManagement
 
 // Makes the hosting NSWindow transparent so our rounded corners don't bleed.
 private struct WindowTransparencyConfigurator: NSViewRepresentable {
@@ -18,13 +17,16 @@ private struct WindowTransparencyConfigurator: NSViewRepresentable {
 }
 
 enum AppTab: Hashable {
+    case main
     case tool(ToolID)
     case settings
 }
 
 struct MenuContent: View {
     @EnvironmentObject var appState: AppState
-    @State private var selectedTab: AppTab = .tool(.claude)
+    @State private var selectedTab: AppTab = .main
+    private let ticker = Timer.publish(every: 30, on: .main, in: .common).autoconnect()
+    @State private var now = Date()
 
     var body: some View {
         VStack(spacing: 0) {
@@ -38,24 +40,21 @@ struct MenuContent: View {
             footerStrip
         }
         .frame(width: DS.totalWidth)
+        .frame(height: DS.totalHeight)
         .background(DS.C.bg)
-        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
         .shadow(color: .black.opacity(0.14), radius: 18, x: 0, y: 6)
         .background(WindowTransparencyConfigurator())
+        .onReceive(ticker) { t in now = t }
     }
 
     // MARK: - Sidebar
 
     private var sidebar: some View {
-        VStack(spacing: 0) {
-            // Brand
-            Image(systemName: "flame.fill")
-                .font(.system(size: 15, weight: .semibold))
-                .foregroundStyle(DS.C.accent(.claude))
-                .frame(width: DS.sidebarWidth, height: DS.sidebarWidth)
-                .background(DS.C.surface)
-
-            Rectangle().fill(DS.C.border).frame(height: 1)
+        VStack(spacing: 28) {
+            SidebarMainTab(isSelected: selectedTab == .main) {
+                selectedTab = .main
+            }
 
             ForEach(ToolID.allCases) { tool in
                 SidebarTab(
@@ -67,14 +66,14 @@ struct MenuContent: View {
 
             Spacer()
 
-            Rectangle().fill(DS.C.border).frame(height: 1)
-
             SidebarSettingsTab(isSelected: selectedTab == .settings) {
                 selectedTab = .settings
             }
         }
+        .padding(.top, 46)
+        .padding(.bottom, 34)
         .frame(width: DS.sidebarWidth)
-        .background(DS.C.surface)
+        .background(DS.C.sidebar)
     }
 
     // MARK: - Main content
@@ -82,56 +81,93 @@ struct MenuContent: View {
     @ViewBuilder
     private var mainContent: some View {
         switch selectedTab {
+        case .main:
+            MainTabView()
+                .frame(width: DS.contentWidth)
+                .frame(maxHeight: .infinity)
         case .tool(let id):
             if appState.showOnboarding {
                 OnboardingView()
                     .frame(width: DS.contentWidth)
+                    .frame(maxHeight: .infinity)
                     .transition(.opacity)
             } else {
                 ToolTabView(
                     toolState: appState.state(for: id),
-                    onActivate: { appState.activate(id) }
+                    onActivate: { appState.activate(id) },
+                    onRefresh: { Task { await appState.refreshQuota(for: id) } }
                 )
                 .frame(width: DS.contentWidth)
+                .frame(maxHeight: .infinity)
                 .id(id)
             }
         case .settings:
             SettingsTabView()
                 .frame(width: DS.contentWidth)
+                .frame(maxHeight: .infinity)
         }
     }
 
     // MARK: - Footer
 
     private var footerStrip: some View {
-        HStack {
-            Text("QuotaWarmer v\(appVersion)")
-                .font(.system(size: 10))
-                .foregroundStyle(DS.C.textMuted)
+        HStack(spacing: 12) {
+            if let update = appState.updateInfo {
+                Button(action: { NSWorkspace.shared.open(update.htmlURL) }) {
+                    Text("Restart to update")
+                        .font(.system(size: 22, weight: .medium))
+                        .foregroundStyle(.red)
+                        .padding(.horizontal, 18)
+                        .frame(height: 44)
+                        .background(Color.red.opacity(0.10), in: RoundedRectangle(cornerRadius: 12))
+                }
+                .buttonStyle(.plain)
+            } else if case .tool(let tool) = selectedTab {
+                Button(action: { appState.activate(tool) }) {
+                    Text("Warm now")
+                        .font(.system(size: 22, weight: .medium))
+                        .foregroundStyle(DS.C.text)
+                        .padding(.horizontal, 18)
+                        .frame(height: 44)
+                        .background(DS.C.track, in: RoundedRectangle(cornerRadius: 12))
+                }
+                .buttonStyle(.plain)
+            } else {
+                Text("QuotaWarmer v\(appVersion)")
+                    .font(.system(size: 18))
+                    .foregroundStyle(DS.C.textMuted)
+            }
 
             Spacer()
 
-            if let update = appState.updateInfo {
-                Button(action: { NSWorkspace.shared.open(update.htmlURL) }) {
-                    HStack(spacing: 3) {
-                        Image(systemName: "arrow.down.circle")
-                            .font(.system(size: 9))
-                        Text("v\(update.version) available")
-                            .font(.system(size: 10, weight: .medium))
-                    }
-                    .foregroundStyle(DS.C.accent(.claude))
-                }
-                .buttonStyle(.plain)
-            }
+            Text(footerStatus)
+                .font(.system(size: 22))
+                .foregroundStyle(DS.C.textSub)
         }
-        .padding(.horizontal, DS.Space.md)
-        .padding(.vertical, 7)
-        .background(DS.C.surface)
+        .frame(height: 72)
+        .padding(.horizontal, 24)
+        .background(DS.C.bg)
         .overlay(Rectangle().fill(DS.C.border).frame(height: 1), alignment: .top)
     }
 
     private var appVersion: String {
         Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0"
+    }
+
+    private var footerStatus: String {
+        if case .tool(let tool) = selectedTab {
+            let state = appState.state(for: tool)
+            if state.isFetchingQuota { return "Updating..." }
+            if let next = state.nextRefreshAt { return "Next update in \(compactCountdown(next))" }
+        }
+        return appState.globalPassive ? "Passive" : "Polling"
+    }
+
+    private func compactCountdown(_ date: Date) -> String {
+        let seconds = max(0, Int(date.timeIntervalSince(now)))
+        if seconds < 60 { return "\(seconds)s" }
+        if seconds < 3600 { return "\(seconds / 60)m" }
+        return "\(seconds / 3600)h \((seconds % 3600) / 60)m"
     }
 }
 
@@ -147,39 +183,67 @@ struct SidebarTab: View {
 
     private var dotColor: Color? {
         if toolState.isWarming { return DS.C.blue }
-        if toolState.isWindowActive { return DS.C.green }
+        if toolState.isActive && toolState.freshness == .fresh { return DS.C.green }
+        if toolState.sourceHealth == .authFailure || toolState.freshness == .expired { return DS.C.red }
         return nil
     }
 
     var body: some View {
         Button(action: action) {
-            ZStack(alignment: .topTrailing) {
+            ZStack(alignment: .leading) {
+                if isSelected {
+                    RoundedRectangle(cornerRadius: 2)
+                        .fill(DS.C.ink)
+                        .frame(width: 4, height: 64)
+                        .offset(x: -1)
+                }
                 Image(tool == .claude ? "ClaudeCode" : "Codex")
                     .resizable()
                     .scaledToFit()
-                    .frame(width: 22, height: 22)
-                    .opacity(toolState.isWindowActive || toolState.isWarming ? 1.0 : 0.28)
+                    .frame(width: 34, height: 34)
+                    .opacity(toolState.isActive || toolState.isWarming || isSelected ? 1.0 : 0.72)
+                    .frame(maxWidth: .infinity)
 
                 if let dot = dotColor {
                     Circle()
                         .fill(dot)
-                        .frame(width: 6, height: 6)
-                        .overlay(Circle().stroke(DS.C.surface, lineWidth: 1.5))
-                        .offset(x: 3, y: -3)
+                        .frame(width: 7, height: 7)
+                        .offset(x: 58, y: -18)
                 }
             }
-            .frame(width: DS.sidebarWidth, height: DS.sidebarWidth)
-            .background(isSelected ? accent.opacity(0.08) : Color.clear)
-            .overlay(
-                RoundedRectangle(cornerRadius: 1)
-                    .fill(isSelected ? accent : .clear)
-                    .frame(width: 2)
-                    .padding(.vertical, 8)
-                    .frame(maxWidth: .infinity, alignment: .leading),
-                alignment: .leading
-            )
+            .frame(width: DS.sidebarWidth, height: 62)
         }
         .buttonStyle(.plain)
+    }
+}
+
+// MARK: - SidebarMainTab
+
+struct SidebarMainTab: View {
+    let isSelected: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            sidebarIcon(systemName: "house", selected: isSelected)
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func sidebarIcon(systemName: String, selected: Bool) -> some View {
+        ZStack(alignment: .leading) {
+            if selected {
+                RoundedRectangle(cornerRadius: 2)
+                    .fill(DS.C.ink)
+                    .frame(width: 4, height: 64)
+                    .offset(x: -1)
+            }
+            Image(systemName: systemName)
+                .font(.system(size: 36, weight: .regular))
+                .foregroundStyle(selected ? DS.C.ink : DS.C.textSub)
+                .frame(maxWidth: .infinity)
+        }
+        .frame(width: DS.sidebarWidth, height: 62)
     }
 }
 
@@ -191,19 +255,19 @@ struct SidebarSettingsTab: View {
 
     var body: some View {
         Button(action: action) {
-            Image(systemName: "gearshape.fill")
-                .font(.system(size: 15))
-                .foregroundStyle(isSelected ? DS.C.text : DS.C.textMuted)
-                .frame(width: DS.sidebarWidth, height: DS.sidebarWidth)
-                .background(isSelected ? DS.C.surfaceHigh : Color.clear)
-                .overlay(
-                    RoundedRectangle(cornerRadius: 1)
-                        .fill(isSelected ? DS.C.textSub : .clear)
-                        .frame(width: 2)
-                        .padding(.vertical, 8)
-                        .frame(maxWidth: .infinity, alignment: .leading),
-                    alignment: .leading
-                )
+            ZStack(alignment: .leading) {
+                if isSelected {
+                    RoundedRectangle(cornerRadius: 2)
+                        .fill(DS.C.ink)
+                        .frame(width: 4, height: 64)
+                        .offset(x: -1)
+                }
+                Image(systemName: "gearshape")
+                    .font(.system(size: 38, weight: .regular))
+                    .foregroundStyle(isSelected ? DS.C.ink : DS.C.textSub)
+                    .frame(maxWidth: .infinity)
+            }
+            .frame(width: DS.sidebarWidth, height: 62)
         }
         .buttonStyle(.plain)
     }

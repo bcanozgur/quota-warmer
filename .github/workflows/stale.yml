@@ -1,0 +1,32 @@
+name: Stale Issues
+
+on:
+  schedule:
+    - cron: "30 4 * * *"
+  workflow_dispatch:
+
+permissions:
+  issues: write
+  pull-requests: write
+
+jobs:
+  stale:
+    name: Mark Inactive Threads
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/stale@v10
+        with:
+          days-before-issue-stale: 30
+          days-before-issue-close: -1
+          days-before-pr-stale: 21
+          days-before-pr-close: -1
+          stale-issue-label: stale
+          stale-pr-label: stale
+          exempt-issue-labels: pinned,security,release,bug
+          exempt-pr-labels: pinned,security,release
+          stale-issue-message: >
+            This issue has been marked stale because it has not had recent activity.
+            It will not be closed automatically; comment when there is new information.
+          stale-pr-message: >
+            This pull request has been marked stale because it has not had recent activity.
+            It will not be closed automatically; update or comment when it is ready for review.

@@ -1,23 +1,21 @@
 import SwiftUI
 
 enum DS {
-    // MARK: - Colors (clean light mode — white/black)
     enum C {
-        // Backgrounds
-        static let bg          = Color(white: 1.00)          // pure white
-        static let surface     = Color(white: 0.965)         // #f7f7f7
-        static let surfaceHigh = Color(white: 0.935)         // #eeeeee
+        static let bg          = Color(white: 0.995)
+        static let sidebar     = Color(red: 0.985, green: 0.987, blue: 0.990)
+        static let track       = Color(red: 0.945, green: 0.949, blue: 0.957)
+        static let surface     = Color(red: 0.970, green: 0.973, blue: 0.978)
+        static let surfaceHigh = Color(red: 0.930, green: 0.936, blue: 0.946)
+        static let ink         = Color(red: 0.055, green: 0.080, blue: 0.130)
 
-        // Borders
-        static let border      = Color.black.opacity(0.08)
+        static let border      = Color(red: 0.850, green: 0.870, blue: 0.900)
         static let borderFocus = Color.black.opacity(0.16)
 
-        // Text
-        static let text        = Color(white: 0.11)          // #1c1c1e near-black
-        static let textSub     = Color(white: 0.43)          // #6e6e73
-        static let textMuted   = Color(white: 0.64)          // #a3a3a3
+        static let text        = Color(red: 0.040, green: 0.055, blue: 0.090)
+        static let textSub     = Color(red: 0.400, green: 0.440, blue: 0.520)
+        static let textMuted   = Color(red: 0.560, green: 0.600, blue: 0.680)
 
-        // Semantic
         static let green  = Color(red: 0.13, green: 0.69, blue: 0.30)
         static let yellow = Color(red: 0.82, green: 0.60, blue: 0.05)
         static let red    = Color(red: 0.86, green: 0.20, blue: 0.20)
@@ -47,9 +45,10 @@ enum DS {
     }
 
     // MARK: - Layout
-    static let sidebarWidth: CGFloat = 48
-    static let contentWidth: CGFloat = 300
+    static let sidebarWidth: CGFloat = 96
+    static let contentWidth: CGFloat = 604
     static let totalWidth:   CGFloat = sidebarWidth + contentWidth
+    static let totalHeight: CGFloat = 780
 
     // MARK: - Typography
     static func mono(_ size: CGFloat, weight: Font.Weight = .regular) -> Font {

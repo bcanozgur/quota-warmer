@@ -1,0 +1,61 @@
+name: CI
+
+on:
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  APP_NAME: QuotaWarmer
+  SCHEME: QuotaWarmer
+
+jobs:
+  build:
+    name: Generate Project and Build
+    runs-on: macos-15
+    timeout-minutes: 25
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Select Xcode
+        run: sudo xcode-select -s /Applications/Xcode_16.3.app
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate Xcode project
+        run: xcodegen generate
+
+      - name: Build Debug
+        run: |
+          xcodebuild \
+            -project "${APP_NAME}.xcodeproj" \
+            -scheme "${SCHEME}" \
+            -configuration Debug \
+            -derivedDataPath /tmp/QuotaWarmerCIDerivedData \
+            -destination "generic/platform=macOS" \
+            CODE_SIGNING_ALLOWED=NO \
+            build
+
+      - name: Build Release
+        run: |
+          xcodebuild \
+            -project "${APP_NAME}.xcodeproj" \
+            -scheme "${SCHEME}" \
+            -configuration Release \
+            -derivedDataPath /tmp/QuotaWarmerCIReleaseDerivedData \
+            -destination "generic/platform=macOS" \
+            CODE_SIGNING_ALLOWED=NO \
+            build

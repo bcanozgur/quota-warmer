@@ -18,7 +18,7 @@ targets:
         CFBundleDisplayName: QuotaWarmer
         CFBundleName: QuotaWarmer
         CFBundleIdentifier: com.quotawarmer.app
-        CFBundleShortVersionString: "1.0"
+        CFBundleShortVersionString: "1.0.0"
         CFBundleVersion: "1"
         LSUIElement: true
         NSHumanReadableCopyright: ""

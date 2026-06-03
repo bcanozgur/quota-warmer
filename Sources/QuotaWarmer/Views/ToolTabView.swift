@@ -3,407 +3,221 @@ import SwiftUI
 struct ToolTabView: View {
     @ObservedObject var toolState: ToolState
     let onActivate: () -> Void
+    let onRefresh: () -> Void
 
     private let ticker = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
     @State private var now = Date()
 
-    private var accent: Color { DS.C.accent(toolState.tool) }
-
-    private enum Phase {
-        case warming
-        case active(remaining: TimeInterval)
-        case expired
-    }
-
-    private var phase: Phase {
-        if toolState.isWarming { return .warming }
-        if let r = toolState.timeUntilReset, r > 0 { return .active(remaining: r) }
-        return .expired
-    }
-
     var body: some View {
-        ScrollView(.vertical, showsIndicators: false) {
-            VStack(alignment: .leading, spacing: 0) {
-                header
-                Divider().background(DS.C.border)
-                windowSection
-                Divider().background(DS.C.border)
-                autoWarmRow
-                Divider().background(DS.C.border)
-                actionSection
-                Divider().background(DS.C.border)
-                logSection
-            }
+        VStack(alignment: .leading, spacing: 28) {
+            header
+            quotaList
+            Spacer(minLength: 0)
         }
+        .padding(.horizontal, 24)
+        .padding(.top, 48)
         .background(DS.C.bg)
         .onReceive(ticker) { t in now = t }
     }
 
-    // MARK: - Header
-
     private var header: some View {
-        HStack(spacing: DS.Space.sm) {
-            Image(toolState.tool == .claude ? "ClaudeCode" : "Codex")
-                .resizable().scaledToFit()
-                .frame(width: 20, height: 20)
-
-            VStack(alignment: .leading, spacing: 2) {
-                Text(toolState.tool.displayName)
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(DS.C.text)
-                if let last = toolState.lastActivity {
-                    Text("last log " + relativeTime(last))
-                        .font(.system(size: 10))
-                        .foregroundStyle(DS.C.textMuted)
-                } else {
-                    Text("no activity detected")
-                        .font(.system(size: 10))
-                        .foregroundStyle(DS.C.textMuted)
-                }
-            }
-
+        HStack(alignment: .center) {
+            Text(toolState.tool.shortDisplayName)
+                .font(.system(size: 36, weight: .bold))
+                .foregroundStyle(DS.C.text)
             Spacer()
-            statusPill
-        }
-        .padding(.horizontal, DS.Space.lg)
-        .padding(.vertical, DS.Space.md)
-    }
-
-    private var statusPill: some View {
-        HStack(spacing: 5) {
-            Circle()
-                .fill(statusColor)
-                .frame(width: 5, height: 5)
-            Text(statusLabel)
-                .font(.system(size: 9, weight: .semibold))
-                .foregroundStyle(statusColor)
-        }
-        .padding(.horizontal, 7).padding(.vertical, 3)
-        .background(statusColor.opacity(0.08), in: Capsule())
-        .overlay(Capsule().stroke(statusColor.opacity(0.18), lineWidth: 1))
-    }
-
-    // MARK: - Window section
-
-    private var windowSection: some View {
-        VStack(alignment: .leading, spacing: DS.Space.sm) {
-            HStack {
-                Text(windowLabel).dsLabel()
-                Spacer()
-                phaseLabel
-            }
-
-            GeometryReader { geo in
-                ZStack(alignment: .leading) {
-                    RoundedRectangle(cornerRadius: 2)
-                        .fill(DS.C.surface)
-                        .frame(height: 4)
-                    RoundedRectangle(cornerRadius: 2)
-                        .fill(barGradient)
-                        .frame(width: max(geo.size.width * toolState.windowProgress, 0), height: 4)
-                        .animation(.easeInOut(duration: 1), value: toolState.windowProgress)
-                    ForEach(1..<totalHours, id: \.self) { h in
-                        Rectangle()
-                            .fill(DS.C.bg.opacity(0.7))
-                            .frame(width: 1, height: 4)
-                            .offset(x: geo.size.width * Double(h) / Double(totalHours) - 0.5)
-                    }
-                }
-            }
-            .frame(height: 4)
-
-            HStack {
-                ForEach(hourLabels, id: \.self) { t in
-                    Text(t)
-                        .font(.system(size: 8))
-                        .foregroundStyle(DS.C.textMuted)
-                    if t != "5h" { Spacer() }
-                }
-            }
-        }
-        .padding(.horizontal, DS.Space.lg)
-        .padding(.vertical, DS.Space.md)
-    }
-
-    @ViewBuilder
-    private var phaseLabel: some View {
-        switch phase {
-        case .warming:
-            Text("activating…")
-                .font(DS.mono(9)).foregroundStyle(DS.C.blue)
-        case .active(let r):
-            Text(formatCountdown(r))
-                .font(DS.mono(11, weight: .semibold))
-                .foregroundStyle(timeColor(r))
-            + Text(" left")
-                .font(DS.mono(9)).foregroundStyle(DS.C.textMuted)
-        case .expired:
-            Text(toolState.lastActivity == nil ? "not started" : "expired")
-                .font(DS.mono(9)).foregroundStyle(DS.C.textMuted)
+            Text(planLabel)
+                .font(.system(size: 24, weight: .medium))
+                .foregroundStyle(DS.C.text)
+                .padding(.horizontal, 17)
+                .frame(height: 42)
+                .background(DS.C.bg, in: RoundedRectangle(cornerRadius: 14))
+                .overlay(RoundedRectangle(cornerRadius: 14).stroke(DS.C.border, lineWidth: 2))
         }
     }
 
-    // MARK: - Auto-warm row
-
-    private var autoWarmRow: some View {
-        HStack(spacing: DS.Space.sm) {
-            Image(systemName: "arrow.clockwise")
-                .font(.system(size: 11))
-                .foregroundStyle(DS.C.textSub)
-                .frame(width: 16)
-            VStack(alignment: .leading, spacing: 1) {
-                Text("Auto-Warm")
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(DS.C.text)
-                Text("Send 'hi' automatically at window reset")
-                    .font(.system(size: 9))
-                    .foregroundStyle(DS.C.textMuted)
+    private var quotaList: some View {
+        VStack(alignment: .leading, spacing: 32) {
+            ForEach(rows) { row in
+                QuotaRowView(row: row)
             }
-            Spacer()
-            Toggle("", isOn: $toolState.autoWarm)
-                .toggleStyle(.switch)
-                .scaleEffect(0.72)
-                .tint(accent)
-        }
-        .padding(.horizontal, DS.Space.lg)
-        .padding(.vertical, DS.Space.sm + 2)
-    }
-
-    // MARK: - Action section
-
-    private var actionSection: some View {
-        Group {
-            switch phase {
-            case .warming:    warmingState
-            case .active(let r): activeState(remaining: r)
-            case .expired:    expiredState
-            }
-        }
-        .padding(.horizontal, DS.Space.lg)
-        .padding(.vertical, DS.Space.md)
-    }
-
-    private var warmingState: some View {
-        HStack(spacing: DS.Space.sm) {
-            ProgressView().scaleEffect(0.65).tint(DS.C.blue)
-            Text("Sending warmup message…")
-                .font(.system(size: 11))
-                .foregroundStyle(DS.C.textSub)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(DS.Space.md)
-        .background(DS.C.surface, in: RoundedRectangle(cornerRadius: DS.R.md))
-        .overlay(RoundedRectangle(cornerRadius: DS.R.md).stroke(DS.C.border))
-    }
-
-    private func activeState(remaining: TimeInterval) -> some View {
-        VStack(spacing: DS.Space.sm) {
-            HStack(spacing: DS.Space.sm) {
-                Image(systemName: toolState.autoWarm ? "clock.badge.checkmark.fill" : "clock.fill")
-                    .font(.system(size: 13))
-                    .foregroundStyle(DS.C.green)
-                    .frame(width: 18)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(toolState.autoWarm ? "Auto-trigger scheduled" : "Window active")
-                        .font(.system(size: 11, weight: .semibold))
-                        .foregroundStyle(DS.C.text)
-                    Group {
-                        if toolState.autoWarm, let exp = toolState.windowExpires {
-                            Text("Next at \(formatWallTime(exp))  ·  \(formatCountdown(remaining)) away")
-                        } else {
-                            Text("\(formatCountdown(remaining)) until expiry")
-                        }
-                    }
-                    .font(.system(size: 10))
-                    .foregroundStyle(DS.C.textSub)
-                }
-                Spacer()
-            }
-            .padding(DS.Space.md)
-            .background(DS.C.green.opacity(0.05), in: RoundedRectangle(cornerRadius: DS.R.md))
-            .overlay(RoundedRectangle(cornerRadius: DS.R.md).stroke(DS.C.green.opacity(0.12)))
-
-            Button(action: onActivate) {
-                Label("Force Re-trigger  (resets clock)", systemImage: "bolt")
-                    .font(.system(size: 10, weight: .medium))
-                    .foregroundStyle(DS.C.textMuted)
-                    .frame(maxWidth: .infinity)
-                    .frame(height: 28)
-                    .background(DS.C.surface, in: RoundedRectangle(cornerRadius: DS.R.sm))
-                    .overlay(RoundedRectangle(cornerRadius: DS.R.sm).stroke(DS.C.border))
-            }
-            .buttonStyle(.plain)
-
-            if let err = toolState.errorMessage {
-                Text(err).font(.system(size: 10))
+            if let error = toolState.errorMessage {
+                Text(error)
+                    .font(.system(size: 16))
                     .foregroundStyle(DS.C.red)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .fixedSize(horizontal: false, vertical: true)
             }
         }
     }
 
-    private var expiredState: some View {
-        VStack(spacing: DS.Space.sm) {
-            Button(action: onActivate) {
-                HStack(spacing: 6) {
-                    Image(systemName: "play.fill").font(.system(size: 11))
-                    Text("Activate Window").font(.system(size: 12, weight: .semibold))
-                }
-                .frame(maxWidth: .infinity)
-                .frame(height: 34)
-                .background(accent, in: RoundedRectangle(cornerRadius: DS.R.md))
-                .foregroundStyle(.white)
-            }
-            .buttonStyle(.plain)
+    private var rows: [QuotaDisplayRow] {
+        var output: [QuotaDisplayRow] = [
+            displayRow(title: "Session", metric: toolState.primaryMetric),
+            displayRow(title: "Weekly", metric: toolState.weeklyMetric)
+        ]
 
-            if let err = toolState.errorMessage {
-                Text(err).font(.system(size: 10))
-                    .foregroundStyle(DS.C.red)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            }
+        let extras = normalizedExtras
+        if toolState.tool == .codex {
+            output.append(displayRow(title: "Reviews", metric: extras.first { $0.name.localizedCaseInsensitiveContains("review") }))
+            output.append(displayRow(title: "Credits", metric: extras.first { $0.name.localizedCaseInsensitiveContains("credit") }, showsRawValue: true))
+        } else {
+            output.append(displayRow(title: "Sonnet", metric: extras.first { $0.name.localizedCaseInsensitiveContains("sonnet") }))
+            output.append(displayRow(title: "Opus", metric: extras.first { $0.name.localizedCaseInsensitiveContains("opus") }))
+        }
+
+        let namedIDs = Set(output.compactMap { $0.metricID })
+        let additional = extras
+            .filter { !namedIDs.contains($0.id) }
+            .prefix(2)
+            .map { displayRow(title: $0.name.displayTitle, metric: $0) }
+        output.append(contentsOf: additional)
+
+        return output
+    }
+
+    private var normalizedExtras: [QuotaMetric] {
+        toolState.quotaSnapshot?.extras ?? []
+    }
+
+    private func displayRow(title: String, metric: QuotaMetric?, showsRawValue: Bool = false) -> QuotaDisplayRow {
+        let percent = metric?.clampedUsed ?? 0
+        let leading: String
+        if showsRawValue, let detail = metric?.detail {
+            leading = detail.components(separatedBy: "/").first?.trimmingCharacters(in: .whitespaces) ?? "\(Int(percent * 100))%"
+        } else if metric == nil {
+            leading = "0%"
+        } else {
+            leading = "\(Int(percent * 100))%"
+        }
+
+        return QuotaDisplayRow(
+            title: title,
+            usedFraction: percent,
+            leadingValue: leading,
+            resetText: resetText(for: metric),
+            metricID: metric?.id
+        )
+    }
+
+    private func resetText(for metric: QuotaMetric?) -> String {
+        guard let resetAt = metric?.resetAt else {
+            return toolState.isFetchingQuota ? "Updating..." : freshnessFallback
+        }
+        let seconds = max(0, Int(resetAt.timeIntervalSince(now)))
+        if seconds < 60 { return "Resets in \(seconds)s" }
+        if seconds < 3600 { return "Resets in \(seconds / 60)m" }
+        if seconds < 86_400 {
+            return "Resets in \(seconds / 3600)h \((seconds % 3600) / 60)m"
+        }
+        return "Resets in \(seconds / 86_400)d \((seconds % 86_400) / 3600)h"
+    }
+
+    private var freshnessFallback: String {
+        switch toolState.freshness {
+        case .fresh: return "Fresh"
+        case .stale: return "Stale"
+        case .expired: return "Expired"
+        case .unknown: return "No data"
         }
     }
 
-    // MARK: - Log section
-
-    private var logSection: some View {
-        VStack(spacing: 0) {
-            Button(action: {
-                withAnimation(.easeInOut(duration: 0.18)) { toolState.isLogExpanded.toggle() }
-            }) {
-                HStack(spacing: 5) {
-                    Image(systemName: "terminal").font(.system(size: 9)).foregroundStyle(DS.C.textMuted)
-                    Text("PROMPT LOG").dsLabel()
-                    if !toolState.warmupLogs.isEmpty {
-                        Text("\(toolState.warmupLogs.count)")
-                            .font(.system(size: 8, weight: .bold))
-                            .foregroundStyle(accent)
-                            .padding(.horizontal, 4).padding(.vertical, 1)
-                            .background(accent.opacity(0.12), in: Capsule())
-                    }
-                    Spacer()
-                    Image(systemName: toolState.isLogExpanded ? "chevron.up" : "chevron.down")
-                        .font(.system(size: 9, weight: .semibold))
-                        .foregroundStyle(DS.C.textMuted)
-                }
-                .padding(.horizontal, DS.Space.lg)
-                .padding(.vertical, DS.Space.sm + 2)
-            }
-            .buttonStyle(.plain)
-
-            if toolState.isLogExpanded {
-                logContent.transition(.opacity)
-            }
-        }
-    }
-
-    private var logContent: some View {
-        Group {
-            if toolState.warmupLogs.isEmpty {
-                Text("No warmups triggered yet")
-                    .font(.system(size: 10))
-                    .foregroundStyle(Color.white.opacity(0.40))
-                    .frame(maxWidth: .infinity, alignment: .center)
-                    .padding(.vertical, 20)
-                    .background(Color(white: 0.10))
-            } else {
-                ScrollView(.vertical, showsIndicators: true) {
-                    LazyVStack(alignment: .leading, spacing: 5) {
-                        ForEach(toolState.warmupLogs) { entry in
-                            LogEntryView(entry: entry, accent: accent)
-                        }
-                    }
-                    .padding(DS.Space.md)
-                }
-                .frame(maxHeight: 170)
-                .background(Color(white: 0.10))
-            }
-        }
-    }
-
-    // MARK: - Helpers
-
-    private var totalHours: Int { Int(toolState.tool.windowDuration) / 3600 }
-
-    private var hourLabels: [String] {
-        (0...totalHours).map { "\($0)h" }
-    }
-
-    private var windowLabel: String {
-        let hrs = Int(toolState.tool.windowDuration) / 3600
-        return "\(hrs)H WINDOW"
-    }
-
-    private var statusLabel: String {
-        switch phase {
-        case .warming: return "WARMING"
-        case .active:  return "ACTIVE"
-        case .expired: return "IDLE"
-        }
-    }
-
-    private var statusColor: Color {
-        switch phase {
-        case .warming: return DS.C.blue
-        case .active:  return DS.C.green
-        case .expired: return DS.C.textMuted
-        }
-    }
-
-    private var barGradient: LinearGradient {
-        let p = toolState.windowProgress
-        let c: Color = p > 0.8 ? DS.C.red : p > 0.5 ? DS.C.yellow : accent
-        return LinearGradient(colors: [c.opacity(0.5), c], startPoint: .leading, endPoint: .trailing)
-    }
-
-    private func timeColor(_ r: TimeInterval) -> Color {
-        r > 3600 ? DS.C.text : r > 1800 ? DS.C.yellow : DS.C.red
-    }
-
-    private func formatCountdown(_ s: TimeInterval) -> String {
-        let h = Int(s) / 3600, m = (Int(s) % 3600) / 60, sec = Int(s) % 60
-        return h > 0 ? String(format: "%dh %02dm", h, m) : String(format: "%dm %02ds", m, sec)
-    }
-
-    private func formatWallTime(_ d: Date) -> String {
-        let f = DateFormatter(); f.dateFormat = "HH:mm"; return f.string(from: d)
-    }
-
-    private func relativeTime(_ d: Date) -> String {
-        let s = Int(Date().timeIntervalSince(d))
-        if s < 60 { return "\(s)s ago" }
-        if s < 3600 { return "\(s / 60)m ago" }
-        return "\(s / 3600)h \((s % 3600) / 60)m ago"
+    private var planLabel: String {
+        if toolState.authStatus == .available { return "Pro" }
+        if toolState.authStatus == .missing { return "Auth" }
+        return toolState.isActive ? "Active" : "Passive"
     }
 }
 
-// MARK: - Log entry
+private struct QuotaDisplayRow: Identifiable {
+    let id = UUID()
+    let title: String
+    let usedFraction: Double
+    let leadingValue: String
+    let resetText: String
+    let metricID: UUID?
+}
+
+private struct QuotaRowView: View {
+    let row: QuotaDisplayRow
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text(row.title)
+                .font(.system(size: 29, weight: .semibold))
+                .foregroundStyle(DS.C.text)
+
+            GeometryReader { geometry in
+                ZStack(alignment: .leading) {
+                    Capsule()
+                        .fill(DS.C.track)
+                    Capsule()
+                        .fill(DS.C.ink)
+                        .frame(width: max(geometry.size.width * CGFloat(row.usedFraction), 0))
+                }
+            }
+            .frame(height: 24)
+
+            HStack {
+                Text(row.leadingValue)
+                    .font(.system(size: 24, weight: .regular))
+                    .foregroundStyle(DS.C.textSub)
+                Spacer()
+                Text(row.resetText)
+                    .font(.system(size: 24, weight: .regular))
+                    .foregroundStyle(DS.C.textSub)
+            }
+        }
+    }
+}
 
 struct LogEntryView: View {
     let entry: WarmupLog
     let accent: Color
 
-    private static let fmt: DateFormatter = {
-        let f = DateFormatter(); f.dateFormat = "HH:mm:ss"; return f
+    private static let formatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "HH:mm:ss"
+        return formatter
     }()
 
     var body: some View {
         VStack(alignment: .leading, spacing: 3) {
             HStack(spacing: 4) {
-                Text(Self.fmt.string(from: entry.timestamp))
-                    .font(DS.mono(8)).foregroundStyle(DS.C.textMuted)
-                Text("$")
-                    .font(DS.mono(9, weight: .bold)).foregroundStyle(accent.opacity(0.5))
+                Text(Self.formatter.string(from: entry.timestamp))
+                    .font(DS.mono(8))
+                    .foregroundStyle(DS.C.textMuted)
+                Text(entry.mode.uppercased())
+                    .font(DS.mono(8, weight: .bold))
+                    .foregroundStyle(accent)
                 Text(entry.command)
-                    .font(DS.mono(10, weight: .bold)).foregroundStyle(accent)
+                    .font(DS.mono(9))
+                    .foregroundStyle(DS.C.textSub)
             }
             Text(entry.output)
                 .font(DS.mono(9))
-                .foregroundStyle(Color.white.opacity(0.60))
+                .foregroundStyle(DS.C.textSub)
                 .textSelection(.enabled)
-                .lineLimit(8)
+                .lineLimit(6)
         }
         .padding(DS.Space.sm)
-        .background(Color.white.opacity(0.03), in: RoundedRectangle(cornerRadius: DS.R.sm))
+        .background(DS.C.bg, in: RoundedRectangle(cornerRadius: DS.R.sm))
+        .overlay(RoundedRectangle(cornerRadius: DS.R.sm).stroke(DS.C.border))
+    }
+}
+
+private extension ToolID {
+    var shortDisplayName: String {
+        switch self {
+        case .claude: return "Claude"
+        case .codex: return "Codex"
+        }
+    }
+}
+
+private extension String {
+    var displayTitle: String {
+        replacingOccurrences(of: "_", with: " ")
+            .replacingOccurrences(of: "-", with: " ")
+            .capitalized
     }
 }
