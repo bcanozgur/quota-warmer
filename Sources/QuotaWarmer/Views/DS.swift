@@ -2,11 +2,11 @@ import SwiftUI
 
 enum DS {
     enum C {
-        static let bg          = Color(white: 0.995)
-        static let sidebar     = Color(red: 0.985, green: 0.987, blue: 0.990)
-        static let track       = Color(red: 0.945, green: 0.949, blue: 0.957)
-        static let surface     = Color(red: 0.970, green: 0.973, blue: 0.978)
-        static let surfaceHigh = Color(red: 0.930, green: 0.936, blue: 0.946)
+        static let bg          = Color(red: 0.982, green: 0.984, blue: 0.988)
+        static let sidebar     = Color(red: 0.950, green: 0.956, blue: 0.966)
+        static let track       = Color(red: 0.915, green: 0.922, blue: 0.934)
+        static let surface     = Color(red: 0.990, green: 0.992, blue: 0.995)
+        static let surfaceHigh = Color(red: 0.940, green: 0.946, blue: 0.958)
         static let ink         = Color(red: 0.055, green: 0.080, blue: 0.130)
 
         static let border      = Color(red: 0.850, green: 0.870, blue: 0.900)
@@ -45,10 +45,11 @@ enum DS {
     }
 
     // MARK: - Layout
-    static let sidebarWidth: CGFloat = 96
-    static let contentWidth: CGFloat = 604
+    static let panelScale: CGFloat = 0.90
+    static let sidebarWidth: CGFloat = 50
+    static let contentWidth: CGFloat = 372
     static let totalWidth:   CGFloat = sidebarWidth + contentWidth
-    static let totalHeight: CGFloat = 780
+    static let totalHeight: CGFloat = 490
 
     // MARK: - Typography
     static func mono(_ size: CGFloat, weight: Font.Weight = .regular) -> Font {
@@ -68,6 +69,6 @@ extension View {
     func dsLabel() -> some View {
         self.font(.system(size: 9, weight: .semibold))
             .foregroundStyle(DS.C.textMuted)
-            .tracking(0.4)
+            .tracking(0)
     }
 }

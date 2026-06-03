@@ -19,9 +19,9 @@ struct SettingsTabView: View {
             VStack(alignment: .leading, spacing: 0) {
                 settingsHeader
 
-                group("POLLING") {
+                group("CHECKS") {
                     row(icon: "clock.arrow.2.circlepath", title: "Quota Refresh Interval",
-                        subtitle: "Default is 5 minutes; stale data cannot auto-warm") {
+                        subtitle: "Default 5 minutes") {
                         segmentedPicker(
                             options: refreshOptions,
                             selected: $refreshInterval
@@ -31,7 +31,7 @@ struct SettingsTabView: View {
                     Divider().background(DS.C.border).padding(.leading, 36)
 
                     row(icon: "shield.lefthalf.filled", title: "Rate-limit Guard",
-                        subtitle: "Back off after failed automatic warmups") {
+                        subtitle: "Back off after failures") {
                         Toggle("", isOn: $rateLimitGuard)
                             .toggleStyle(.switch).scaleEffect(0.75).tint(DS.C.accent(.claude))
                     }
@@ -39,12 +39,13 @@ struct SettingsTabView: View {
                     Divider().background(DS.C.border).padding(.leading, 36)
 
                     row(icon: "arrow.clockwise", title: "Manual Refresh",
-                        subtitle: "Fetch fresh quota from server sources") {
+                        subtitle: "Active tools only") {
                         Button(action: { appState.refreshAllActivity() }) {
                             Text("Refresh")
-                                .font(.system(size: 10, weight: .semibold))
-                                .padding(.horizontal, 10).padding(.vertical, 4)
-                                .background(DS.C.surface, in: RoundedRectangle(cornerRadius: DS.R.sm))
+                                .font(.system(size: 11, weight: .semibold))
+                                .padding(.horizontal, 11)
+                                .frame(height: 26)
+                                .background(DS.C.surfaceHigh, in: RoundedRectangle(cornerRadius: 6))
                                 .foregroundStyle(DS.C.text)
                                 .overlay(RoundedRectangle(cornerRadius: DS.R.sm).stroke(DS.C.border, lineWidth: 1))
                         }
@@ -52,9 +53,9 @@ struct SettingsTabView: View {
                     }
                 }
 
-                group("NOTIFICATIONS") {
+                group("ALERTS") {
                     row(icon: "bell.badge", title: "Window Expiring Soon",
-                        subtitle: "Alert 30 min before reset") {
+                        subtitle: "30 min before reset") {
                         Toggle("", isOn: $notifyWarning)
                             .toggleStyle(.switch).scaleEffect(0.75).tint(DS.C.accent(.claude))
                     }
@@ -62,7 +63,7 @@ struct SettingsTabView: View {
                     Divider().background(DS.C.border).padding(.leading, 36)
 
                     row(icon: "checkmark.circle", title: "Window Activated",
-                        subtitle: "Confirm when warmup succeeds") {
+                        subtitle: "After warmup succeeds") {
                         Toggle("", isOn: $notifyActivated)
                             .toggleStyle(.switch).scaleEffect(0.75).tint(DS.C.accent(.claude))
                     }
@@ -70,41 +71,25 @@ struct SettingsTabView: View {
 
                 group("SYSTEM") {
                     row(icon: "power", title: "Launch at Login",
-                        subtitle: "Start QuotaWarmer on macOS login") {
+                        subtitle: "Start with macOS") {
                         Toggle("", isOn: $launchAtLogin)
                             .toggleStyle(.switch).scaleEffect(0.75).tint(DS.C.accent(.claude))
                             .onChange(of: launchAtLogin) { _, v in
                                 try? v ? SMAppService.mainApp.register() : SMAppService.mainApp.unregister()
                             }
                     }
-
-                    Divider().background(DS.C.border).padding(.leading, 36)
-
-                    row(icon: "arrow.triangle.2.circlepath", title: "Restart to Update",
-                        subtitle: "Quit and relaunch after installing a release") {
-                        Button(action: { NSApplication.shared.terminate(nil) }) {
-                            Text("Restart")
-                                .font(.system(size: 10, weight: .semibold))
-                                .padding(.horizontal, 10).padding(.vertical, 4)
-                                .background(DS.C.surface, in: RoundedRectangle(cornerRadius: DS.R.sm))
-                                .foregroundStyle(DS.C.text)
-                                .overlay(RoundedRectangle(cornerRadius: DS.R.sm).stroke(DS.C.border, lineWidth: 1))
-                        }
-                        .buttonStyle(.plain)
-                    }
                 }
 
                 group("PRIVACY") {
-                    VStack(alignment: .leading, spacing: DS.Space.sm) {
-                        privacyLine("Claude", "Keychain Claude Code-credentials, CLAUDE_CONFIG_DIR variants, ~/.claude/.credentials.json")
-                        privacyLine("Codex", "CODEX_HOME/auth.json, ~/.config/codex/auth.json, ~/.codex/auth.json, Keychain Codex Auth")
-                        privacyLine("Endpoints", "Anthropic OAuth usage, Claude token refresh, Codex app-server rate limits, wham usage fallback")
-                        Text("Tokens, account ids, authorization headers, and raw credential payloads are never written to history or warmup logs.")
-                            .font(.system(size: 9))
-                            .foregroundStyle(DS.C.textMuted)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                    .padding(DS.Space.md)
+                    infoRow(
+                        title: "Credential access",
+                        detail: "Active tools only. Claude reads Keychain Claude Code-credentials or ~/.claude/.credentials.json. Codex reads auth.json or Keychain Codex Auth."
+                    )
+                    Divider().background(DS.C.border).padding(.leading, 36)
+                    infoRow(
+                        title: "Logs",
+                        detail: "Tokens and authorization headers are never written to history or warmup logs."
+                    )
                 }
 
                 group("ABOUT") {
@@ -114,7 +99,7 @@ struct SettingsTabView: View {
                             .foregroundStyle(DS.C.accent(.claude))
                         VStack(alignment: .leading, spacing: 2) {
                             Text("QuotaWarmer")
-                                .font(.system(size: 12, weight: .semibold)).foregroundStyle(DS.C.text)
+                                .font(.system(size: 12.5, weight: .semibold)).foregroundStyle(DS.C.text)
                             Text("v1.0  ·  macOS 14+")
                                 .font(.system(size: 10)).foregroundStyle(DS.C.textMuted)
                         }
@@ -151,9 +136,10 @@ struct SettingsTabView: View {
                             subtitle: "Check GitHub for the latest release") {
                             Button(action: { Task { await appState.checkForAppUpdate() } }) {
                                 Text("Check")
-                                    .font(.system(size: 10, weight: .semibold))
-                                    .padding(.horizontal, 10).padding(.vertical, 4)
-                                    .background(DS.C.surface, in: RoundedRectangle(cornerRadius: DS.R.sm))
+                                    .font(.system(size: 11, weight: .semibold))
+                                    .padding(.horizontal, 11)
+                                    .frame(height: 26)
+                                    .background(DS.C.surfaceHigh, in: RoundedRectangle(cornerRadius: 6))
                                     .foregroundStyle(DS.C.text)
                                     .overlay(RoundedRectangle(cornerRadius: DS.R.sm).stroke(DS.C.border))
                             }
@@ -217,15 +203,15 @@ struct SettingsTabView: View {
     ) -> some View {
         HStack(spacing: DS.Space.sm) {
             Image(systemName: icon)
-                .font(.system(size: 12))
+                .font(.system(size: 12.5, weight: .medium))
                 .foregroundStyle(DS.C.textSub)
                 .frame(width: 20)
             VStack(alignment: .leading, spacing: 1) {
                 Text(title)
-                    .font(.system(size: 11, weight: .medium))
+                    .font(.system(size: 11.5, weight: .medium))
                     .foregroundStyle(DS.C.text)
                 Text(subtitle)
-                    .font(.system(size: 9))
+                    .font(.system(size: 9.5))
                     .foregroundStyle(DS.C.textMuted)
             }
             Spacer()
@@ -245,6 +231,22 @@ struct SettingsTabView: View {
                 .foregroundStyle(DS.C.textMuted)
                 .fixedSize(horizontal: false, vertical: true)
         }
+    }
+
+    private func infoRow(title: String, detail: String) -> some View {
+        HStack(spacing: DS.Space.sm) {
+            Image(systemName: "info.circle")
+                .font(.system(size: 12))
+                .foregroundStyle(DS.C.textSub)
+                .frame(width: 20)
+                .help(detail)
+            Text(title)
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(DS.C.text)
+            Spacer()
+        }
+        .padding(.horizontal, DS.Space.md)
+        .padding(.vertical, DS.Space.sm + 2)
     }
 
     private func segmentedPicker(

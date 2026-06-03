@@ -2,6 +2,7 @@ import SwiftUI
 
 struct ToolTabView: View {
     @ObservedObject var toolState: ToolState
+    let onSetActive: (Bool) -> Void
     let onActivate: () -> Void
     let onRefresh: () -> Void
 
@@ -9,41 +10,49 @@ struct ToolTabView: View {
     @State private var now = Date()
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 28) {
+        VStack(alignment: .leading, spacing: 16) {
             header
             quotaList
+            actions
             Spacer(minLength: 0)
         }
-        .padding(.horizontal, 24)
-        .padding(.top, 48)
+        .padding(.horizontal, 16)
+        .padding(.top, 16)
         .background(DS.C.bg)
         .onReceive(ticker) { t in now = t }
     }
 
     private var header: some View {
         HStack(alignment: .center) {
-            Text(toolState.tool.shortDisplayName)
-                .font(.system(size: 36, weight: .bold))
-                .foregroundStyle(DS.C.text)
+            HStack(spacing: 8) {
+                Image(toolState.tool == .claude ? "ClaudeCode" : "Codex")
+                    .resizable()
+                    .renderingMode(.template)
+                    .scaledToFit()
+                    .frame(width: 21, height: 21)
+                    .foregroundStyle(DS.C.text)
+                Text(toolState.tool.shortDisplayName)
+                    .font(.system(size: 18, weight: .semibold))
+                    .foregroundStyle(DS.C.text)
+            }
             Spacer()
-            Text(planLabel)
-                .font(.system(size: 24, weight: .medium))
-                .foregroundStyle(DS.C.text)
-                .padding(.horizontal, 17)
-                .frame(height: 42)
-                .background(DS.C.bg, in: RoundedRectangle(cornerRadius: 14))
-                .overlay(RoundedRectangle(cornerRadius: 14).stroke(DS.C.border, lineWidth: 2))
+            if toolState.isFetchingQuota {
+                Image(systemName: "hourglass")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(DS.C.textSub)
+            }
+            activeControl
         }
     }
 
     private var quotaList: some View {
-        VStack(alignment: .leading, spacing: 32) {
+        VStack(alignment: .leading, spacing: 18) {
             ForEach(rows) { row in
-                QuotaRowView(row: row)
+                QuotaRowView(row: row, refreshing: toolState.isFetchingQuota)
             }
             if let error = toolState.errorMessage {
                 Text(error)
-                    .font(.system(size: 16))
+                    .font(.system(size: 11))
                     .foregroundStyle(DS.C.red)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -51,65 +60,47 @@ struct ToolTabView: View {
     }
 
     private var rows: [QuotaDisplayRow] {
-        var output: [QuotaDisplayRow] = [
-            displayRow(title: "Session", metric: toolState.primaryMetric),
+        [
+            displayRow(title: "5h Window", metric: toolState.primaryMetric),
             displayRow(title: "Weekly", metric: toolState.weeklyMetric)
         ]
-
-        let extras = normalizedExtras
-        if toolState.tool == .codex {
-            output.append(displayRow(title: "Reviews", metric: extras.first { $0.name.localizedCaseInsensitiveContains("review") }))
-            output.append(displayRow(title: "Credits", metric: extras.first { $0.name.localizedCaseInsensitiveContains("credit") }, showsRawValue: true))
-        } else {
-            output.append(displayRow(title: "Sonnet", metric: extras.first { $0.name.localizedCaseInsensitiveContains("sonnet") }))
-            output.append(displayRow(title: "Opus", metric: extras.first { $0.name.localizedCaseInsensitiveContains("opus") }))
-        }
-
-        let namedIDs = Set(output.compactMap { $0.metricID })
-        let additional = extras
-            .filter { !namedIDs.contains($0.id) }
-            .prefix(2)
-            .map { displayRow(title: $0.name.displayTitle, metric: $0) }
-        output.append(contentsOf: additional)
-
-        return output
     }
 
-    private var normalizedExtras: [QuotaMetric] {
-        toolState.quotaSnapshot?.extras ?? []
-    }
-
-    private func displayRow(title: String, metric: QuotaMetric?, showsRawValue: Bool = false) -> QuotaDisplayRow {
-        let percent = metric?.clampedUsed ?? 0
+    private func displayRow(title: String, metric: QuotaMetric?) -> QuotaDisplayRow {
+        let percent = metric?.remainingFraction ?? 0
         let leading: String
-        if showsRawValue, let detail = metric?.detail {
-            leading = detail.components(separatedBy: "/").first?.trimmingCharacters(in: .whitespaces) ?? "\(Int(percent * 100))%"
-        } else if metric == nil {
-            leading = "0%"
+        if metric == nil {
+            leading = "0% left"
         } else {
-            leading = "\(Int(percent * 100))%"
+            leading = "\(Int(percent * 100))% left"
         }
 
         return QuotaDisplayRow(
             title: title,
-            usedFraction: percent,
+            progressFraction: percent,
             leadingValue: leading,
-            resetText: resetText(for: metric),
+            resetText: resetText(for: metric, includeRemaining: title == "5h Window"),
             metricID: metric?.id
         )
     }
 
-    private func resetText(for metric: QuotaMetric?) -> String {
+    private func resetText(for metric: QuotaMetric?, includeRemaining: Bool) -> String {
         guard let resetAt = metric?.resetAt else {
             return toolState.isFetchingQuota ? "Updating..." : freshnessFallback
         }
         let seconds = max(0, Int(resetAt.timeIntervalSince(now)))
-        if seconds < 60 { return "Resets in \(seconds)s" }
-        if seconds < 3600 { return "Resets in \(seconds / 60)m" }
-        if seconds < 86_400 {
-            return "Resets in \(seconds / 3600)h \((seconds % 3600) / 60)m"
+        let timeText: String
+        if seconds < 60 {
+            timeText = "\(seconds)s"
+        } else if seconds < 3600 {
+            timeText = "\(seconds / 60)m"
+        } else if seconds < 86_400 {
+            timeText = "\(seconds / 3600)h \((seconds % 3600) / 60)m"
+        } else {
+            timeText = "\(seconds / 86_400)d \((seconds % 86_400) / 3600)h"
         }
-        return "Resets in \(seconds / 86_400)d \((seconds % 86_400) / 3600)h"
+        guard includeRemaining, let metric else { return "Resets in \(timeText)" }
+        return "Resets in \(timeText) - \(Int(metric.remainingFraction * 100))% left"
     }
 
     private var freshnessFallback: String {
@@ -121,17 +112,55 @@ struct ToolTabView: View {
         }
     }
 
-    private var planLabel: String {
-        if toolState.authStatus == .available { return "Pro" }
-        if toolState.authStatus == .missing { return "Auth" }
-        return toolState.isActive ? "Active" : "Passive"
+    private var activeControl: some View {
+        Button(action: { onSetActive(!toolState.isActive) }) {
+            HStack(spacing: 6) {
+                Circle()
+                    .fill(toolState.isActive ? DS.C.green : DS.C.red)
+                    .frame(width: 6, height: 6)
+                Text(toolState.isActive ? "Active" : "Passive")
+                    .font(.system(size: 11.5, weight: .semibold))
+            }
+            .foregroundStyle(DS.C.text)
+            .padding(.horizontal, 10)
+            .frame(height: 26)
+            .background(DS.C.bg, in: RoundedRectangle(cornerRadius: DS.R.sm))
+            .overlay(RoundedRectangle(cornerRadius: DS.R.sm).stroke(DS.C.border))
+        }
+        .buttonStyle(.plain)
+    }
+
+    private var actions: some View {
+        HStack(spacing: 8) {
+            Button(action: onActivate) {
+                Label("Warm", systemImage: "bolt.fill")
+                    .font(.system(size: 11.5, weight: .semibold))
+                    .frame(height: 30)
+                    .padding(.horizontal, 12)
+                    .foregroundStyle(.white)
+                    .background(DS.C.accent(toolState.tool), in: RoundedRectangle(cornerRadius: 6))
+            }
+            .buttonStyle(.plain)
+            .disabled(toolState.isWarming)
+
+            Button(action: onRefresh) {
+                Label("Refresh", systemImage: toolState.isFetchingQuota ? "hourglass" : "arrow.clockwise")
+                    .font(.system(size: 11.5, weight: .semibold))
+                    .frame(height: 30)
+                    .padding(.horizontal, 12)
+                    .foregroundStyle(DS.C.text)
+                    .background(DS.C.surfaceHigh, in: RoundedRectangle(cornerRadius: 6))
+            }
+            .buttonStyle(.plain)
+            .disabled(toolState.isFetchingQuota)
+        }
     }
 }
 
 private struct QuotaDisplayRow: Identifiable {
     let id = UUID()
     let title: String
-    let usedFraction: Double
+    let progressFraction: Double
     let leadingValue: String
     let resetText: String
     let metricID: UUID?
@@ -139,11 +168,12 @@ private struct QuotaDisplayRow: Identifiable {
 
 private struct QuotaRowView: View {
     let row: QuotaDisplayRow
+    let refreshing: Bool
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 7) {
             Text(row.title)
-                .font(.system(size: 29, weight: .semibold))
+                .font(.system(size: 13.5, weight: .semibold))
                 .foregroundStyle(DS.C.text)
 
             GeometryReader { geometry in
@@ -152,18 +182,24 @@ private struct QuotaRowView: View {
                         .fill(DS.C.track)
                     Capsule()
                         .fill(DS.C.ink)
-                        .frame(width: max(geometry.size.width * CGFloat(row.usedFraction), 0))
+                        .frame(width: max(geometry.size.width * CGFloat(row.progressFraction), 0))
+                    if refreshing {
+                        Capsule()
+                            .fill(.white.opacity(0.22))
+                            .frame(width: geometry.size.width * 0.28)
+                            .offset(x: geometry.size.width * 0.18)
+                    }
                 }
             }
-            .frame(height: 24)
+            .frame(height: 9)
 
             HStack {
                 Text(row.leadingValue)
-                    .font(.system(size: 24, weight: .regular))
+                    .font(.system(size: 11.5, weight: .medium))
                     .foregroundStyle(DS.C.textSub)
                 Spacer()
                 Text(row.resetText)
-                    .font(.system(size: 24, weight: .regular))
+                    .font(.system(size: 11.5, weight: .medium))
                     .foregroundStyle(DS.C.textSub)
             }
         }
@@ -211,13 +247,5 @@ private extension ToolID {
         case .claude: return "Claude"
         case .codex: return "Codex"
         }
-    }
-}
-
-private extension String {
-    var displayTitle: String {
-        replacingOccurrences(of: "_", with: " ")
-            .replacingOccurrences(of: "-", with: " ")
-            .capitalized
     }
 }
