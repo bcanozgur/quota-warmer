@@ -2,14 +2,14 @@ import SwiftUI
 
 enum DS {
     enum C {
-        static let bg          = Color(red: 0.982, green: 0.984, blue: 0.988)
-        static let sidebar     = Color(red: 0.950, green: 0.956, blue: 0.966)
-        static let track       = Color(red: 0.915, green: 0.922, blue: 0.934)
-        static let surface     = Color(red: 0.990, green: 0.992, blue: 0.995)
-        static let surfaceHigh = Color(red: 0.940, green: 0.946, blue: 0.958)
-        static let ink         = Color(red: 0.055, green: 0.080, blue: 0.130)
+        static let bg          = Color(red: 0.985, green: 0.987, blue: 0.991)
+        static let sidebar     = Color(red: 0.946, green: 0.952, blue: 0.962)
+        static let track       = Color(red: 0.927, green: 0.932, blue: 0.941)
+        static let surface     = Color.white
+        static let surfaceHigh = Color(red: 0.966, green: 0.970, blue: 0.978)
+        static let ink         = Color(red: 0.045, green: 0.066, blue: 0.110)
 
-        static let border      = Color(red: 0.850, green: 0.870, blue: 0.900)
+        static let border      = Color(red: 0.842, green: 0.858, blue: 0.885)
         static let borderFocus = Color.black.opacity(0.16)
 
         static let text        = Color(red: 0.040, green: 0.055, blue: 0.090)
@@ -45,11 +45,11 @@ enum DS {
     }
 
     // MARK: - Layout
-    static let panelScale: CGFloat = 0.90
-    static let sidebarWidth: CGFloat = 50
-    static let contentWidth: CGFloat = 372
+    static let panelScale: CGFloat = 1.0
+    static let sidebarWidth: CGFloat = 62
+    static let contentWidth: CGFloat = 418
     static let totalWidth:   CGFloat = sidebarWidth + contentWidth
-    static let totalHeight: CGFloat = 490
+    static let totalHeight: CGFloat = 612
 
     // MARK: - Typography
     static func mono(_ size: CGFloat, weight: Font.Weight = .regular) -> Font {

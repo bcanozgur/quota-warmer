@@ -41,12 +41,12 @@ struct MenuBarLabel: View {
     @ViewBuilder
     private var fallbackLabel: some View {
         HStack(spacing: 2) {
-            Circle()
-                .fill(isHealthy ? DS.C.green : DS.C.red)
-                .frame(width: 5.5, height: 5.5)
             Image(systemName: "flame.fill")
                 .font(.system(size: 10, weight: .semibold))
                 .foregroundStyle(DS.C.accent(.claude))
+            Circle()
+                .fill(isHealthy ? DS.C.green : DS.C.red)
+                .frame(width: 5.5, height: 5.5)
         }
     }
 
@@ -56,10 +56,7 @@ struct MenuBarLabel: View {
         let accent = DS.C.accent(tool)
 
         HStack(spacing: 3) {
-            Circle()
-                .fill(statusColor(for: st))
-                .frame(width: 5.5, height: 5.5)
-            ProviderMenuBarGlyph(tool: tool)
+            ProviderMenuBarGlyph(tool: tool, statusColor: nsStatusColor(for: st))
                 .opacity(st.isActive || st.freshness == .fresh || st.isWarming ? 1.0 : 0.68)
             if isActive && !st.isWarming {
                 Image(systemName: "hourglass")
@@ -112,11 +109,11 @@ struct MenuBarLabel: View {
         r > 3600 ? accent : r > 1800 ? DS.C.yellow : DS.C.red
     }
 
-    private func statusColor(for state: ToolState) -> Color {
-        if appState.globalPassive || !state.isActive { return DS.C.red }
-        if state.sourceHealth == .healthy && state.freshness == .fresh { return DS.C.green }
-        if state.sourceHealth == .authFailure || state.sourceHealth == .unavailable { return DS.C.red }
-        return DS.C.yellow
+    private func nsStatusColor(for state: ToolState) -> NSColor {
+        if appState.globalPassive || !state.isActive { return .systemRed }
+        if state.sourceHealth == .healthy && state.freshness == .fresh { return .systemGreen }
+        if state.sourceHealth == .authFailure || state.sourceHealth == .unavailable { return .systemRed }
+        return .systemYellow
     }
 
     private func compactQuotaText(time: TimeInterval, metric: QuotaMetric?) -> String {
@@ -127,14 +124,15 @@ struct MenuBarLabel: View {
 
 private struct ProviderMenuBarGlyph: View {
     let tool: ToolID
+    let statusColor: NSColor
 
     var body: some View {
-        Image(nsImage: ProviderMenuBarIcon.image(for: tool))
+        Image(nsImage: ProviderMenuBarIcon.image(for: tool, statusColor: statusColor))
             .resizable()
             .renderingMode(.original)
             .interpolation(.high)
             .scaledToFit()
-            .frame(width: 14, height: 14)
+            .frame(width: 16, height: 14)
             .clipped()
     }
 }
@@ -142,11 +140,12 @@ private struct ProviderMenuBarGlyph: View {
 private enum ProviderMenuBarIcon {
     private static var cache: [String: NSImage] = [:]
 
-    static func image(for tool: ToolID) -> NSImage {
-        let key = tool.rawValue
+    static func image(for tool: ToolID, statusColor: NSColor) -> NSImage {
+        let colorKey = statusColor == .systemGreen ? "green" : statusColor == .systemYellow ? "yellow" : "red"
+        let key = "\(tool.rawValue).\(colorKey)"
         if let cached = cache[key] { return cached }
         let name = tool == .claude ? "ClaudeCode" : "Codex"
-        let size = NSSize(width: 24, height: 24)
+        let size = NSSize(width: 32, height: 24)
         let output = NSImage(size: size)
         output.lockFocus()
         NSColor.clear.setFill()
@@ -154,7 +153,7 @@ private enum ProviderMenuBarIcon {
         if let source = NSImage(named: name) {
             source.isTemplate = false
             source.draw(
-                in: NSRect(x: 3, y: 3, width: 18, height: 18),
+                in: NSRect(x: 0, y: 3, width: 18, height: 18),
                 from: .zero,
                 operation: .sourceOver,
                 fraction: 1,
@@ -162,6 +161,12 @@ private enum ProviderMenuBarIcon {
                 hints: [.interpolation: NSImageInterpolation.high]
             )
         }
+        statusColor.setFill()
+        NSBezierPath(ovalIn: NSRect(x: 21, y: 9, width: 7, height: 7)).fill()
+        NSColor.controlBackgroundColor.withAlphaComponent(0.92).setStroke()
+        let ring = NSBezierPath(ovalIn: NSRect(x: 20.5, y: 8.5, width: 8, height: 8))
+        ring.lineWidth = 1
+        ring.stroke()
         output.unlockFocus()
         output.isTemplate = false
         cache[key] = output

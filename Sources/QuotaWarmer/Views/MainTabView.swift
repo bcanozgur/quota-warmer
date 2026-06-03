@@ -6,14 +6,14 @@ struct MainTabView: View {
 
     var body: some View {
         ScrollView(.vertical, showsIndicators: false) {
-            VStack(alignment: .leading, spacing: 14) {
+            VStack(alignment: .leading, spacing: 18) {
                 header
                 providerList
                 historySection
             }
-            .padding(.horizontal, 16)
-            .padding(.top, 16)
-            .padding(.bottom, 14)
+            .padding(.horizontal, 24)
+            .padding(.top, 26)
+            .padding(.bottom, 18)
         }
         .background(DS.C.bg)
     }
@@ -22,10 +22,10 @@ struct MainTabView: View {
         HStack {
             VStack(alignment: .leading, spacing: 2) {
                 Text("QuotaWarmer")
-                    .font(.system(size: 17, weight: .semibold))
+                    .font(.system(size: 28, weight: .bold))
                     .foregroundStyle(DS.C.text)
                 Text("Choose a tool to keep warm.")
-                    .font(.system(size: 11, weight: .medium))
+                    .font(.system(size: 12, weight: .medium))
                     .foregroundStyle(DS.C.textMuted)
             }
             Spacer()
@@ -47,31 +47,31 @@ struct MainTabView: View {
             }
         }
         .padding(.vertical, 2)
-        .background(DS.C.surface, in: RoundedRectangle(cornerRadius: DS.R.md))
-        .overlay(RoundedRectangle(cornerRadius: DS.R.md).stroke(DS.C.border))
+        .background(DS.C.surface, in: RoundedRectangle(cornerRadius: 12))
+        .overlay(RoundedRectangle(cornerRadius: 12).stroke(DS.C.border))
     }
 
     private func providerRow(_ tool: ToolID) -> some View {
         let state = appState.state(for: tool)
-        return HStack(alignment: .top, spacing: 11) {
+        return HStack(alignment: .top, spacing: 14) {
             Image(tool == .claude ? "ClaudeCode" : "Codex")
                 .resizable()
                 .renderingMode(.template)
                 .scaledToFit()
-                .frame(width: 19, height: 19)
+                .frame(width: 22, height: 22)
                 .foregroundStyle(DS.C.text)
-                .padding(.top, 4)
+                .padding(.top, 5)
 
             VStack(alignment: .leading, spacing: 8) {
                 HStack(spacing: 6) {
-                    Text(tool.displayName)
-                        .font(.system(size: 13, weight: .semibold))
+                    Text(tool.shortDisplayName)
+                        .font(.system(size: 15, weight: .semibold))
                         .foregroundStyle(DS.C.text)
                     Circle()
                         .fill(state.isActive ? DS.C.green : DS.C.red)
                         .frame(width: 5.5, height: 5.5)
                     Text(providerStatus(state))
-                        .font(.system(size: 10.5, weight: .medium))
+                        .font(.system(size: 12, weight: .medium))
                         .foregroundStyle(state.sourceHealth == .authFailure ? DS.C.red : DS.C.textMuted)
                         .lineLimit(1)
                     Spacer(minLength: 0)
@@ -103,8 +103,8 @@ struct MainTabView: View {
             }
             .frame(width: 42)
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 11)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 14)
     }
 
     private var historySection: some View {
@@ -140,8 +140,8 @@ struct MainTabView: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 11)
-        .background(DS.C.surface, in: RoundedRectangle(cornerRadius: DS.R.md))
-        .overlay(RoundedRectangle(cornerRadius: DS.R.md).stroke(DS.C.border))
+        .background(DS.C.surface, in: RoundedRectangle(cornerRadius: 12))
+        .overlay(RoundedRectangle(cornerRadius: 12).stroke(DS.C.border))
     }
 
     private func quotaLine(_ label: String, metric: QuotaMetric?, refreshing: Bool) -> some View {

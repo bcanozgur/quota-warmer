@@ -37,8 +37,8 @@ struct MenuContent: View {
                 height: DS.totalHeight * DS.panelScale,
                 alignment: .topLeading
             )
-            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-            .shadow(color: .black.opacity(0.16), radius: 14, x: 0, y: 6)
+            .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+            .shadow(color: .black.opacity(0.18), radius: 18, x: 0, y: 8)
             .background(WindowTransparencyConfigurator())
             .onReceive(ticker) { t in now = t }
     }
@@ -60,7 +60,7 @@ struct MenuContent: View {
     // MARK: - Sidebar
 
     private var sidebar: some View {
-        VStack(spacing: 12) {
+        VStack(spacing: 18) {
             SidebarMainTab(isSelected: selectedTab == .main) {
                 selectedTab = .main
             }
@@ -79,8 +79,8 @@ struct MenuContent: View {
                 selectedTab = .settings
             }
         }
-        .padding(.top, 16)
-        .padding(.bottom, 16)
+        .padding(.top, 26)
+        .padding(.bottom, 26)
         .frame(width: DS.sidebarWidth)
         .background(DS.C.sidebar)
     }
@@ -155,8 +155,8 @@ struct MenuContent: View {
             .buttonStyle(.plain)
             .disabled(!canRefreshFromFooter)
         }
-        .frame(height: 38)
-        .padding(.horizontal, 12)
+        .frame(height: 46)
+        .padding(.horizontal, 18)
         .background(DS.C.bg)
         .overlay(Rectangle().fill(DS.C.border).frame(height: 1), alignment: .top)
     }
@@ -213,19 +213,19 @@ struct SidebarTab: View {
                 if isSelected {
                     RoundedRectangle(cornerRadius: 2)
                         .fill(DS.C.ink)
-                        .frame(width: 3, height: 36)
+                    .frame(width: 3, height: 42)
                         .offset(x: -1)
                 }
                 Image(tool == .claude ? "ClaudeCode" : "Codex")
                     .resizable()
                     .renderingMode(.template)
                     .scaledToFit()
-                    .frame(width: 19, height: 19)
-                    .foregroundStyle(DS.C.text)
+                    .frame(width: 25, height: 25)
+                    .foregroundStyle(tool == .claude ? DS.C.accent(.claude) : Color(red: 0.39, green: 0.70, blue: 0.64))
                     .opacity(toolState.isActive || toolState.isWarming || isSelected ? 1.0 : 0.72)
                     .frame(maxWidth: .infinity)
             }
-            .frame(width: DS.sidebarWidth, height: 38)
+            .frame(width: DS.sidebarWidth, height: 48)
         }
         .buttonStyle(.plain)
     }
@@ -239,7 +239,7 @@ struct SidebarMainTab: View {
 
     var body: some View {
         Button(action: action) {
-            sidebarIcon(systemName: "house", selected: isSelected)
+            sidebarIcon(systemName: "gauge.with.dots.needle.50percent", selected: isSelected)
         }
         .buttonStyle(.plain)
     }
@@ -249,15 +249,15 @@ struct SidebarMainTab: View {
             if selected {
                 RoundedRectangle(cornerRadius: 2)
                     .fill(DS.C.ink)
-                    .frame(width: 3, height: 36)
+                    .frame(width: 3, height: 42)
                     .offset(x: -1)
             }
             Image(systemName: systemName)
-                .font(.system(size: 18, weight: .regular))
+                .font(.system(size: 25, weight: .regular))
                 .foregroundStyle(selected ? DS.C.ink : DS.C.textSub)
                 .frame(maxWidth: .infinity)
         }
-        .frame(width: DS.sidebarWidth, height: 38)
+        .frame(width: DS.sidebarWidth, height: 48)
     }
 }
 
@@ -273,15 +273,15 @@ struct SidebarSettingsTab: View {
                 if isSelected {
                     RoundedRectangle(cornerRadius: 2)
                         .fill(DS.C.ink)
-                        .frame(width: 3, height: 36)
-                        .offset(x: -1)
-                }
-                Image(systemName: "gearshape")
-                    .font(.system(size: 18, weight: .regular))
+                    .frame(width: 3, height: 42)
+                    .offset(x: -1)
+            }
+            Image(systemName: "gearshape")
+                    .font(.system(size: 26, weight: .regular))
                     .foregroundStyle(isSelected ? DS.C.ink : DS.C.textSub)
                     .frame(maxWidth: .infinity)
             }
-            .frame(width: DS.sidebarWidth, height: 40)
+            .frame(width: DS.sidebarWidth, height: 48)
         }
         .buttonStyle(.plain)
     }
