@@ -29,8 +29,17 @@ enum ToolID: String, CaseIterable, Identifiable, Codable {
 
     var warmupCommand: String {
         switch self {
-        case .claude: return "claude -p 'hi'"
-        case .codex:  return "codex exec 'hi'"
+        case .claude: return "claude --model haiku --effort low --no-session-persistence -p 'hi'"
+        case .codex:  return "codex exec --model 5.4-mini -c model_reasoning_effort=\"low\" --skip-git-repo-check --ephemeral --ignore-rules 'hi'"
+        }
+    }
+
+    var fallbackWarmupCommand: String? {
+        switch self {
+        case .claude:
+            return nil
+        case .codex:
+            return "codex exec -c model_reasoning_effort=\"low\" --skip-git-repo-check --ephemeral --ignore-rules 'hi'"
         }
     }
 

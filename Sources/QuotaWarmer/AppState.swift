@@ -1,144 +1,162 @@
-import Foundation
 import Combine
+import Foundation
 
 struct WarmupLog: Identifiable {
-    let id        = UUID()
+    let id = UUID()
     let timestamp: Date
-    let command:   String
-    let output:    String
+    let mode: String
+    let command: String
+    let output: String
 }
 
 // MARK: - ToolState
 
 @MainActor
-class ToolState: ObservableObject {
+final class ToolState: ObservableObject {
     let tool: ToolID
 
-    // Raw data from scanner / warmup
-    @Published var lastActivity:   Date?       // latest message ever (display only)
-    @Published var windowStart:    Date?       // first msg of current 5h window (scheduling anchor)
-    @Published var lastWarmup:     Date?       // last time WE triggered
-    @Published var isWarming:      Bool = false
-    @Published var errorMessage:   String?
-    @Published var weeklyActivity: [DayActivity] = []
-    @Published var warmupLogs:     [WarmupLog] = []
-    @Published var isLogExpanded:  Bool = false
-    @Published var autoWarm:       Bool {
-        didSet { UserDefaults.standard.set(autoWarm, forKey: "autoWarm.\(tool.rawValue)") }
+    @Published var isActive: Bool {
+        didSet { UserDefaults.standard.set(isActive, forKey: "toolActive.\(tool.rawValue)") }
     }
+    @Published var isFetchingQuota = false
+    @Published var isWarming = false
+    @Published var errorMessage: String?
+    @Published var lastLogActivity: Date?
+    @Published var weeklyActivity: [DayActivity] = []
+    @Published var quotaSnapshot: QuotaSnapshot?
+    @Published var sourceHealth: SourceHealth = .unknown
+    @Published var authStatus: AuthStatus = .unknown
+    @Published var healthMessage: String = "not checked"
+    @Published var nextRefreshAt: Date?
+    @Published var backoffUntil: Date?
+    @Published var lastAutoWindowKey: String?
+    @Published var warmupLogs: [WarmupLog] = []
+    @Published var isLogExpanded = false
 
     init(tool: ToolID) {
-        self.tool     = tool
-        self.autoWarm = UserDefaults.standard.object(forKey: "autoWarm.\(tool.rawValue)") as? Bool ?? true
-        if let s = UserDefaults.standard.string(forKey: "lastWarmup.\(tool.rawValue)"),
-           let d = ISO8601DateFormatter().date(from: s) { self.lastWarmup = d }
+        self.tool = tool
+        self.isActive = UserDefaults.standard.object(forKey: "toolActive.\(tool.rawValue)") as? Bool ?? false
+        self.lastAutoWindowKey = UserDefaults.standard.string(forKey: "lastAutoWindowKey.\(tool.rawValue)")
     }
 
-    // MARK: Derived — all anchored to windowStart
-
-    /// Window expires at windowStart + 5h. nil when window is not active.
-    var windowExpires: Date? {
-        windowStart.map { $0.addingTimeInterval(tool.windowDuration) }
+    var freshness: QuotaFreshness {
+        quotaSnapshot?.freshness() ?? .unknown
     }
 
-    /// 0.0 (just started) → 1.0 (expired). 0 when no active window.
-    var windowProgress: Double {
-        guard let start = windowStart else { return 0 }
-        return min(Date().timeIntervalSince(start) / tool.windowDuration, 1.0)
+    var lastSuccessfulFetch: Date? {
+        quotaSnapshot?.fetchedAt
     }
 
-    /// Seconds until window expires. nil when window expired or never started.
+    var primaryMetric: QuotaMetric? {
+        quotaSnapshot?.fiveHour
+    }
+
+    var weeklyMetric: QuotaMetric? {
+        quotaSnapshot?.weekly
+    }
+
+    var resetAt: Date? {
+        primaryMetric?.resetAt
+    }
+
     var timeUntilReset: TimeInterval? {
-        guard let exp = windowExpires else { return nil }
-        let r = exp.timeIntervalSinceNow
-        return r > 0 ? r : nil
+        guard let resetAt else { return nil }
+        let remaining = resetAt.timeIntervalSinceNow
+        return remaining > 0 ? remaining : nil
     }
 
-    /// true when there's an active (not-yet-expired) window.
-    var isWindowActive: Bool { timeUntilReset != nil }
+    var windowProgress: Double {
+        primaryMetric?.clampedUsed ?? 0
+    }
 
-    /// Window expired and needs re-triggering (or was never started).
-    var isWindowExpired: Bool { !isWindowActive }
+    var canAutoWarmFromSnapshot: Bool {
+        guard freshness == .fresh, let metric = primaryMetric else { return false }
+        let remaining = metric.remainingPercent ?? (1 - metric.clampedUsed)
+        if remaining >= 0.95 { return true }
+        if let resetAt = metric.resetAt, resetAt <= Date().addingTimeInterval(60) { return true }
+        return false
+    }
 
-    // MARK: Persist
-
-    func persistWarmup(_ date: Date) {
-        lastWarmup = date
-        UserDefaults.standard.set(ISO8601DateFormatter().string(from: date), forKey: "lastWarmup.\(tool.rawValue)")
+    func rememberAutoWindow(_ key: String) {
+        lastAutoWindowKey = key
+        UserDefaults.standard.set(key, forKey: "lastAutoWindowKey.\(tool.rawValue)")
     }
 }
 
 // MARK: - AppState
 
 @MainActor
-class AppState: ObservableObject {
-    @Published var selectedTool:   ToolID = .claude
-    @Published var showOnboarding: Bool   = false
-    @Published var isRefreshing:   Bool   = false
-    @Published var updateInfo:     ReleaseInfo?
+final class AppState: ObservableObject {
+    @Published var showOnboarding = false
+    @Published var isRefreshing = false
+    @Published var updateInfo: ReleaseInfo?
     @Published private(set) var toolStates: [ToolID: ToolState]
+    @Published var history: [HistoryEvent] = []
+    @Published var globalPassive: Bool {
+        didSet {
+            UserDefaults.standard.set(globalPassive, forKey: "globalPassive")
+            if globalPassive {
+                scheduler.invalidateAll()
+                ToolID.allCases.forEach { notifications.cancelAll(for: $0) }
+            } else {
+                refreshAllActivity(allowAutomaticWarmup: true)
+            }
+        }
+    }
 
-    private let scanner       = ActivityScanner()
-    private let runner        = WarmupRunner()
-    private let scheduler     = Scheduler()
+    private let scanner = ActivityScanner()
+    private let runner = WarmupRunner()
+    private let scheduler = Scheduler()
     private let notifications = NotificationManager.shared
     private let updateChecker = UpdateChecker()
+    private let quotaProvider: QuotaProviding = QuotaProvider()
+    private var refreshTimer: Timer?
 
     init() {
         var states: [ToolID: ToolState] = [:]
         for tool in ToolID.allCases { states[tool] = ToolState(tool: tool) }
         toolStates = states
+        globalPassive = UserDefaults.standard.object(forKey: "globalPassive") as? Bool ?? false
 
         scheduler.onFire = { [weak self] tool in
             Task { @MainActor [weak self] in
-                guard let self, self.state(for: tool).autoWarm else { return }
-                await self.triggerWarmup(tool: tool)
+                await self?.attemptAutomaticWarmup(tool: tool, reason: "scheduled refresh")
             }
         }
 
-        refreshAllActivity()
+        refreshAllActivity(allowAutomaticWarmup: false)
+        startQuotaRefreshTimer()
         startUIRefreshTimer()
         Task { await checkOnboarding() }
         Task { await checkForAppUpdate() }
     }
 
-    // MARK: - Public API
+    func state(for tool: ToolID) -> ToolState { toolStates[tool]! }
 
-    /// User pressed Activate (or force-trigger).
-    func activate(_ tool: ToolID) {
-        Task { await triggerWarmup(tool: tool) }
+    func setActive(_ active: Bool, for tool: ToolID) {
+        let state = state(for: tool)
+        state.isActive = active
+        if active {
+            addHistory(tool: tool, kind: .quotaFetch, title: "Activated", detail: "Automatic warmup enabled after fresh quota checks")
+            Task { await refreshQuota(for: tool, allowAutomaticWarmup: true) }
+        } else {
+            scheduler.invalidate(tool: tool)
+            notifications.cancelAll(for: tool)
+            addHistory(tool: tool, kind: .quotaFetch, title: "Passive", detail: "Automatic warmup disabled")
+        }
     }
 
-    /// Refresh scanner data and re-arm scheduler.
-    func refreshAllActivity() {
+    func activate(_ tool: ToolID) {
+        Task { await triggerWarmup(tool: tool, mode: "manual") }
+    }
+
+    func refreshAllActivity(allowAutomaticWarmup: Bool = false) {
         isRefreshing = true
         for tool in ToolID.allCases {
-            let st = toolStates[tool]!
-            st.lastActivity  = scanner.lastActivity(for: tool)
-
-            // windowStart from scanner (actual first msg in current window)
-            let scannedStart = scanner.windowStartTime(for: tool)
-
-            // If we have a persisted warmup newer than scanner result, use it
-            if let warmup = st.lastWarmup {
-                let warmupIsInWindow = Date().timeIntervalSince(warmup) < tool.windowDuration
-                if warmupIsInWindow {
-                    // Our warmup is more recent → use the later of scanner vs warmup as window start
-                    if let scanned = scannedStart {
-                        // The window that includes our warmup starts at the earliest of the two
-                        st.windowStart = min(scanned, warmup)
-                    } else {
-                        st.windowStart = warmup
-                    }
-                } else {
-                    st.windowStart = scannedStart
-                }
-            } else {
-                st.windowStart = scannedStart
-            }
-
-            st.weeklyActivity = scanner.weeklyActivity(for: tool)
-            reschedule(tool: tool)
+            let state = state(for: tool)
+            state.lastLogActivity = scanner.lastActivity(for: tool)
+            state.weeklyActivity = scanner.weeklyActivity(for: tool)
+            Task { await refreshQuota(for: tool, allowAutomaticWarmup: allowAutomaticWarmup) }
         }
         Task { @MainActor in
             try? await Task.sleep(nanoseconds: 700_000_000)
@@ -146,54 +164,185 @@ class AppState: ObservableObject {
         }
     }
 
-    func state(for tool: ToolID) -> ToolState { toolStates[tool]! }
-
-    // MARK: - Private
-
-    private func triggerWarmup(tool: ToolID) async {
-        let st = state(for: tool)
-        st.isWarming    = true
-        st.errorMessage = nil
-        notifications.cancelAll(for: tool)
+    func refreshQuota(for tool: ToolID, allowAutomaticWarmup: Bool = false) async {
+        let state = state(for: tool)
+        state.isFetchingQuota = true
+        state.errorMessage = nil
 
         do {
-            let result = try await runner.warmup(tool)
+            let snapshot = try await quotaProvider.fetchQuota(for: tool)
+            state.quotaSnapshot = snapshot
+            state.sourceHealth = snapshot.freshness() == .fresh ? .healthy : .stale
+            state.authStatus = .available
+            state.healthMessage = snapshot.message ?? snapshot.primarySource
+            state.nextRefreshAt = Date().addingTimeInterval(refreshInterval)
+            addHistory(
+                tool: tool,
+                kind: .quotaFetch,
+                title: "Quota fetched",
+                detail: snapshot.corroboratingSource.map { "\(snapshot.primarySource), checked \($0)" } ?? snapshot.primarySource
+            )
+            rescheduleRefresh(for: tool)
 
-            let entry = WarmupLog(timestamp: result.date, command: tool.warmupCommand, output: result.output)
-            st.warmupLogs.insert(entry, at: 0)
-            if st.warmupLogs.count > 20 { st.warmupLogs.removeLast() }
-
-            st.persistWarmup(result.date)
-            st.lastActivity = result.date
-            // Our trigger IS the window start of the new window
-            st.windowStart  = result.date
-            st.weeklyActivity = scanner.weeklyActivity(for: tool)
-
-            // Schedule next auto-trigger at new window expiry
-            let expiresAt = result.date.addingTimeInterval(tool.windowDuration)
-            scheduler.schedule(tool: tool, at: expiresAt)
-            notifications.scheduleWindowWarning(for: tool, expiresAt: expiresAt)
-            notifications.notifyActivated(tool: tool)
+            if allowAutomaticWarmup {
+                await attemptAutomaticWarmup(tool: tool, reason: "fresh quota")
+            }
         } catch {
-            st.errorMessage = error.localizedDescription
+            applyQuotaError(error, to: state)
         }
-        st.isWarming = false
+
+        state.isFetchingQuota = false
     }
 
-    private func reschedule(tool: ToolID) {
-        let st = state(for: tool)
-        guard st.autoWarm else { scheduler.invalidate(tool: tool); return }
-
-        if let expires = st.windowExpires, expires > Date() {
-            // Window still active — schedule trigger at its expiry
-            scheduler.schedule(tool: tool, at: expires)
-            notifications.scheduleWindowWarning(for: tool, expiresAt: expires)
-        }
-        // If window already expired: don't auto-trigger on startup; wait for user or next event
+    func applyRefreshInterval() {
+        startQuotaRefreshTimer()
+        startUIRefreshTimer()
+        for tool in ToolID.allCases { state(for: tool).nextRefreshAt = Date().addingTimeInterval(refreshInterval) }
     }
 
     func checkForAppUpdate() async {
         updateInfo = await updateChecker.checkForUpdate()
+        addHistory(tool: nil, kind: .updateCheck, title: "Update checked", detail: updateInfo == nil ? "No update found" : "Update available")
+    }
+
+    private func attemptAutomaticWarmup(tool: ToolID, reason: String) async {
+        let state = state(for: tool)
+        guard state.isActive, !globalPassive else { return }
+        guard !state.isWarming else { return }
+        if UserDefaults.standard.object(forKey: "rateLimitGuard") as? Bool ?? true,
+           let backoffUntil = state.backoffUntil,
+           backoffUntil > Date() {
+            return
+        }
+
+        await refreshQuotaForAutomaticDecision(tool: tool)
+        guard state.canAutoWarmFromSnapshot, let snapshot = state.quotaSnapshot else {
+            return
+        }
+        guard state.lastAutoWindowKey != snapshot.rawWindowKey else {
+            return
+        }
+
+        addHistory(tool: tool, kind: .resetDetected, title: "Fresh reset detected", detail: reason)
+        await triggerWarmup(tool: tool, mode: "auto")
+        state.rememberAutoWindow(snapshot.rawWindowKey)
+    }
+
+    private func refreshQuotaForAutomaticDecision(tool: ToolID) async {
+        let state = state(for: tool)
+        if state.freshness == .fresh { return }
+        await refreshQuota(for: tool, allowAutomaticWarmup: false)
+    }
+
+    private func triggerWarmup(tool: ToolID, mode: String) async {
+        let state = state(for: tool)
+        guard !state.isWarming else { return }
+
+        state.isWarming = true
+        state.errorMessage = nil
+        notifications.cancelAll(for: tool)
+
+        do {
+            let result = try await runner.warmup(tool)
+            let entry = WarmupLog(timestamp: result.date, mode: mode, command: result.command, output: result.output)
+            state.warmupLogs.insert(entry, at: 0)
+            if state.warmupLogs.count > 20 { state.warmupLogs.removeLast() }
+            state.backoffUntil = nil
+            addHistory(
+                tool: tool,
+                kind: mode == "auto" ? .autoWarmup : .manualWarmup,
+                title: mode == "auto" ? "Auto warmup sent" : "Manual warmup sent",
+                detail: "Command completed"
+            )
+            notifications.notifyActivated(tool: tool)
+            await refreshQuota(for: tool, allowAutomaticWarmup: false)
+        } catch {
+            state.errorMessage = error.localizedDescription
+            state.backoffUntil = Date().addingTimeInterval(nextBackoff(for: state))
+            addHistory(tool: tool, kind: .pollingError, title: "Warmup failed", detail: error.localizedDescription)
+        }
+
+        state.isWarming = false
+    }
+
+    private func applyQuotaError(_ error: Error, to state: ToolState) {
+        let message = error.localizedDescription
+        state.errorMessage = message
+        state.healthMessage = message
+
+        if let providerError = error as? QuotaProviderError {
+            switch providerError {
+            case .authFailure:
+                state.sourceHealth = .authFailure
+                state.authStatus = .failed
+                addHistory(tool: state.tool, kind: .authFailure, title: "Authorization failed", detail: message)
+            case .missingCredentials:
+                state.sourceHealth = .authFailure
+                state.authStatus = .missing
+                addHistory(tool: state.tool, kind: .authFailure, title: "Credentials missing", detail: message)
+            case .rateLimited:
+                state.sourceHealth = .rateLimited
+                state.authStatus = .available
+                addHistory(tool: state.tool, kind: .rateLimit, title: "Rate limited", detail: message)
+            case .unavailable, .malformed:
+                state.sourceHealth = state.quotaSnapshot == nil ? .unavailable : .stale
+                addHistory(tool: state.tool, kind: .pollingError, title: "Quota fetch failed", detail: message)
+            }
+        } else {
+            state.sourceHealth = state.quotaSnapshot == nil ? .unavailable : .stale
+            addHistory(tool: state.tool, kind: .pollingError, title: "Quota fetch failed", detail: message)
+        }
+    }
+
+    private func rescheduleRefresh(for tool: ToolID) {
+        let state = state(for: tool)
+        guard state.isActive, !globalPassive else {
+            scheduler.invalidate(tool: tool)
+            return
+        }
+        let nextDate = Date().addingTimeInterval(refreshInterval)
+        scheduler.schedule(tool: tool, at: nextDate)
+        state.nextRefreshAt = nextDate
+        if let resetAt = state.resetAt, resetAt > Date() {
+            notifications.scheduleWindowWarning(for: tool, expiresAt: resetAt)
+        }
+    }
+
+    private func startQuotaRefreshTimer() {
+        quotaTimer?.invalidate()
+        quotaTimer = Timer.scheduledTimer(withTimeInterval: refreshInterval, repeats: true) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.refreshAllActivity(allowAutomaticWarmup: true)
+            }
+        }
+    }
+
+    private func startUIRefreshTimer() {
+        refreshTimer?.invalidate()
+        refreshTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.toolStates.values.forEach { $0.objectWillChange.send() }
+            }
+        }
+    }
+
+    private var quotaTimer: Timer?
+
+    private var refreshInterval: TimeInterval {
+        let stored = UserDefaults.standard.integer(forKey: "refreshInterval")
+        return TimeInterval(stored.nonZero ?? 300)
+    }
+
+    private func addHistory(tool: ToolID?, kind: HistoryKind, title: String, detail: String) {
+        history.insert(HistoryEvent(timestamp: Date(), tool: tool, kind: kind, title: title, detail: detail), at: 0)
+        if history.count > 80 { history.removeLast(history.count - 80) }
+    }
+
+    private func nextBackoff(for state: ToolState) -> TimeInterval {
+        if let backoffUntil = state.backoffUntil, backoffUntil > Date() {
+            return min(backoffUntil.timeIntervalSinceNow * 2, 30 * 60)
+        }
+        return 5 * 60
     }
 
     private func checkOnboarding() async {
@@ -204,21 +353,5 @@ class AppState: ObservableObject {
         if anyMissing && !UserDefaults.standard.bool(forKey: "onboardingDismissed") {
             showOnboarding = true
         }
-    }
-
-    private func startUIRefreshTimer() {
-        let interval = TimeInterval(UserDefaults.standard.integer(forKey: "refreshInterval").nonZero ?? 30)
-        refreshTimer?.invalidate()
-        refreshTimer = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { [weak self] _ in
-            Task { @MainActor [weak self] in
-                self?.toolStates.values.forEach { $0.objectWillChange.send() }
-            }
-        }
-    }
-
-    private var refreshTimer: Timer?
-
-    func applyRefreshInterval() {
-        startUIRefreshTimer()
     }
 }

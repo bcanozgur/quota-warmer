@@ -5,11 +5,21 @@ struct MenuBarLabel: View {
     @State private var spinDegrees: Double = 0
 
     private var isActive: Bool {
-        appState.isRefreshing || appState.toolStates.values.contains { $0.isWarming }
+        appState.isRefreshing || appState.toolStates.values.contains { $0.isWarming || $0.isFetchingQuota }
+    }
+
+    private var isHealthy: Bool {
+        !appState.globalPassive && appState.toolStates.values.allSatisfy { state in
+            if !state.isActive { return true }
+            return state.sourceHealth == .healthy && state.freshness == .fresh
+        }
     }
 
     var body: some View {
         HStack(spacing: 5) {
+            Circle()
+                .fill(isHealthy ? DS.C.green : DS.C.red)
+                .frame(width: 7, height: 7)
             if isActive {
                 Image(systemName: "arrow.2.circlepath")
                     .font(.system(size: 11, weight: .medium))
@@ -39,7 +49,7 @@ struct MenuBarLabel: View {
                 .scaledToFit()
                 .frame(width: 14, height: 14)
                 .clipped()
-                .opacity(st.isWindowActive || st.isWarming ? 1.0 : 0.35)
+                .opacity(st.isActive || st.isWarming ? 1.0 : 0.35)
 
             if st.isWarming {
                 ProgressView()
@@ -50,6 +60,10 @@ struct MenuBarLabel: View {
                 Text(compactTime(r))
                     .font(DS.mono(10, weight: .semibold))
                     .foregroundStyle(timeColor(r, accent: accent))
+            } else if st.freshness == .fresh {
+                Text("\(Int(st.windowProgress * 100))%")
+                    .font(DS.mono(10, weight: .semibold))
+                    .foregroundStyle(accent)
             } else {
                 Text("—")
                     .font(DS.mono(10))

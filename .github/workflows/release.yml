@@ -1,4 +1,4 @@
-name: Build & Release DMG
+name: Release
 
 on:
   push:
@@ -7,139 +7,272 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Version string (e.g. 1.0.0)"
+        description: "Version string, for example 1.0.0"
         required: true
         default: "1.0.0"
 
+permissions:
+  contents: write
+
 env:
-  SCHEME: QuotaWarmer
   APP_NAME: QuotaWarmer
+  SCHEME: QuotaWarmer
+  BUNDLE_ID: com.quotawarmer.app
+  MINIMUM_MACOS: "14.0"
 
 jobs:
-  build-dmg:
+  release:
+    name: Signed, Notarized DMG
     runs-on: macos-15
-    timeout-minutes: 30
-    permissions:
-      contents: write
+    timeout-minutes: 45
 
     steps:
-      # ── Checkout ──────────────────────────────────────────────────────────
-      - name: Checkout
+      - name: Checkout tag
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref_name }}
 
-      # ── Xcode version ─────────────────────────────────────────────────────
       - name: Select Xcode
         run: sudo xcode-select -s /Applications/Xcode_16.3.app
 
-      # ── Install xcodegen ──────────────────────────────────────────────────
-      - name: Install xcodegen
+      - name: Install XcodeGen
         run: brew install xcodegen
 
-      # ── Generate Xcode project ────────────────────────────────────────────
-      - name: Generate project
-        run: xcodegen generate
-
-      # ── Determine version ─────────────────────────────────────────────────
-      - name: Determine version
+      - name: Determine release version
         id: version
+        shell: bash
         run: |
-          if [[ "${{ github.event_name }}" == "push" ]]; then
-            VERSION="${GITHUB_REF_NAME#v}"
+          set -euo pipefail
+          if [[ "${GITHUB_EVENT_NAME}" == "push" ]]; then
+            RELEASE_TAG="${GITHUB_REF_NAME}"
+            VERSION="${RELEASE_TAG#v}"
           else
             VERSION="${{ github.event.inputs.version }}"
+            RELEASE_TAG="v${VERSION}"
           fi
-          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
-          echo "tag=v${VERSION}"    >> "$GITHUB_OUTPUT"
 
-      # ── Build (Release, ad-hoc signed) ────────────────────────────────────
-      - name: Build
+          if [[ ! "${RELEASE_TAG}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "Invalid release tag: ${RELEASE_TAG}"
+            echo "Expected vMAJOR.MINOR.PATCH, optionally with a prerelease suffix."
+            exit 1
+          fi
+
+          echo "version=${VERSION}" >> "${GITHUB_OUTPUT}"
+          echo "tag=${RELEASE_TAG}" >> "${GITHUB_OUTPUT}"
+
+      - name: Validate project version
+        shell: bash
         run: |
+          set -euo pipefail
+          PROJECT_VERSION=$(awk -F'"' '/CFBundleShortVersionString:/ { print $2; exit }' project.yml)
+          if [[ "${PROJECT_VERSION}" != "${{ steps.version.outputs.version }}" ]]; then
+            echo "project.yml CFBundleShortVersionString (${PROJECT_VERSION}) does not match tag version (${{ steps.version.outputs.version }})."
+            exit 1
+          fi
+
+      - name: Validate signing secrets
+        shell: bash
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+        run: |
+          set -euo pipefail
+          for name in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID APPLE_SIGNING_IDENTITY KEYCHAIN_PASSWORD; do
+            if [[ -z "${!name}" ]]; then
+              echo "Missing required secret: ${name}"
+              exit 1
+            fi
+          done
+
+      - name: Import Apple Developer certificate
+        shell: bash
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+        run: |
+          set -euo pipefail
+          echo "${APPLE_CERTIFICATE}" | base64 --decode > certificate.p12
+          security create-keychain -p "${KEYCHAIN_PASSWORD}" build.keychain
+          security default-keychain -s build.keychain
+          security unlock-keychain -p "${KEYCHAIN_PASSWORD}" build.keychain
+          security set-keychain-settings -lut 21600 build.keychain
+          security import certificate.p12 -k build.keychain -P "${APPLE_CERTIFICATE_PASSWORD}" -T /usr/bin/codesign -T /usr/bin/security
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "${KEYCHAIN_PASSWORD}" build.keychain
+          rm certificate.p12
+
+      - name: Generate Xcode project
+        run: xcodegen generate
+
+      - name: Build release app
+        shell: bash
+        env:
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          set -euo pipefail
           xcodebuild \
-            -project "${{ env.APP_NAME }}.xcodeproj" \
-            -scheme   "${{ env.SCHEME }}" \
+            -project "${APP_NAME}.xcodeproj" \
+            -scheme "${SCHEME}" \
             -configuration Release \
             -derivedDataPath DerivedData \
+            -destination "generic/platform=macOS" \
             MARKETING_VERSION="${{ steps.version.outputs.version }}" \
-            CODE_SIGNING_STYLE=Manual \
-            CODE_SIGN_IDENTITY="-" \
-            CODE_SIGNING_ALLOWED=YES \
+            CURRENT_PROJECT_VERSION="${GITHUB_RUN_NUMBER}" \
+            CODE_SIGN_STYLE=Manual \
+            CODE_SIGN_IDENTITY="${APPLE_SIGNING_IDENTITY}" \
+            DEVELOPMENT_TEAM="${APPLE_TEAM_ID}" \
+            OTHER_CODE_SIGN_FLAGS="--timestamp" \
             build
 
-      # ── Locate .app ───────────────────────────────────────────────────────
-      - name: Locate .app
-        id: locate
+      - name: Locate and verify app
+        id: app
+        shell: bash
+        env:
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
         run: |
-          APP_PATH=$(find DerivedData -name "${{ env.APP_NAME }}.app" -maxdepth 8 | head -1)
-          echo "app_path=${APP_PATH}" >> "$GITHUB_OUTPUT"
-          echo "Found: ${APP_PATH}"
+          set -euo pipefail
+          APP_PATH=$(find DerivedData -name "${APP_NAME}.app" -maxdepth 8 | head -1)
+          if [[ -z "${APP_PATH}" || ! -d "${APP_PATH}" ]]; then
+            echo "Could not locate built app."
+            exit 1
+          fi
+          codesign --verify --deep --strict --verbose=2 "${APP_PATH}"
+          codesign --display --verbose=4 "${APP_PATH}"
+          echo "app_path=${APP_PATH}" >> "${GITHUB_OUTPUT}"
 
-      # ── Ad-hoc code sign ──────────────────────────────────────────────────
-      - name: Ad-hoc sign
-        run: |
-          codesign --force --deep --sign - \
-            "${{ steps.locate.outputs.app_path }}"
-
-      # ── Create DMG ────────────────────────────────────────────────────────
       - name: Create DMG
+        id: dmg
+        shell: bash
         run: |
-          DMG_NAME="${{ env.APP_NAME }}-${{ steps.version.outputs.version }}.dmg"
+          set -euo pipefail
+          VERSION="${{ steps.version.outputs.version }}"
+          DMG_NAME="${APP_NAME}-${VERSION}-universal.dmg"
           STAGING="staging_dmg"
+          rm -rf "${STAGING}" "${DMG_NAME}"
           mkdir -p "${STAGING}"
-          cp -R "${{ steps.locate.outputs.app_path }}" "${STAGING}/"
-          # Add symlink to Applications for drag-and-drop install
+          cp -R "${{ steps.app.outputs.app_path }}" "${STAGING}/"
           ln -s /Applications "${STAGING}/Applications"
           hdiutil create \
-            -volname "${{ env.APP_NAME }} ${{ steps.version.outputs.version }}" \
+            -volname "${APP_NAME} ${VERSION}" \
             -srcfolder "${STAGING}" \
             -ov \
             -format UDZO \
             "${DMG_NAME}"
+          echo "name=${DMG_NAME}" >> "${GITHUB_OUTPUT}"
 
-          echo "dmg_name=${DMG_NAME}" >> "$GITHUB_ENV"
-
-      # ── SHA-256 checksum ──────────────────────────────────────────────────
-      - name: Checksum
+      - name: Sign DMG
+        shell: bash
+        env:
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
         run: |
-          shasum -a 256 "${{ env.dmg_name }}" | tee "${{ env.dmg_name }}.sha256"
+          set -euo pipefail
+          codesign --force --timestamp --sign "${APPLE_SIGNING_IDENTITY}" "${{ steps.dmg.outputs.name }}"
+          codesign --verify --verbose=2 "${{ steps.dmg.outputs.name }}"
 
-      # ── Upload artifacts (for manual runs) ───────────────────────────────
-      - name: Upload artifact
+      - name: Notarize DMG
+        shell: bash
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          set -euo pipefail
+          xcrun notarytool submit "${{ steps.dmg.outputs.name }}" \
+            --apple-id "${APPLE_ID}" \
+            --password "${APPLE_PASSWORD}" \
+            --team-id "${APPLE_TEAM_ID}" \
+            --wait
+          xcrun stapler staple "${{ steps.dmg.outputs.name }}"
+          xcrun stapler validate "${{ steps.dmg.outputs.name }}"
+
+      - name: Checksum and update manifest
+        id: manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+          DMG="${{ steps.dmg.outputs.name }}"
+          SHA256=$(shasum -a 256 "${DMG}" | awk '{print $1}')
+          shasum -a 256 "${DMG}" > "${DMG}.sha256"
+          PUB_DATE=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+          DOWNLOAD_URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/${{ steps.version.outputs.tag }}/${DMG}"
+          cat > latest.json <<JSON
+          {
+            "version": "${{ steps.version.outputs.version }}",
+            "pub_date": "${PUB_DATE}",
+            "minimum_system_version": "${MINIMUM_MACOS}",
+            "assets": {
+              "dmg": {
+                "url": "${DOWNLOAD_URL}",
+                "sha256": "${SHA256}"
+              }
+            }
+          }
+          JSON
+          echo "sha256=${SHA256}" >> "${GITHUB_OUTPUT}"
+
+      - name: Write release notes
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > RELEASE_NOTES.md <<EOF
+          ## QuotaWarmer ${{ steps.version.outputs.version }}
+
+          Signed and notarized macOS menu bar app for starting Claude Code and Codex quota windows with minimal warmup messages.
+
+          ### Install
+
+          1. Download `${{ steps.dmg.outputs.name }}` below.
+          2. Open the DMG.
+          3. Drag **QuotaWarmer.app** to Applications.
+          4. Open QuotaWarmer from Applications.
+
+          ### Verification
+
+          SHA-256:
+
+          \`\`\`
+          $(cat "${{ steps.dmg.outputs.name }}.sha256")
+          \`\`\`
+          EOF
+
+      - name: Upload workflow artifact
         uses: actions/upload-artifact@v4
         with:
           name: ${{ env.APP_NAME }}-${{ steps.version.outputs.version }}
           path: |
-            ${{ env.dmg_name }}
-            ${{ env.dmg_name }}.sha256
+            ${{ steps.dmg.outputs.name }}
+            ${{ steps.dmg.outputs.name }}.sha256
+            latest.json
           retention-days: 30
 
-      # ── Create GitHub Release ─────────────────────────────────────────────
-      - name: Create Release
+      - name: Create GitHub release
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.version.outputs.tag }}
-          name: "QuotaWarmer ${{ steps.version.outputs.version }}"
-          body: |
-            ## QuotaWarmer ${{ steps.version.outputs.version }}
-
-            macOS menu bar app that keeps your Claude Code and Codex CLI quota windows alive.
-
-            ### Install
-
-            1. Download `${{ env.dmg_name }}` below
-            2. Open the DMG and drag **QuotaWarmer.app** to Applications
-            3. Right-click → Open (first launch — bypasses Gatekeeper for ad-hoc signed builds)
-
-            > **Note:** This is an ad-hoc signed build. macOS Gatekeeper will warn on first launch. Right-click the app and choose **Open** to proceed.
-
-            ### SHA-256
-            ```
-            $(cat ${{ env.dmg_name }}.sha256)
-            ```
+          name: QuotaWarmer ${{ steps.version.outputs.version }}
+          body_path: RELEASE_NOTES.md
           files: |
-            ${{ env.dmg_name }}
-            ${{ env.dmg_name }}.sha256
+            ${{ steps.dmg.outputs.name }}
+            ${{ steps.dmg.outputs.name }}.sha256
+            latest.json
           draft: false
           prerelease: ${{ contains(steps.version.outputs.version, '-') }}
+
+      - name: Verify GitHub release assets
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: bash
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          ASSETS=$(gh release view "${{ steps.version.outputs.tag }}" --repo "${GITHUB_REPOSITORY}" --json assets --jq '.assets[].name' | tr -d '\r')
+          printf '%s\n' "${ASSETS}" | grep -Fxq "${{ steps.dmg.outputs.name }}" || { echo "Missing DMG asset"; exit 1; }
+          printf '%s\n' "${ASSETS}" | grep -Fxq "${{ steps.dmg.outputs.name }}.sha256" || { echo "Missing checksum asset"; exit 1; }
+          printf '%s\n' "${ASSETS}" | grep -Fxq "latest.json" || { echo "Missing latest.json asset"; exit 1; }
