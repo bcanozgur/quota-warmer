@@ -1,50 +1,71 @@
 # QuotaWarmer
 
-> Keep your Claude Code and Codex CLI quota windows alive — automatically.
+QuotaWarmer is a compact macOS menu bar app for keeping Claude Code and Codex CLI quota windows ready when you need them.
 
----
+It watches live quota snapshots, shows the active provider directly in the menu bar, and can send a minimal warm-up command when a fresh 5-hour window becomes available.
 
-Claude Code and Codex CLI use a **5-hour rolling quota window** that starts when you send your first message. If you open the tool late, you burn a big chunk of that window doing nothing.
+![QuotaWarmer menu bar popover](docs/images/quota-warmer-menu.png)
 
-QuotaWarmer sits in your menu bar, checks fresh server quota snapshots, and sends a minimal `hi` message with the cheapest configured model right when each window resets — so your next 5 hours start the moment you need them, not when you remember to open a terminal.
+## Highlights
 
-## Features
+- **Menu bar status at a glance**: provider glyph, active-state dot, 5-hour countdown, and remaining quota percentage.
+- **Claude Code and Codex CLI support**: each provider can be enabled, refreshed, and warmed independently.
+- **Live quota tracking**: reset decisions use fresh server quota snapshots; local logs are used only as display context.
+- **Automatic warm-up**: sends a minimal `hi` command after a safe reset signal, using low-cost settings.
+- **Manual controls**: refresh quota or warm a provider directly from the popover.
+- **Lightweight history**: recent quota checks, warm-ups, update checks, and failures are visible without leaving the menu.
+- **Notifications and update checks**: optional quota-window reminders plus in-app release availability.
+- **Launch at login**: runs quietly as a menu bar utility.
 
-- **Automatic warm-up** — sends `claude --model haiku --effort low --no-session-persistence -p 'hi'` or `codex exec --model 5.4-mini -c model_reasoning_effort="low" --skip-git-repo-check --ephemeral --ignore-rules 'hi'` after a fresh server reset signal. If `5.4-mini` is not available for the signed-in ChatGPT account, QuotaWarmer retries Codex once with the configured default model and low reasoning effort.
-- **Accurate quota tracking** — uses live quota sources for reset decisions, with local logs kept as display-only context
-- **Live countdown** — per-tool timers visible directly in the menu bar
-- **Manual trigger** — activate any window on demand with one click
-- **Auto-Warm toggle** — enable or disable automatic triggering per tool
-- **Prompt log** — terminal-style history of every warmup command and its output
-- **Notifications** — optional alerts 30 min before a window expires and on successful activation
-- **Update checker** — notified in-app when a new version is available on GitHub
-- **Launch at Login** — starts silently on macOS login, stays out of your way
-- **No dependencies** — pure Swift + SwiftUI, no third-party packages
+## How It Works
 
-## How it works
+Claude Code and Codex CLI use rolling quota windows. If a window starts only when you remember to open the CLI, part of the available time can be wasted.
 
+QuotaWarmer keeps the app running in the menu bar and periodically checks quota state for active providers. When a fresh reset is detected, it runs a minimal warm-up command from an isolated temporary working directory:
+
+```bash
+claude --model haiku --effort low --no-session-persistence -p 'hi'
+codex exec --model 5.4-mini -c model_reasoning_effort="low" --skip-git-repo-check --ephemeral --ignore-rules 'hi'
 ```
-~/.claude/projects/*/*.jsonl      ← Claude Code session logs
-~/.codex/sessions/YYYY/MM/DD/*.jsonl  ← Codex CLI session logs
+
+If `5.4-mini` is unavailable for the signed-in Codex account, QuotaWarmer retries once with the configured default Codex model and low reasoning effort.
+
+Local activity is scanned from:
+
+```text
+~/.claude/projects/*/*.jsonl
+~/.codex/sessions/YYYY/MM/DD/*.jsonl
 ```
 
-QuotaWarmer reads server quota snapshots to decide whether an automatic warmup is safe. Stale quota and local logs can be shown in the UI, but they do not trigger automatic messages. When a fresh reset signal arrives, it prepares an empty app-owned directory under `/tmp`, spawns a login shell (`/bin/zsh -lc`) from that directory so your `PATH` is fully loaded, then runs the warmup command without project files, rules, or persisted Codex/Claude session context.
+These logs help the UI show context, but stale local activity does not trigger automatic warm-ups.
+
+## Requirements
+
+| Dependency | Requirement |
+| --- | --- |
+| macOS | 14.0 Sonoma or later |
+| Xcode | 16+ for local builds |
+| Claude Code | Installed and available on your shell `PATH` |
+| Codex CLI | Installed and available on your shell `PATH` |
+
+QuotaWarmer shows setup guidance on first launch if a required CLI is missing.
 
 ## Install
 
-1. Download the latest `QuotaWarmer-<version>-universal.dmg` from [Releases](https://github.com/bcanozgur/quota-warmer/releases)
-2. Open the DMG and drag **QuotaWarmer.app** to Applications
-3. Open **QuotaWarmer** from Applications
+1. Download the latest `QuotaWarmer-<version>-universal.dmg` from [Releases](https://github.com/bcanozgur/quota-warmer/releases).
+2. Open the DMG.
+3. Drag **QuotaWarmer.app** to **Applications**.
+4. Launch **QuotaWarmer** from Applications.
 
-GitHub release builds are signed and notarized. Local development builds may still require this once in Terminal:
+Release builds are signed and notarized. For local unsigned builds, you may need to clear quarantine once:
 
 ```bash
 xattr -cr /Applications/QuotaWarmer.app
 ```
 
-## Build from source
+## Build From Source
 
-**Requirements:** macOS 14+, Xcode 16+, [xcodegen](https://github.com/yonaskolb/XcodeGen)
+Install XcodeGen, generate the project, and open it in Xcode:
 
 ```bash
 brew install xcodegen
@@ -54,14 +75,38 @@ xcodegen generate
 open QuotaWarmer.xcodeproj
 ```
 
-## Release
+CLI build:
+
+```bash
+xcodebuild -project QuotaWarmer.xcodeproj -scheme QuotaWarmer build
+```
+
+Build a local Release app, replace any existing `/Applications/QuotaWarmer.app`, clear quarantine, and launch it:
+
+```bash
+scripts/local-package.command
+```
+
+## Project Structure
+
+```text
+Sources/QuotaWarmer/
+  Models/       Shared app and quota types
+  Services/     Quota checks, scheduling, notifications, updates, warm-up commands
+  Views/        SwiftUI menu bar label, popover, provider, and settings screens
+  Assets.xcassets/
+project.yml     XcodeGen project definition
+scripts/        Local install and packaging helpers
+```
+
+## Release Process
 
 Releases are built by GitHub Actions from `vMAJOR.MINOR.PATCH` tags. The release workflow validates the tag against `project.yml`, builds the macOS app, signs and notarizes the DMG, uploads `latest.json`, and verifies release assets.
 
 Required repository secrets:
 
 | Secret | Purpose |
-|---|---|
+| --- | --- |
 | `APPLE_CERTIFICATE` | Base64-encoded Developer ID Application `.p12` |
 | `APPLE_CERTIFICATE_PASSWORD` | Password for the `.p12` |
 | `APPLE_SIGNING_IDENTITY` | Developer ID Application signing identity |
@@ -69,16 +114,6 @@ Required repository secrets:
 | `APPLE_PASSWORD` | App-specific password for notarization |
 | `APPLE_TEAM_ID` | Apple Developer Team ID |
 | `KEYCHAIN_PASSWORD` | Temporary CI keychain password |
-
-## Requirements
-
-| | |
-|---|---|
-| macOS | 14.0 Sonoma or later |
-| Claude Code | [Install](https://docs.anthropic.com/en/docs/claude-code) |
-| Codex CLI | [Install](https://github.com/openai/codex) |
-
-Claude Code and Codex must be accessible via your shell `PATH`. QuotaWarmer will show a setup prompt on first launch if either CLI is missing.
 
 ## License
 
