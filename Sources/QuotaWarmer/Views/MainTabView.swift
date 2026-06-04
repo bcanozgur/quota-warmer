@@ -75,6 +75,7 @@ struct MainTabView: View {
                         .foregroundStyle(state.sourceHealth == .authFailure ? DS.C.red : DS.C.textMuted)
                         .lineLimit(1)
                     Spacer(minLength: 0)
+                    menuBarPin(tool, state)
                 }
 
                 quotaLine("5h", metric: state.primaryMetric, refreshing: state.isFetchingQuota)
@@ -105,6 +106,19 @@ struct MainTabView: View {
         }
         .padding(.horizontal, 13)
         .padding(.vertical, 12)
+    }
+
+    /// Minimal pin toggle: shows/hides this tool's quota in the menu bar,
+    /// independent of whether warmup is active.
+    private func menuBarPin(_ tool: ToolID, _ state: ToolState) -> some View {
+        Button(action: { appState.setMenuBarVisible(tool, !state.menuBarVisible) }) {
+            Image(systemName: "menubar.rectangle")
+                .font(.system(size: 11.5, weight: .semibold))
+                .foregroundStyle(state.menuBarVisible ? DS.C.accent(tool) : DS.C.textMuted)
+                .opacity(state.menuBarVisible ? 1.0 : 0.45)
+        }
+        .buttonStyle(.plain)
+        .help(state.menuBarVisible ? "Showing in menu bar — click to hide" : "Hidden from menu bar — click to show")
     }
 
     private var historySection: some View {

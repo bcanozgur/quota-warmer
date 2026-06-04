@@ -18,6 +18,11 @@ final class ToolState: ObservableObject {
     @Published var isActive: Bool {
         didSet { UserDefaults.standard.set(isActive, forKey: "toolActive.\(tool.rawValue)") }
     }
+    /// Whether this tool's glyph + quota is pinned to the menu bar. Independent
+    /// of `isActive` — a passive tool can still be watched in the menu bar.
+    @Published var menuBarVisible: Bool {
+        didSet { UserDefaults.standard.set(menuBarVisible, forKey: "menuBarVisible.\(tool.rawValue)") }
+    }
     @Published var isFetchingQuota = false
     @Published var isWarming = false
     @Published var errorMessage: String?
@@ -36,6 +41,7 @@ final class ToolState: ObservableObject {
     init(tool: ToolID) {
         self.tool = tool
         self.isActive = UserDefaults.standard.object(forKey: "toolActive.\(tool.rawValue)") as? Bool ?? false
+        self.menuBarVisible = UserDefaults.standard.object(forKey: "menuBarVisible.\(tool.rawValue)") as? Bool ?? true
         self.lastAutoWindowKey = UserDefaults.standard.string(forKey: "lastAutoWindowKey.\(tool.rawValue)")
     }
 
@@ -141,6 +147,14 @@ final class AppState: ObservableObject {
     }
 
     func state(for tool: ToolID) -> ToolState { toolStates[tool]! }
+
+    /// Pins/unpins a tool in the menu bar. Routed through AppState so the
+    /// menu-bar label (which observes AppState, not each ToolState) refreshes
+    /// immediately when toggled.
+    func setMenuBarVisible(_ tool: ToolID, _ visible: Bool) {
+        objectWillChange.send()
+        state(for: tool).menuBarVisible = visible
+    }
 
     func setActive(_ active: Bool, for tool: ToolID) {
         let state = state(for: tool)
@@ -488,7 +502,11 @@ final class AppState: ObservableObject {
         refreshTimer?.invalidate()
         refreshTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
             Task { @MainActor [weak self] in
-                self?.toolStates.values.forEach { $0.objectWillChange.send() }
+                guard let self else { return }
+                self.toolStates.values.forEach { $0.objectWillChange.send() }
+                // Also poke AppState so the menu-bar label (which observes
+                // AppState, not each ToolState) re-renders its countdown.
+                self.objectWillChange.send()
             }
         }
     }

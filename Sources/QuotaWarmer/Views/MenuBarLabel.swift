@@ -3,11 +3,6 @@ import SwiftUI
 
 struct MenuBarLabel: View {
     @EnvironmentObject var appState: AppState
-    @State private var spinDegrees: Double = 0
-
-    private var isActive: Bool {
-        appState.isRefreshing || appState.toolStates.values.contains { $0.isWarming || $0.isFetchingQuota }
-    }
 
     private var isHealthy: Bool {
         !appState.globalPassive && appState.toolStates.values.allSatisfy { state in
@@ -16,26 +11,29 @@ struct MenuBarLabel: View {
         }
     }
 
+    @ViewBuilder
     var body: some View {
-        HStack(spacing: 3) {
-            if let primary = primaryTool {
-                toolLabel(primary)
-            } else {
-                fallbackLabel
-            }
+        // macOS renders a MenuBarExtra label's content as a *single* status-item
+        // view and only the first child of a multi-element layout shows up. So
+        // both pinned tools are composited into one NSImage, which is then shown
+        // as a single Image — guaranteed to render at full width.
+        // (Per-second ticking is driven by AppState's UI refresh timer, which
+        // pokes this view; TimelineView doesn't render as a menu-bar label.)
+        let items = composeItems()
+        if items.isEmpty {
+            fallbackLabel
+                .frame(height: 16)
+                .fixedSize()
+        } else {
+            Image(nsImage: MenuBarComposer.image(for: items))
+                .renderingMode(.original)
         }
-        .frame(height: 16)
-        .fixedSize()
     }
 
-    private var primaryTool: ToolID? {
-        ToolID.allCases
-            .map { appState.state(for: $0) }
-            .sorted { lhs, rhs in
-                score(lhs) > score(rhs)
-            }
-            .first { $0.isActive || $0.primaryMetric != nil || $0.isFetchingQuota || $0.isWarming }
-            .map(\.tool)
+    /// Tools the user has pinned to the menu bar, shown side by side. Order
+    /// follows `ToolID.allCases` so the layout is stable.
+    private var visibleTools: [ToolID] {
+        ToolID.allCases.filter { appState.state(for: $0).menuBarVisible }
     }
 
     @ViewBuilder
@@ -50,50 +48,32 @@ struct MenuBarLabel: View {
         }
     }
 
-    @ViewBuilder
-    private func toolLabel(_ tool: ToolID) -> some View {
-        let st = appState.state(for: tool)
-        let accent = DS.C.accent(tool)
+    private func composeItems() -> [MenuBarComposer.Item] {
+        visibleTools.map { tool in
+            let st = appState.state(for: tool)
+            let prominent = (st.isActive && st.freshness == .fresh) || st.isWarming
 
-        HStack(spacing: 3) {
-            ProviderMenuBarGlyph(tool: tool, statusColor: nsStatusColor(for: st))
-                .opacity(st.isActive || st.freshness == .fresh || st.isWarming ? 1.0 : 0.68)
-            if isActive && !st.isWarming {
-                Image(systemName: "hourglass")
-                    .font(.system(size: 8.5, weight: .medium))
-                    .foregroundStyle(.primary)
-                    .rotationEffect(.degrees(spinDegrees))
-                    .onAppear {
-                        withAnimation(.linear(duration: 1).repeatForever(autoreverses: false)) {
-                            spinDegrees = 360
-                        }
-                    }
-                    .onDisappear { spinDegrees = 0 }
-            }
+            let text: String
             if st.isWarming {
-                ProgressView()
-                    .scaleEffect(0.42)
-                    .frame(width: 9, height: 9)
-                    .tint(DS.C.blue)
+                text = "warming"
             } else if let r = st.timeUntilReset {
-                Text(compactQuotaText(time: r, metric: st.primaryMetric))
-                    .font(DS.mono(9, weight: .semibold))
-                    .foregroundStyle(timeColor(r, accent: accent))
-            } else if st.freshness == .fresh, let metric = st.primaryMetric {
-                Text("\(Int(metric.remainingFraction * 100))%")
-                    .font(DS.mono(9, weight: .semibold))
-                    .foregroundStyle(accent)
+                text = compactQuotaText(time: r, metric: st.primaryMetric)
+            } else if let metric = st.primaryMetric {
+                text = "\(Int(metric.remainingFraction * 100))%"
+            } else {
+                text = ""
             }
-        }
-    }
 
-    private func score(_ state: ToolState) -> Int {
-        if state.isWarming { return 50 }
-        if state.isFetchingQuota { return 40 }
-        if state.isActive && state.timeUntilReset != nil { return 30 }
-        if state.freshness == .fresh { return 20 }
-        if state.isActive { return 10 }
-        return 0
+            return MenuBarComposer.Item(
+                assetName: tool == .claude ? "ClaudeCode" : "Codex",
+                dotColor: nsStatusColor(for: st),
+                text: text,
+                // Match the prior look: neutral menu-bar-white text (the
+                // colored status dot conveys state), not a saturated color.
+                textColor: .white,
+                dimmed: !prominent
+            )
+        }
     }
 
     private func compactTime(_ secs: TimeInterval) -> String {
@@ -105,71 +85,107 @@ struct MenuBarLabel: View {
         return h > 0 ? "\(h)h\(String(format: "%02d", m))m" : "\(m)m"
     }
 
-    private func timeColor(_ r: TimeInterval, accent: Color) -> Color {
-        r > 3600 ? accent : r > 1800 ? DS.C.yellow : DS.C.red
-    }
-
-    private func nsStatusColor(for state: ToolState) -> NSColor {
-        if appState.globalPassive || !state.isActive { return .systemRed }
-        if state.sourceHealth == .healthy && state.freshness == .fresh { return .systemGreen }
-        if state.sourceHealth == .authFailure || state.sourceHealth == .unavailable { return .systemRed }
-        return .systemYellow
-    }
-
     private func compactQuotaText(time: TimeInterval, metric: QuotaMetric?) -> String {
         let percent = Int((metric?.remainingFraction ?? 0) * 100)
         return "\(compactTime(time)) - \(percent)%"
     }
-}
 
-private struct ProviderMenuBarGlyph: View {
-    let tool: ToolID
-    let statusColor: NSColor
-
-    var body: some View {
-        Image(nsImage: ProviderMenuBarIcon.image(for: tool, statusColor: statusColor))
-            .resizable()
-            .renderingMode(.original)
-            .interpolation(.high)
-            .scaledToFit()
-            .frame(width: 16, height: 14)
-            .clipped()
+    private func nsStatusColor(for state: ToolState) -> NSColor {
+        // Passive / globally-paused tools get a neutral gray dot so "passive"
+        // no longer looks like an error (which is red).
+        if appState.globalPassive || !state.isActive { return .systemGray }
+        if state.sourceHealth == .healthy && state.freshness == .fresh { return .systemGreen }
+        if state.sourceHealth == .authFailure || state.sourceHealth == .unavailable { return .systemRed }
+        return .systemYellow
     }
 }
 
-private enum ProviderMenuBarIcon {
-    private static var cache: [String: NSImage] = [:]
+/// Draws one or more provider glyphs (white, with a colored status dot) plus
+/// their quota text into a single NSImage for use as the menu-bar label.
+private enum MenuBarComposer {
+    struct Item {
+        let assetName: String
+        let dotColor: NSColor
+        let text: String
+        let textColor: NSColor
+        let dimmed: Bool
+    }
 
-    static func image(for tool: ToolID, statusColor: NSColor) -> NSImage {
-        let colorKey = statusColor == .systemGreen ? "green" : statusColor == .systemYellow ? "yellow" : "red"
-        let key = "\(tool.rawValue).\(colorKey)"
-        if let cached = cache[key] { return cached }
-        let name = tool == .claude ? "ClaudeCode" : "Codex"
-        let size = NSSize(width: 32, height: 24)
-        let output = NSImage(size: size)
-        output.lockFocus()
-        NSColor.clear.setFill()
-        NSRect(origin: .zero, size: size).fill()
-        if let source = NSImage(named: name) {
-            source.isTemplate = false
+    private static let font = NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .semibold)
+    private static let height: CGFloat = 18
+    private static let glyph: CGFloat = 15
+    private static let glyphGap: CGFloat = 3
+    private static let itemGap: CGFloat = 8
+
+    static func image(for items: [Item]) -> NSImage {
+        var widths: [CGFloat] = []
+        var total: CGFloat = 0
+        for (index, item) in items.enumerated() {
+            var w = glyph
+            let tw = textWidth(item.text)
+            if tw > 0 { w += glyphGap + tw }
+            widths.append(w)
+            total += w
+            if index < items.count - 1 { total += itemGap }
+        }
+        total = max(total, glyph)
+
+        let size = NSSize(width: ceil(total), height: height)
+        let image = NSImage(size: size, flipped: false) { _ in
+            var x: CGFloat = 0
+            for (index, item) in items.enumerated() {
+                draw(item, at: x)
+                x += widths[index] + itemGap
+            }
+            return true
+        }
+        image.isTemplate = false
+        return image
+    }
+
+    private static func textWidth(_ text: String) -> CGFloat {
+        guard !text.isEmpty else { return 0 }
+        return ceil((text as NSString).size(withAttributes: [.font: font]).width)
+    }
+
+    private static func draw(_ item: Item, at originX: CGFloat) {
+        let alpha: CGFloat = item.dimmed ? 0.6 : 1.0
+        let logoRect = NSRect(x: originX, y: (height - glyph) / 2, width: glyph, height: glyph)
+
+        if let source = NSImage(named: item.assetName) {
             source.draw(
-                in: NSRect(x: 0, y: 3, width: 18, height: 18),
+                in: logoRect,
                 from: .zero,
                 operation: .sourceOver,
-                fraction: 1,
+                fraction: alpha,
                 respectFlipped: true,
                 hints: [.interpolation: NSImageInterpolation.high]
             )
+            // Recolor the monochrome glyph to white, preserving its alpha.
+            NSColor.white.withAlphaComponent(alpha).setFill()
+            logoRect.fill(using: .sourceAtop)
         }
-        statusColor.setFill()
-        NSBezierPath(ovalIn: NSRect(x: 21, y: 9, width: 7, height: 7)).fill()
-        NSColor.controlBackgroundColor.withAlphaComponent(0.92).setStroke()
-        let ring = NSBezierPath(ovalIn: NSRect(x: 20.5, y: 8.5, width: 8, height: 8))
-        ring.lineWidth = 1
+
+        // Status dot at the glyph's bottom-right corner.
+        let dot: CGFloat = 5.5
+        let dotRect = NSRect(x: logoRect.maxX - dot + 1, y: logoRect.minY - 0.5, width: dot, height: dot)
+        item.dotColor.withAlphaComponent(alpha).setFill()
+        NSBezierPath(ovalIn: dotRect).fill()
+        NSColor.controlBackgroundColor.withAlphaComponent(0.9 * alpha).setStroke()
+        let ring = NSBezierPath(ovalIn: dotRect.insetBy(dx: -0.5, dy: -0.5))
+        ring.lineWidth = 0.75
         ring.stroke()
-        output.unlockFocus()
-        output.isTemplate = false
-        cache[key] = output
-        return output
+
+        guard !item.text.isEmpty else { return }
+        let attrs: [NSAttributedString.Key: Any] = [
+            .font: font,
+            .foregroundColor: item.textColor.withAlphaComponent(alpha)
+        ]
+        let textSize = (item.text as NSString).size(withAttributes: attrs)
+        let textY = (height - textSize.height) / 2
+        (item.text as NSString).draw(
+            at: NSPoint(x: logoRect.maxX + glyphGap, y: textY),
+            withAttributes: attrs
+        )
     }
 }
