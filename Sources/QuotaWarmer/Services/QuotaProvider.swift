@@ -88,35 +88,14 @@ final class QuotaProvider: QuotaProviding {
             throw QuotaProviderError.missingCredentials("Codex credentials not found")
         }
 
-        let appServerURL = URL(string: "https://chatgpt.com/backend-api/codex/account/rateLimits/read")!
-        let whamURL = URL(string: "https://chatgpt.com/backend-api/wham/usage")!
-
-        do {
-            let payload = try await requestJSON(url: appServerURL, credential: credential)
-            let whamSucceeded = (try? await requestJSON(url: whamURL, credential: credential)) != nil
-            return try requireRecognizedMetrics(
-                snapshot(
-                    tool: .codex,
-                    source: "Codex app-server",
-                    corroboratingSource: whamSucceeded ? "wham usage" : nil,
-                    payload: payload,
-                    message: credential.source
-                )
-            )
-        } catch {
-            if let whamPayload = try? await requestJSON(url: whamURL, credential: credential) {
-                return try requireRecognizedMetrics(
-                    snapshot(
-                        tool: .codex,
-                        source: "wham usage fallback",
-                        corroboratingSource: nil,
-                        payload: whamPayload,
-                        message: "Codex app-server unavailable; showing fallback from \(credential.source)"
-                    )
-                )
-            }
-            throw error
-        }
+        // The codex app-server `rateLimits/read` path is not reachable with a
+        // bearer token (Cloudflare 403 / 404), so the wham usage endpoint — the
+        // same source the Codex web analytics page uses — is the live quota.
+        let usageURL = URL(string: "https://chatgpt.com/backend-api/wham/usage")!
+        let payload = try await requestJSON(url: usageURL, credential: credential)
+        return try requireRecognizedMetrics(
+            codexSnapshot(payload: payload, source: "Codex usage", message: credential.source)
+        )
     }
 
     private func requestJSON(url: URL, credential: Credential) async throws -> Any {
@@ -191,6 +170,86 @@ final class QuotaProvider: QuotaProviding {
             rawWindowKey: keyParts.joined(separator: "|"),
             message: message
         )
+    }
+
+    /// Parses the Codex `wham/usage` response, whose `rate_limit` block has a
+    /// known shape: `primary_window` (the 5h window) and `secondary_window`
+    /// (weekly). `used_percent` is on a 0–100 scale, so a value of `1` means
+    /// 1% used — the generic heuristic extractor mis-reads that as 100% used,
+    /// hence the explicit parse here. Falls back to the generic extractor if
+    /// the response doesn't carry the expected windows.
+    func codexSnapshot(payload: Any, source: String, message: String?) -> QuotaSnapshot {
+        if let rateLimit = (payload as? [String: Any])?["rate_limit"] as? [String: Any],
+           rateLimit["primary_window"] != nil || rateLimit["secondary_window"] != nil {
+            let fiveHour = codexWindowMetric(rateLimit["primary_window"], defaultName: "5h")
+            let weekly = codexWindowMetric(rateLimit["secondary_window"], defaultName: "Weekly")
+            let keyParts = [
+                source,
+                fiveHour?.resetAt.map { ISO8601DateFormatter().string(from: $0) } ?? "no-reset",
+                fiveHour.map { String(format: "%.3f", $0.remainingFraction) } ?? "no-5h"
+            ]
+            return QuotaSnapshot(
+                tool: .codex,
+                fetchedAt: Date(),
+                primarySource: source,
+                corroboratingSource: nil,
+                fiveHour: fiveHour,
+                weekly: weekly,
+                extras: [],
+                rawWindowKey: keyParts.joined(separator: "|"),
+                message: message
+            )
+        }
+
+        return snapshot(
+            tool: .codex,
+            source: source,
+            corroboratingSource: nil,
+            payload: payload,
+            message: message
+        )
+    }
+
+    private func codexWindowMetric(_ value: Any?, defaultName: String) -> QuotaMetric? {
+        guard let window = value as? [String: Any],
+              let usedRaw = codexDouble(window["used_percent"]) else { return nil }
+        let usedPercent = min(max(usedRaw / 100, 0), 1)
+
+        let resetAt: Date?
+        if let epoch = codexDouble(window["reset_at"]), epoch > 0 {
+            resetAt = Date(timeIntervalSince1970: epoch > 10_000_000_000 ? epoch / 1000 : epoch)
+        } else if let after = codexDouble(window["reset_after_seconds"]), after > 0 {
+            resetAt = Date().addingTimeInterval(after)
+        } else {
+            resetAt = nil
+        }
+
+        let windowSeconds = codexDouble(window["limit_window_seconds"]) ?? 0
+        let name: String
+        if windowSeconds >= 6 * 24 * 3600 {
+            name = "Weekly"
+        } else if windowSeconds > 0 && windowSeconds <= 6 * 3600 {
+            name = "5h"
+        } else {
+            name = defaultName
+        }
+
+        return QuotaMetric(
+            name: name,
+            usedPercent: usedPercent,
+            remainingPercent: 1 - usedPercent,
+            resetAt: resetAt,
+            detail: nil,
+            context: name.lowercased()
+        )
+    }
+
+    private func codexDouble(_ value: Any?) -> Double? {
+        if let number = value as? NSNumber { return number.doubleValue }
+        if let double = value as? Double { return double }
+        if let int = value as? Int { return Double(int) }
+        if let string = value as? String { return Double(string) }
+        return nil
     }
 
     private func urlEncoded(_ value: String) -> String {
@@ -415,7 +474,7 @@ struct MetricExtractor {
     private func firstDate(_ fields: [Field], keys: [String]) -> Date? {
         for key in keys {
             guard let field = fields.first(where: { $0.normalizedKey == key }) else { continue }
-            if let string = field.value as? String, let date = ISO8601DateFormatter().date(from: string) {
+            if let string = field.value as? String, let date = Self.parseISODate(string) {
                 return date
             }
             if let number = field.value as? NSNumber {
@@ -478,5 +537,24 @@ struct MetricExtractor {
         let originalKey: String
         let normalizedKey: String
         let value: Any
+    }
+
+    /// Some sources (e.g. Claude OAuth usage) emit ISO-8601 timestamps with
+    /// fractional seconds — "2026-06-04T11:10:00.973380+00:00" — which a default
+    /// `ISO8601DateFormatter` rejects. Try the fractional-seconds variant first,
+    /// then fall back to the plain internet date-time format.
+    private static let isoFormatters: [ISO8601DateFormatter] = {
+        let withFractional = ISO8601DateFormatter()
+        withFractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        let plain = ISO8601DateFormatter()
+        plain.formatOptions = [.withInternetDateTime]
+        return [withFractional, plain]
+    }()
+
+    static func parseISODate(_ string: String) -> Date? {
+        for formatter in isoFormatters {
+            if let date = formatter.date(from: string) { return date }
+        }
+        return nil
     }
 }

@@ -36,6 +36,31 @@ struct QuotaExtractorRegression {
         requireClose(codex.weekly?.remainingFraction, 0.60, "Codex weekly remaining")
         require(codex.fiveHour?.resetAt != nil, "Codex 5h reset should be extracted")
 
+        // Real Codex `wham/usage` shape: used_percent is on a 0–100 scale, so
+        // 1 means 1% used (99% remaining). The generic extractor would mis-read
+        // a value of 1 as 100% used; the dedicated parser must not.
+        let whamPayload: [String: Any] = [
+            "rate_limit": [
+                "primary_window": [
+                    "used_percent": 1,
+                    "limit_window_seconds": 18000,
+                    "reset_after_seconds": 13466,
+                    "reset_at": Int(sessionReset.timeIntervalSince1970)
+                ],
+                "secondary_window": [
+                    "used_percent": 0,
+                    "limit_window_seconds": 604800,
+                    "reset_at": Int(weeklyReset.timeIntervalSince1970)
+                ]
+            ]
+        ]
+        let wham = provider.codexSnapshot(payload: whamPayload, source: "test", message: nil)
+        requireClose(wham.fiveHour?.remainingFraction, 0.99, "Codex wham 5h remaining (1% used)")
+        requireClose(wham.weekly?.remainingFraction, 1.0, "Codex wham weekly remaining (0% used)")
+        require(wham.fiveHour?.resetAt != nil, "Codex wham 5h reset should be extracted")
+        require(wham.fiveHour?.name == "5h", "Codex wham primary window should be 5h")
+        require(wham.weekly?.name == "Weekly", "Codex wham secondary window should be weekly")
+
         let claudePayload: [String: Any] = [
             "plan_usage_limits": [
                 [
@@ -59,6 +84,29 @@ struct QuotaExtractorRegression {
         )
         requireClose(claude.fiveHour?.remainingFraction, 0.19, "Claude current-session remaining")
         requireClose(claude.weekly?.remainingFraction, 0.89, "Claude weekly remaining")
+
+        // Claude OAuth usage emits ISO timestamps with fractional seconds and a
+        // five_hour/seven_day shape — the reset must still be parsed.
+        let claudeFractionalPayload: [String: Any] = [
+            "five_hour": [
+                "utilization": 22.0,
+                "resets_at": "2026-06-04T11:10:00.973380+00:00"
+            ],
+            "seven_day": [
+                "utilization": 17.0,
+                "resets_at": "2026-06-09T20:00:00.973402+00:00"
+            ]
+        ]
+        let claudeFractional = provider.snapshot(
+            tool: .claude,
+            source: "test",
+            corroboratingSource: nil,
+            payload: claudeFractionalPayload,
+            message: nil
+        )
+        requireClose(claudeFractional.fiveHour?.remainingFraction, 0.78, "Claude five_hour remaining")
+        require(claudeFractional.fiveHour?.resetAt != nil, "Claude fractional-seconds reset must parse")
+        require(claudeFractional.weekly?.resetAt != nil, "Claude seven_day reset must parse")
 
         let claudeRateLimitsPayload: [String: Any] = [
             "rate_limits": [
