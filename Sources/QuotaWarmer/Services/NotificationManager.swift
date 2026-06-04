@@ -42,6 +42,22 @@ class NotificationManager {
         UNUserNotificationCenter.current().add(req)
     }
 
+    func notifyMorningCatchUp(onBattery: Bool) {
+        let content = UNMutableNotificationContent()
+        content.title = "Morning Pre-warm — Caught Up"
+        content.body  = onBattery
+            ? "The scheduled wake was skipped (on battery). Your quota window is being warmed now that the Mac is awake."
+            : "Your quota window is being warmed now that the Mac is awake."
+        content.sound = .default
+
+        let req = UNNotificationRequest(
+            identifier: "morningCatchUp.\(Int(Date().timeIntervalSince1970))",
+            content: content,
+            trigger: nil
+        )
+        UNUserNotificationCenter.current().add(req)
+    }
+
     func cancelAll(for tool: ToolID) {
         cancelPending(id: warningID(tool))
     }

@@ -3,6 +3,9 @@ import AppKit
 
 class Scheduler {
     var onFire: ((ToolID) -> Void)?
+    /// Called once each time the system wakes from sleep, before the per-tool
+    /// fires. Used for morning pre-warm bookkeeping / catch-up.
+    var onWake: (() -> Void)?
 
     private var timers: [ToolID: DispatchSourceTimer] = [:]
     private let queue = DispatchQueue(label: "com.quotawarmer.scheduler")
@@ -14,7 +17,9 @@ class Scheduler {
             object: nil,
             queue: .main
         ) { [weak self] _ in
-            self?.onFire.map { fire in
+            guard let self else { return }
+            self.onWake?()
+            if let fire = self.onFire {
                 ToolID.allCases.forEach { fire($0) }
             }
         }

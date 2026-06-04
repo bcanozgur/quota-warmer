@@ -10,6 +10,10 @@ struct SettingsTabView: View {
     @AppStorage("launchAtLogin")     private var launchAtLogin: Bool     = false
     @AppStorage("rateLimitGuard")    private var rateLimitGuard: Bool    = true
 
+    @AppStorage("morningPrewarmHour")         private var morningHour: Int         = 6
+    @AppStorage("morningPrewarmMinute")       private var morningMinute: Int       = 0
+    @AppStorage("morningPrewarmWeekdaysOnly") private var morningWeekdaysOnly: Bool = true
+
     private let refreshOptions: [(label: String, value: Int)] = [
         ("5m", 300), ("10m", 600), ("15m", 900), ("30m", 1800)
     ]
@@ -50,6 +54,51 @@ struct SettingsTabView: View {
                                 .overlay(RoundedRectangle(cornerRadius: DS.R.sm).stroke(DS.C.border, lineWidth: 1))
                         }
                         .buttonStyle(.plain)
+                    }
+                }
+
+                group("MORNING PRE-WARM") {
+                    row(icon: "sunrise", title: "Wake & Warm Each Morning",
+                        subtitle: "Wakes a sleeping Mac to start your window") {
+                        Toggle("", isOn: Binding(
+                            get: { appState.morningPrewarmEnabled },
+                            set: { appState.setMorningPrewarm($0) }
+                        ))
+                        .toggleStyle(.switch).scaleEffect(0.75).tint(DS.C.accent(.claude))
+                    }
+
+                    Divider().background(DS.C.border).padding(.leading, 36)
+
+                    row(icon: "clock", title: "Wake Time",
+                        subtitle: "Start the window before you sit down") {
+                        DatePicker("", selection: morningTimeBinding, displayedComponents: .hourAndMinute)
+                            .datePickerStyle(.stepperField)
+                            .labelsHidden()
+                            .scaleEffect(0.9)
+                            .fixedSize()
+                    }
+
+                    Divider().background(DS.C.border).padding(.leading, 36)
+
+                    row(icon: "calendar", title: "Weekdays Only",
+                        subtitle: "Skip Saturday and Sunday") {
+                        Toggle("", isOn: $morningWeekdaysOnly)
+                            .toggleStyle(.switch).scaleEffect(0.75).tint(DS.C.accent(.claude))
+                            .onChange(of: morningWeekdaysOnly) { _, _ in appState.morningTimeChanged() }
+                    }
+
+                    if let status = appState.morningStatus {
+                        Divider().background(DS.C.border).padding(.leading, 36)
+                        HStack(alignment: .top, spacing: DS.Space.sm) {
+                            Image(systemName: "info.circle")
+                                .font(.system(size: 12)).foregroundStyle(DS.C.textSub).frame(width: 20)
+                            Text(status)
+                                .font(.system(size: 9.5)).foregroundStyle(DS.C.textMuted)
+                                .fixedSize(horizontal: false, vertical: true)
+                            Spacer(minLength: 0)
+                        }
+                        .padding(.horizontal, DS.Space.md)
+                        .padding(.vertical, DS.Space.sm + 2)
                     }
                 }
 
@@ -166,6 +215,23 @@ struct SettingsTabView: View {
     }
 
     // MARK: - Layout helpers
+
+    private var morningTimeBinding: Binding<Date> {
+        Binding(
+            get: {
+                var c = DateComponents()
+                c.hour = morningHour
+                c.minute = morningMinute
+                return Calendar.current.date(from: c) ?? Date()
+            },
+            set: { newValue in
+                let c = Calendar.current.dateComponents([.hour, .minute], from: newValue)
+                morningHour = c.hour ?? 6
+                morningMinute = c.minute ?? 0
+                appState.morningTimeChanged()
+            }
+        )
+    }
 
     private var settingsHeader: some View {
         Text("SETTINGS")

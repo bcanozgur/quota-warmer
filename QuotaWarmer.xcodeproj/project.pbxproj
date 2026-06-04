@@ -24,6 +24,7 @@
 		BF2969F3D8D6280430B78E49 /* ActivityScanner.swift in Sources */ = {isa = PBXBuildFile; fileRef = 07B66503B904C611B3B942A6 /* ActivityScanner.swift */; };
 		C5A94740BD8B9C128E344EFB /* WarmupRunner.swift in Sources */ = {isa = PBXBuildFile; fileRef = F4D8BDF7070D1A323481D7BE /* WarmupRunner.swift */; };
 		C7A75684B732A7F922EBB865 /* MainTabView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6F3B64B4293CFBD14217DA2B /* MainTabView.swift */; };
+		E33391F5D262478D2FC88C1E /* WakeScheduler.swift in Sources */ = {isa = PBXBuildFile; fileRef = 166E35057E1F11E7F1A327F8 /* WakeScheduler.swift */; };
 		E6D7A521F2B96CA5A3DB00C7 /* QuotaProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0ECCEAAAD4F2D01A85698B2 /* QuotaProvider.swift */; };
 		E806388933B9087D09ED9144 /* MenuBarLabel.swift in Sources */ = {isa = PBXBuildFile; fileRef = E94AAC800581DE96B2F6ED29 /* MenuBarLabel.swift */; };
 		F3EBF8802D29A1A5F07C66B1 /* CredentialStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8B55E7AA18695B4771A49FD2 /* CredentialStore.swift */; };
@@ -32,6 +33,7 @@
 /* Begin PBXFileReference section */
 		07B66503B904C611B3B942A6 /* ActivityScanner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ActivityScanner.swift; sourceTree = "<group>"; };
 		15BE4D2A429BB790E2ACF1BE /* AppState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppState.swift; sourceTree = "<group>"; };
+		166E35057E1F11E7F1A327F8 /* WakeScheduler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WakeScheduler.swift; sourceTree = "<group>"; };
 		1F346F22AD123AA6C32975A6 /* OnboardingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OnboardingView.swift; sourceTree = "<group>"; };
 		2C0FFA24004A3B12BB624E6F /* Scheduler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Scheduler.swift; sourceTree = "<group>"; };
 		3739BD62D7E5AAF6EB84DC3C /* AppState+Ext.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "AppState+Ext.swift"; sourceTree = "<group>"; };
@@ -89,6 +91,7 @@
 				F0ECCEAAAD4F2D01A85698B2 /* QuotaProvider.swift */,
 				2C0FFA24004A3B12BB624E6F /* Scheduler.swift */,
 				EA5F1077252CA9BA28AE19CD /* UpdateChecker.swift */,
+				166E35057E1F11E7F1A327F8 /* WakeScheduler.swift */,
 				F4D8BDF7070D1A323481D7BE /* WarmupRunner.swift */,
 			);
 			path = Services;
@@ -212,6 +215,7 @@
 				5E1789AD3B2F0CAA3B34784F /* ToolID.swift in Sources */,
 				242099BB055E5B570D3E0ED3 /* ToolTabView.swift in Sources */,
 				8A78A0AF9DE7B804BAE53247 /* UpdateChecker.swift in Sources */,
+				E33391F5D262478D2FC88C1E /* WakeScheduler.swift in Sources */,
 				C5A94740BD8B9C128E344EFB /* WarmupRunner.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;

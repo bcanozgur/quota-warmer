@@ -92,6 +92,8 @@ final class AppState: ObservableObject {
     @Published var updateInfo: ReleaseInfo?
     @Published private(set) var toolStates: [ToolID: ToolState]
     @Published var history: [HistoryEvent] = []
+    @Published var morningPrewarmEnabled: Bool = UserDefaults.standard.bool(forKey: "morningPrewarmEnabled")
+    @Published var morningStatus: String?
     @Published var globalPassive: Bool {
         didSet {
             UserDefaults.standard.set(globalPassive, forKey: "globalPassive")
@@ -110,7 +112,10 @@ final class AppState: ObservableObject {
     private let notifications = NotificationManager.shared
     private let updateChecker = UpdateChecker()
     private let quotaProvider: QuotaProviding = QuotaProvider()
+    private let wakeScheduler = WakeScheduler()
     private var refreshTimer: Timer?
+    private var morningTimer: Timer?
+    private var morningReapplyTask: Task<Void, Never>?
 
     init() {
         var states: [ToolID: ToolState] = [:]
@@ -123,10 +128,14 @@ final class AppState: ObservableObject {
                 await self?.attemptAutomaticWarmup(tool: tool, reason: "scheduled refresh")
             }
         }
+        scheduler.onWake = { [weak self] in
+            Task { @MainActor [weak self] in self?.handleSystemWake() }
+        }
 
         refreshAllActivity(allowAutomaticWarmup: false)
         startQuotaRefreshTimer()
         startUIRefreshTimer()
+        if morningPrewarmEnabled { scheduleMorningTimer() }
         Task { await checkOnboarding() }
         Task { await checkForAppUpdate() }
     }
@@ -205,6 +214,156 @@ final class AppState: ObservableObject {
         for tool in ToolID.allCases where state(for: tool).isActive {
             state(for: tool).nextRefreshAt = Date().addingTimeInterval(refreshInterval)
         }
+    }
+
+    // MARK: - Morning pre-warm
+
+    /// Toggle entry point from Settings. Enabling/disabling touches the system
+    /// power schedule via a single admin prompt.
+    func setMorningPrewarm(_ enabled: Bool) {
+        guard enabled != morningPrewarmEnabled else { return }
+        if enabled {
+            Task { await enableMorningPrewarm() }
+        } else {
+            Task { await disableMorningPrewarm() }
+        }
+    }
+
+    /// Called when the wake time or weekday setting changes. Reschedules the
+    /// in-app timer immediately and debounces the hardware re-apply so rapid
+    /// stepper edits coalesce into one admin prompt.
+    func morningTimeChanged() {
+        guard morningPrewarmEnabled else { return }
+        scheduleMorningTimer()
+        morningReapplyTask?.cancel()
+        morningReapplyTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 1_300_000_000)
+            guard !Task.isCancelled else { return }
+            await self?.applyHardwareWake()
+        }
+    }
+
+    private func enableMorningPrewarm() async {
+        morningPrewarmEnabled = true
+        UserDefaults.standard.set(true, forKey: "morningPrewarmEnabled")
+        let ok = await applyHardwareWake()
+        if ok {
+            scheduleMorningTimer()
+        } else {
+            // Admin cancelled / failed — revert so the UI reflects reality.
+            morningPrewarmEnabled = false
+            UserDefaults.standard.set(false, forKey: "morningPrewarmEnabled")
+            morningTimer?.invalidate(); morningTimer = nil
+        }
+    }
+
+    private func disableMorningPrewarm() async {
+        morningPrewarmEnabled = false
+        UserDefaults.standard.set(false, forKey: "morningPrewarmEnabled")
+        morningTimer?.invalidate(); morningTimer = nil
+        morningReapplyTask?.cancel()
+        let result = await wakeScheduler.cancel()
+        morningStatus = result.success ? "Morning pre-warm is off." : result.message
+        addHistory(tool: nil, kind: .quotaFetch, title: "Morning pre-warm off", detail: result.message)
+    }
+
+    @discardableResult
+    private func applyHardwareWake() async -> Bool {
+        let days: WakeScheduler.WakeDays = morningWeekdaysOnly ? .weekdays : .everyday
+        let result = await wakeScheduler.apply(hour: morningHour, minute: morningMinute, days: days)
+        if result.success {
+            let timeText = String(format: "%02d:%02d", morningHour, morningMinute)
+            if WakeScheduler.isOnACPower() {
+                morningStatus = "Mac will wake at \(timeText) and start your window."
+            } else {
+                morningStatus = "Scheduled for \(timeText), but on battery with the lid closed the wake may be skipped — your window warms the moment you open the lid."
+            }
+            addHistory(tool: nil, kind: .quotaFetch, title: "Morning pre-warm scheduled", detail: result.message)
+        } else {
+            morningStatus = result.message
+        }
+        return result.success
+    }
+
+    private func scheduleMorningTimer() {
+        morningTimer?.invalidate()
+        guard morningPrewarmEnabled, let fireDate = nextMorningFireDate() else { return }
+        let timer = Timer(fire: fireDate, interval: 0, repeats: false) { [weak self] _ in
+            Task { @MainActor [weak self] in await self?.runMorningWarmup(viaWake: false) }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        morningTimer = timer
+    }
+
+    /// Single morning-warm entry point, deduplicated to once per calendar day so
+    /// the in-app timer and the system-wake handler can both route here safely.
+    private func runMorningWarmup(viaWake: Bool) async {
+        let todayKey = Self.dayKey(Date())
+        guard lastMorningWarmDay != todayKey else { scheduleMorningTimer(); return }
+        if morningWeekdaysOnly, Calendar.current.isDateInWeekend(Date()) {
+            scheduleMorningTimer(); return
+        }
+        lastMorningWarmDay = todayKey
+
+        let lateness = todaysMorningDate().map { Date().timeIntervalSince($0) } ?? 0
+        let caughtUp = viaWake && lateness > 15 * 60
+
+        for tool in ToolID.allCases where state(for: tool).isActive {
+            await attemptAutomaticWarmup(
+                tool: tool,
+                reason: caughtUp ? "morning pre-warm (caught up on wake)" : "morning pre-warm"
+            )
+        }
+        if caughtUp {
+            NotificationManager.shared.notifyMorningCatchUp(onBattery: !WakeScheduler.isOnACPower())
+        }
+        scheduleMorningTimer()
+    }
+
+    private func handleSystemWake() {
+        guard morningPrewarmEnabled else { return }
+        guard let todaysMorning = todaysMorningDate(), Date() >= todaysMorning else { return }
+        Task { @MainActor in await runMorningWarmup(viaWake: true) }
+    }
+
+    private func nextMorningFireDate() -> Date? {
+        var comps = DateComponents()
+        comps.hour = morningHour
+        comps.minute = morningMinute
+        comps.second = 0
+        let cal = Calendar.current
+        guard var next = cal.nextDate(after: Date(), matching: comps, matchingPolicy: .nextTime) else { return nil }
+        if morningWeekdaysOnly {
+            var guardCount = 0
+            while cal.isDateInWeekend(next), guardCount < 8 {
+                guard let bumped = cal.nextDate(after: next, matching: comps, matchingPolicy: .nextTime) else { break }
+                next = bumped
+                guardCount += 1
+            }
+        }
+        return next
+    }
+
+    private func todaysMorningDate() -> Date? {
+        var comps = Calendar.current.dateComponents([.year, .month, .day], from: Date())
+        comps.hour = morningHour
+        comps.minute = morningMinute
+        comps.second = 0
+        return Calendar.current.date(from: comps)
+    }
+
+    private var morningHour: Int { UserDefaults.standard.object(forKey: "morningPrewarmHour") as? Int ?? 6 }
+    private var morningMinute: Int { UserDefaults.standard.object(forKey: "morningPrewarmMinute") as? Int ?? 0 }
+    private var morningWeekdaysOnly: Bool { UserDefaults.standard.object(forKey: "morningPrewarmWeekdaysOnly") as? Bool ?? true }
+
+    private var lastMorningWarmDay: String? {
+        get { UserDefaults.standard.string(forKey: "lastMorningWarmDay") }
+        set { UserDefaults.standard.set(newValue, forKey: "lastMorningWarmDay") }
+    }
+
+    private static func dayKey(_ date: Date) -> String {
+        let c = Calendar.current.dateComponents([.year, .month, .day], from: date)
+        return "\(c.year ?? 0)-\(c.month ?? 0)-\(c.day ?? 0)"
     }
 
     func checkForAppUpdate() async {
