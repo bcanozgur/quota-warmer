@@ -34,11 +34,15 @@ final class QuotaProvider: QuotaProviding {
         let url = URL(string: "https://api.anthropic.com/api/oauth/usage")!
         do {
             let payload = try await requestJSON(url: url, credential: credential)
-            return snapshot(tool: .claude, source: "Claude OAuth usage", corroboratingSource: nil, payload: payload, message: credential.source)
+            return try requireRecognizedMetrics(
+                snapshot(tool: .claude, source: "Claude OAuth usage", corroboratingSource: nil, payload: payload, message: credential.source)
+            )
         } catch QuotaProviderError.authFailure where credential.refreshToken != nil {
             let refreshed = try await refreshClaudeCredential(credential)
             let payload = try await requestJSON(url: url, credential: refreshed)
-            return snapshot(tool: .claude, source: "Claude OAuth usage", corroboratingSource: nil, payload: payload, message: refreshed.source)
+            return try requireRecognizedMetrics(
+                snapshot(tool: .claude, source: "Claude OAuth usage", corroboratingSource: nil, payload: payload, message: refreshed.source)
+            )
         }
     }
 
@@ -90,21 +94,25 @@ final class QuotaProvider: QuotaProviding {
         do {
             let payload = try await requestJSON(url: appServerURL, credential: credential)
             let whamSucceeded = (try? await requestJSON(url: whamURL, credential: credential)) != nil
-            return snapshot(
-                tool: .codex,
-                source: "Codex app-server",
-                corroboratingSource: whamSucceeded ? "wham usage" : nil,
-                payload: payload,
-                message: credential.source
+            return try requireRecognizedMetrics(
+                snapshot(
+                    tool: .codex,
+                    source: "Codex app-server",
+                    corroboratingSource: whamSucceeded ? "wham usage" : nil,
+                    payload: payload,
+                    message: credential.source
+                )
             )
         } catch {
             if let whamPayload = try? await requestJSON(url: whamURL, credential: credential) {
-                return snapshot(
-                    tool: .codex,
-                    source: "wham usage fallback",
-                    corroboratingSource: nil,
-                    payload: whamPayload,
-                    message: "Codex app-server unavailable; showing fallback from \(credential.source)"
+                return try requireRecognizedMetrics(
+                    snapshot(
+                        tool: .codex,
+                        source: "wham usage fallback",
+                        corroboratingSource: nil,
+                        payload: whamPayload,
+                        message: "Codex app-server unavailable; showing fallback from \(credential.source)"
+                    )
                 )
             }
             throw error
@@ -116,6 +124,9 @@ final class QuotaProvider: QuotaProviding {
         request.httpMethod = "GET"
         request.setValue("Bearer \(credential.accessToken)", forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Accept")
+        if url.host == "api.anthropic.com", url.path == "/api/oauth/usage" {
+            request.setValue("oauth-2025-04-20", forHTTPHeaderField: "anthropic-beta")
+        }
         if let accountID = credential.accountID, !accountID.isEmpty {
             request.setValue(accountID, forHTTPHeaderField: "ChatGPT-Account-Id")
         }
@@ -142,7 +153,14 @@ final class QuotaProvider: QuotaProviding {
         }
     }
 
-    private func snapshot(
+    private func requireRecognizedMetrics(_ snapshot: QuotaSnapshot) throws -> QuotaSnapshot {
+        guard snapshot.fiveHour != nil || snapshot.weekly != nil || !snapshot.extras.isEmpty else {
+            throw QuotaProviderError.malformed("Quota source returned no recognizable limit fields")
+        }
+        return snapshot
+    }
+
+    func snapshot(
         tool: ToolID,
         source: String,
         corroboratingSource: String?,
@@ -151,20 +169,8 @@ final class QuotaProvider: QuotaProviding {
     ) -> QuotaSnapshot {
         let metrics = MetricExtractor(payload: payload).metrics()
         let now = Date()
-        let weekly = metrics.first { metric in
-            let name = metric.name.lowercased()
-            if name.contains("week") || name.contains("weekly") { return true }
-            if let resetAt = metric.resetAt, resetAt.timeIntervalSince(now) > 24 * 3600 { return true }
-            return false
-        }
-        let fiveHour = metrics.first { metric in
-            let name = metric.name.lowercased()
-            guard metric.id != weekly?.id else { return false }
-            if let resetAt = metric.resetAt, resetAt.timeIntervalSince(now) > 24 * 3600 { return false }
-            return name.contains("5h") || name.contains("5 hour") || name.contains("five") || name.contains("session")
-        } ?? metrics.first { metric in
-            metric.id != weekly?.id
-        }
+        let weekly = selectWeeklyMetric(from: metrics, now: now)
+        let fiveHour = selectFiveHourMetric(from: metrics, excluding: weekly, now: now)
         let extras = metrics.filter { metric in
             metric.id != fiveHour?.id && metric.id != weekly?.id
         }
@@ -190,17 +196,93 @@ final class QuotaProvider: QuotaProviding {
     private func urlEncoded(_ value: String) -> String {
         value.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? value
     }
+
+    private func selectWeeklyMetric(from metrics: [QuotaMetric], now: Date) -> QuotaMetric? {
+        bestMetric(from: metrics) { metric in
+            let text = quotaText(metric)
+            var score = 0
+            if text.contains("weekly") || text.contains("week") || text.contains("sevenday") || text.contains("7day") {
+                score += 100
+            }
+            if text.contains("allmodels") || text.contains("all models") { score += 8 }
+            if metric.remainingPercent != nil { score += 5 }
+            if let resetAt = metric.resetAt {
+                let seconds = resetAt.timeIntervalSince(now)
+                if seconds > 24 * 3600 { score += 45 }
+                if seconds > 8 * 24 * 3600 { score -= 25 }
+                if seconds > 0 { score += 3 }
+            }
+            if text.contains("5h") || text.contains("5hour") || text.contains("5 hour") || text.contains("session") {
+                score -= 80
+            }
+            return score
+        }
+    }
+
+    private func selectFiveHourMetric(from metrics: [QuotaMetric], excluding weekly: QuotaMetric?, now: Date) -> QuotaMetric? {
+        let candidates = metrics.filter { $0.id != weekly?.id }
+        if let best = bestMetric(from: candidates, minimumScore: 30, scoredBy: { metric in
+            let text = quotaText(metric)
+            var score = 0
+            if text.contains("5h") || text.contains("5hour") || text.contains("5 hour")
+                || text.contains("fivehour") || text.contains("five hour") {
+                score += 120
+            }
+            if text.contains("session") || text.contains("current") {
+                score += 70
+            }
+            if metric.remainingPercent != nil { score += 6 }
+            if let resetAt = metric.resetAt {
+                let seconds = resetAt.timeIntervalSince(now)
+                if seconds > 0 && seconds <= 8 * 3600 { score += 55 }
+                if seconds > 24 * 3600 { score -= 120 }
+            }
+            if text.contains("weekly") || text.contains("week") {
+                score -= 120
+            }
+            return score
+        }) {
+            return best
+        }
+
+        let shortResetCandidates = candidates.filter { metric in
+            guard let resetAt = metric.resetAt else { return false }
+            let seconds = resetAt.timeIntervalSince(now)
+            return seconds > 0 && seconds <= 8 * 3600
+        }
+        return shortResetCandidates.count == 1 ? shortResetCandidates[0] : nil
+    }
+
+    private func bestMetric(
+        from metrics: [QuotaMetric],
+        minimumScore: Int = 1,
+        scoredBy scorer: (QuotaMetric) -> Int
+    ) -> QuotaMetric? {
+        var best: (metric: QuotaMetric, score: Int)?
+        for metric in metrics {
+            let score = scorer(metric)
+            guard score >= minimumScore else { continue }
+            if best == nil || score > best!.score {
+                best = (metric, score)
+            }
+        }
+        return best?.metric
+    }
+
+    private func quotaText(_ metric: QuotaMetric) -> String {
+        "\(metric.name) \(metric.context) \(metric.detail ?? "")"
+            .lowercased()
+            .replacingOccurrences(of: "_", with: "")
+            .replacingOccurrences(of: "-", with: "")
+    }
 }
 
-private struct MetricExtractor {
+struct MetricExtractor {
     let payload: Any
 
     func metrics() -> [QuotaMetric] {
         var output: [QuotaMetric] = []
         collect(from: payload, path: [], output: &output)
-        if output.isEmpty {
-            output.append(QuotaMetric(name: "5h quota", usedPercent: 0, remainingPercent: nil, resetAt: nil, detail: "quota source returned no limit fields"))
-        }
         return output
     }
 
@@ -209,7 +291,8 @@ private struct MetricExtractor {
             if let metric = metric(from: dict, path: path), !containsEquivalent(metric, in: output) {
                 output.append(metric)
             }
-            for (key, child) in dict {
+            for key in dict.keys.sorted() {
+                guard let child = dict[key] else { continue }
                 collect(from: child, path: path + [key], output: &output)
             }
         } else if let array = value as? [Any] {
@@ -220,38 +303,61 @@ private struct MetricExtractor {
     }
 
     private func metric(from dict: [String: Any], path: [String]) -> QuotaMetric? {
-        var lower: [String: Any] = [:]
-        for (key, value) in dict {
-            lower[key.lowercased()] = value
-        }
-        let percent = firstNumber(lower, keys: [
-            "used_percent", "usedpercentage", "used_percentage", "percent_used",
-            "usage_percent", "usagepercentage", "consumed_percent"
+        let fields = normalizedFields(from: dict)
+        let context = contextText(path: path, fields: fields)
+        let usedPercentCandidate = firstNumber(fields, keys: [
+            "usedpercent", "usedpercentage", "usagepercent", "usagepercentage",
+            "consumedpercent", "percentused", "utilization"
         ])
-        let remainingPercent = firstNumber(lower, keys: [
-            "remaining_percent", "remainingpercentage", "percent_remaining"
+        let remainingPercentCandidate = firstNumber(fields, keys: [
+            "remainingpercent", "remainingpercentage", "percentremaining",
+            "availablepercent", "availablepercentage", "leftpercent", "percentleft"
         ])
-        let used = firstNumber(lower, keys: ["used", "usage", "consumed", "current"])
-        let limit = firstNumber(lower, keys: ["limit", "total", "max", "quota"])
+        let genericPercent = firstNumber(fields, keys: ["percent", "percentage"])
+        let used = firstNumber(fields, keys: ["used", "usage", "consumed", "current"])
+        let remaining = firstNumber(fields, keys: ["remaining", "available", "left"])
+        let limit = firstNumber(fields, keys: ["limit", "total", "max", "quota", "allowed", "cap"])
 
         let usedPercent: Double?
-        if let percent {
-            usedPercent = normalizePercent(percent)
-        } else if let remainingPercent {
-            usedPercent = 1 - normalizePercent(remainingPercent)
+        let remainingPercent: Double?
+        if let remainingPercentCandidate {
+            remainingPercent = normalizePercent(remainingPercentCandidate)
+            usedPercent = 1 - remainingPercent!
+        } else if let usedPercentCandidate {
+            remainingPercent = nil
+            usedPercent = normalizePercent(usedPercentCandidate)
+        } else if let genericPercent, contextContainsRemaining(context) {
+            remainingPercent = normalizePercent(genericPercent)
+            usedPercent = 1 - remainingPercent!
+        } else if let genericPercent, contextContainsUsed(context) {
+            remainingPercent = nil
+            usedPercent = normalizePercent(genericPercent)
+        } else if let remaining, let limit, limit > 0 {
+            remainingPercent = normalizeRatio(remaining, limit: limit)
+            usedPercent = 1 - remainingPercent!
         } else if let used, let limit, limit > 0 {
+            remainingPercent = nil
             usedPercent = used / limit
         } else {
+            remainingPercent = nil
             usedPercent = nil
         }
 
         guard let usedPercent else { return nil }
-        let resetAt = firstDate(lower, keys: ["reset_at", "resets_at", "resetat", "resetsat", "reset_time", "next_reset_at"])
-        let name = firstString(lower, keys: ["name", "type", "window", "model", "bucket", "label"])
+        let resetAt = firstDate(fields, keys: [
+            "resetat", "resetsat", "resettime", "nextresetat",
+            "endsat", "expiresat", "resetsin", "resetin"
+        ])
+        let name = firstString(fields, keys: [
+            "name", "type", "window", "period", "interval", "model",
+            "bucket", "label", "limittype", "limitname"
+        ])
             ?? readableName(path: path)
         let detail: String?
         if let used, let limit {
             detail = "\(compactNumber(used)) / \(compactNumber(limit))"
+        } else if let remaining, let limit {
+            detail = "\(compactNumber(remaining)) left of \(compactNumber(limit))"
         } else {
             detail = nil
         }
@@ -259,42 +365,64 @@ private struct MetricExtractor {
         return QuotaMetric(
             name: name,
             usedPercent: usedPercent,
-            remainingPercent: remainingPercent.map(normalizePercent),
+            remainingPercent: remainingPercent,
             resetAt: resetAt,
-            detail: detail
+            detail: detail,
+            context: context
         )
     }
 
     private func containsEquivalent(_ metric: QuotaMetric, in metrics: [QuotaMetric]) -> Bool {
         metrics.contains { existing in
-            existing.name == metric.name && abs(existing.clampedUsed - metric.clampedUsed) < 0.001
+            existing.name == metric.name
+                && existing.context == metric.context
+                && abs(existing.remainingFraction - metric.remainingFraction) < 0.001
         }
     }
 
-    private func firstNumber(_ dict: [String: Any], keys: [String]) -> Double? {
+    private func normalizedFields(from dict: [String: Any]) -> [Field] {
+        dict.map { key, value in
+            Field(originalKey: key, normalizedKey: normalizeKey(key), value: value)
+        }
+    }
+
+    private func firstNumber(_ fields: [Field], keys: [String]) -> Double? {
         for key in keys {
-            guard let value = dict[key] else { continue }
-            if let number = value as? NSNumber { return number.doubleValue }
-            if let double = value as? Double { return double }
-            if let int = value as? Int { return Double(int) }
-            if let string = value as? String, let double = Double(string) { return double }
+            guard let field = fields.first(where: { $0.normalizedKey == key }) else { continue }
+            if let bool = field.value as? Bool {
+                _ = bool
+                continue
+            }
+            if let number = field.value as? NSNumber { return number.doubleValue }
+            if let double = field.value as? Double { return double }
+            if let int = field.value as? Int { return Double(int) }
+            if let string = field.value as? String, let double = Double(string) { return double }
         }
         return nil
     }
 
-    private func firstString(_ dict: [String: Any], keys: [String]) -> String? {
+    private func firstString(_ fields: [Field], keys: [String]) -> String? {
         for key in keys {
-            if let string = dict[key] as? String, !string.isEmpty { return string }
+            if let field = fields.first(where: { $0.normalizedKey == key }),
+               let string = field.value as? String,
+               !string.isEmpty {
+                return string
+            }
         }
         return nil
     }
 
-    private func firstDate(_ dict: [String: Any], keys: [String]) -> Date? {
+    private func firstDate(_ fields: [Field], keys: [String]) -> Date? {
         for key in keys {
-            guard let value = dict[key] else { continue }
-            if let string = value as? String, let date = ISO8601DateFormatter().date(from: string) { return date }
-            if let number = value as? NSNumber {
+            guard let field = fields.first(where: { $0.normalizedKey == key }) else { continue }
+            if let string = field.value as? String, let date = ISO8601DateFormatter().date(from: string) {
+                return date
+            }
+            if let number = field.value as? NSNumber {
                 let seconds = number.doubleValue
+                if field.normalizedKey.hasSuffix("in") {
+                    return Date().addingTimeInterval(seconds)
+                }
                 return Date(timeIntervalSince1970: seconds > 10_000_000_000 ? seconds / 1000 : seconds)
             }
         }
@@ -303,6 +431,31 @@ private struct MetricExtractor {
 
     private func normalizePercent(_ value: Double) -> Double {
         min(max(value > 1 ? value / 100 : value, 0), 1)
+    }
+
+    private func normalizeRatio(_ value: Double, limit: Double) -> Double {
+        min(max(value / limit, 0), 1)
+    }
+
+    private func normalizeKey(_ key: String) -> String {
+        key.lowercased().filter { $0.isLetter || $0.isNumber }
+    }
+
+    private func contextText(path: [String], fields: [Field]) -> String {
+        let stringValues = fields.compactMap { $0.value as? String }
+        return (path + fields.map(\.originalKey) + stringValues)
+            .joined(separator: " ")
+            .lowercased()
+    }
+
+    private func contextContainsRemaining(_ context: String) -> Bool {
+        context.contains("remaining") || context.contains("available") || context.contains("left")
+    }
+
+    private func contextContainsUsed(_ context: String) -> Bool {
+        context.contains("used")
+            || context.contains("consumed")
+            || (context.contains("usage") && !context.contains("limit"))
     }
 
     private func readableName(path: [String]) -> String {
@@ -319,5 +472,11 @@ private struct MetricExtractor {
         if value >= 1_000_000 { return String(format: "%.1fm", value / 1_000_000) }
         if value >= 1_000 { return String(format: "%.1fk", value / 1_000) }
         return String(format: "%.0f", value)
+    }
+
+    private struct Field {
+        let originalKey: String
+        let normalizedKey: String
+        let value: Any
     }
 }

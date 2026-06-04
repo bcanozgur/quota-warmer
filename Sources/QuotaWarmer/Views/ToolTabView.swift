@@ -70,7 +70,7 @@ struct ToolTabView: View {
         let percent = metric?.remainingFraction ?? 0
         let leading: String
         if metric == nil {
-            leading = "0% left"
+            leading = "-- left"
         } else {
             leading = "\(Int(percent * 100))% left"
         }
@@ -86,7 +86,10 @@ struct ToolTabView: View {
 
     private func resetText(for metric: QuotaMetric?, includeRemaining: Bool) -> String {
         guard let resetAt = metric?.resetAt else {
-            return toolState.isFetchingQuota ? "Updating..." : freshnessFallback
+            guard metric != nil else {
+                return toolState.isFetchingQuota ? "Updating..." : "No live quota"
+            }
+            return freshnessFallback
         }
         let seconds = max(0, Int(resetAt.timeIntervalSince(now)))
         let timeText: String
@@ -107,8 +110,8 @@ struct ToolTabView: View {
         switch toolState.freshness {
         case .fresh: return "Fresh"
         case .stale: return "Stale"
-        case .expired: return "Expired"
-        case .unknown: return "No data"
+        case .expired: return "Expired data"
+        case .unknown: return "No live quota"
         }
     }
 

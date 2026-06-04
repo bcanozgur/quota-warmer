@@ -79,8 +79,8 @@ struct MenuBarLabel: View {
                 Text(compactQuotaText(time: r, metric: st.primaryMetric))
                     .font(DS.mono(9, weight: .semibold))
                     .foregroundStyle(timeColor(r, accent: accent))
-            } else if st.freshness == .fresh {
-                Text("\(Int(st.windowProgress * 100))%")
+            } else if st.freshness == .fresh, let metric = st.primaryMetric {
+                Text("\(Int(metric.remainingFraction * 100))%")
                     .font(DS.mono(9, weight: .semibold))
                     .foregroundStyle(accent)
             }

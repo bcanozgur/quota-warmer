@@ -38,6 +38,19 @@ jobs:
       - name: Generate Xcode project
         run: xcodegen generate
 
+      - name: Run quota extractor regressions
+        run: |
+          swiftc \
+            -module-cache-path /tmp/QuotaWarmerQuotaModuleCache \
+            -parse-as-library \
+            Sources/QuotaWarmer/Models/ToolID.swift \
+            Sources/QuotaWarmer/Models/QuotaModels.swift \
+            Sources/QuotaWarmer/Services/CredentialStore.swift \
+            Sources/QuotaWarmer/Services/QuotaProvider.swift \
+            scripts/quota-extractor-regression.swift \
+            -o /tmp/quota-extractor-regression
+          /tmp/quota-extractor-regression
+
       - name: Build Debug
         run: |
           xcodebuild \

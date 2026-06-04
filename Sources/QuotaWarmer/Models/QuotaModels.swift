@@ -79,6 +79,23 @@ struct QuotaMetric: Identifiable {
     let remainingPercent: Double?
     let resetAt: Date?
     let detail: String?
+    let context: String
+
+    init(
+        name: String,
+        usedPercent: Double,
+        remainingPercent: Double?,
+        resetAt: Date?,
+        detail: String?,
+        context: String = ""
+    ) {
+        self.name = name
+        self.usedPercent = usedPercent
+        self.remainingPercent = remainingPercent
+        self.resetAt = resetAt
+        self.detail = detail
+        self.context = context
+    }
 
     var clampedUsed: Double {
         min(max(usedPercent, 0), 1)
