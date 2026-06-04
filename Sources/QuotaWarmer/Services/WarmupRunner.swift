@@ -51,6 +51,12 @@ class WarmupRunner {
             process.arguments = ["-lc", command]
             process.currentDirectoryURL = workspaceURL
             process.environment = environment(prependingPath: pathPrefix)
+            // The CLI (e.g. `codex exec`) reads stdin when it is not a tty and a
+            // prompt is also provided. A GUI agent app inherits an arbitrary
+            // stdin that can block forever, turning a fast warm-up into a 60s
+            // timeout — which throws `.timeout` and never reaches the exit-code
+            // fallback. Feed EOF immediately so the run is deterministic.
+            process.standardInput = FileHandle.nullDevice
 
             let outPipe = Pipe()
             let errPipe = Pipe()

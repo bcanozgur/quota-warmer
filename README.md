@@ -25,10 +25,10 @@ QuotaWarmer keeps the app running in the menu bar and periodically checks quota 
 
 ```bash
 claude --model haiku --effort low --no-session-persistence -p 'hi'
-codex exec --model 5.4-mini -c model_reasoning_effort="low" --skip-git-repo-check --ephemeral --ignore-rules 'hi'
+codex exec --model gpt-5.4-mini -c model_reasoning_effort="low" --skip-git-repo-check --ephemeral --ignore-rules 'hi'
 ```
 
-If `5.4-mini` is unavailable for the signed-in Codex account, QuotaWarmer retries once with the configured default Codex model and low reasoning effort.
+If `gpt-5.4-mini` is unavailable for the signed-in Codex account, QuotaWarmer retries once with the configured default Codex model and low reasoning effort.
 
 Local activity is scanned from:
 

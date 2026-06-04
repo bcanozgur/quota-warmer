@@ -404,8 +404,13 @@ final class AppState: ObservableObject {
         }
 
         addHistory(tool: tool, kind: .resetDetected, title: "Fresh reset detected", detail: reason)
-        await triggerWarmup(tool: tool, mode: "auto")
-        state.rememberAutoWindow(snapshot.rawWindowKey)
+        let succeeded = await triggerWarmup(tool: tool, mode: "auto")
+        // Only claim the window once a warm-up actually succeeded. Marking it on
+        // failure would burn the dedup slot and leave a fresh window unwarmed
+        // until the next reset; instead, let the next refresh retry (under backoff).
+        if succeeded {
+            state.rememberAutoWindow(snapshot.rawWindowKey)
+        }
     }
 
     private func refreshQuotaForAutomaticDecision(tool: ToolID) async {
@@ -414,14 +419,16 @@ final class AppState: ObservableObject {
         await refreshQuota(for: tool, allowAutomaticWarmup: false)
     }
 
-    private func triggerWarmup(tool: ToolID, mode: String) async {
+    @discardableResult
+    private func triggerWarmup(tool: ToolID, mode: String) async -> Bool {
         let state = state(for: tool)
-        guard !state.isWarming else { return }
+        guard !state.isWarming else { return false }
 
         state.isWarming = true
         state.errorMessage = nil
         notifications.cancelAll(for: tool)
 
+        var succeeded = false
         do {
             let result = try await runner.warmup(tool)
             let entry = WarmupLog(timestamp: result.date, mode: mode, command: result.command, output: result.output)
@@ -436,6 +443,7 @@ final class AppState: ObservableObject {
             )
             notifications.notifyActivated(tool: tool)
             await refreshQuota(for: tool, allowAutomaticWarmup: false)
+            succeeded = true
         } catch {
             state.errorMessage = error.localizedDescription
             state.backoffUntil = Date().addingTimeInterval(nextBackoff(for: state))
@@ -443,6 +451,7 @@ final class AppState: ObservableObject {
         }
 
         state.isWarming = false
+        return succeeded
     }
 
     private func applyQuotaError(_ error: Error, to state: ToolState) {
