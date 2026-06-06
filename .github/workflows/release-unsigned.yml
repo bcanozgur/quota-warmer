@@ -1,9 +1,15 @@
-name: Release (signed + notarized)
+name: Release (unsigned)
 
-# Manual-only: requires Apple Developer signing secrets (APPLE_CERTIFICATE,
-# APPLE_ID, APPLE_TEAM_ID, ...). Tag pushes are handled by release-unsigned.yml
-# instead. Switch this back to a tag trigger once the signing secrets are set.
+# Builds an ad-hoc signed (not Apple-notarized) DMG and publishes a GitHub
+# Release. Requires no Apple Developer secrets — only the built-in GITHUB_TOKEN.
+# The app is ad-hoc signed so it runs after download, but it is NOT notarized,
+# so users must clear Gatekeeper quarantine on first launch (see release notes
+# and the Homebrew cask caveats).
+
 on:
+  push:
+    tags:
+      - "v*.*.*"
   workflow_dispatch:
     inputs:
       version:
@@ -22,12 +28,12 @@ env:
 
 jobs:
   release:
-    name: Signed, Notarized DMG
+    name: Ad-hoc signed DMG
     runs-on: macos-15
-    timeout-minutes: 45
+    timeout-minutes: 30
 
     steps:
-      - name: Checkout tag
+      - name: Checkout
         uses: actions/checkout@v4
         with:
           ref: ${{ github.ref_name }}
@@ -70,50 +76,11 @@ jobs:
             exit 1
           fi
 
-      - name: Validate signing secrets
-        shell: bash
-        env:
-          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
-          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
-        run: |
-          set -euo pipefail
-          for name in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID APPLE_SIGNING_IDENTITY KEYCHAIN_PASSWORD; do
-            if [[ -z "${!name}" ]]; then
-              echo "Missing required secret: ${name}"
-              exit 1
-            fi
-          done
-
-      - name: Import Apple Developer certificate
-        shell: bash
-        env:
-          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
-          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
-        run: |
-          set -euo pipefail
-          echo "${APPLE_CERTIFICATE}" | base64 --decode > certificate.p12
-          security create-keychain -p "${KEYCHAIN_PASSWORD}" build.keychain
-          security default-keychain -s build.keychain
-          security unlock-keychain -p "${KEYCHAIN_PASSWORD}" build.keychain
-          security set-keychain-settings -lut 21600 build.keychain
-          security import certificate.p12 -k build.keychain -P "${APPLE_CERTIFICATE_PASSWORD}" -T /usr/bin/codesign -T /usr/bin/security
-          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "${KEYCHAIN_PASSWORD}" build.keychain
-          rm certificate.p12
-
       - name: Generate Xcode project
         run: xcodegen generate
 
-      - name: Build release app
+      - name: Build release app (unsigned)
         shell: bash
-        env:
-          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
           set -euo pipefail
           xcodebuild \
@@ -124,17 +91,14 @@ jobs:
             -destination "generic/platform=macOS" \
             MARKETING_VERSION="${{ steps.version.outputs.version }}" \
             CURRENT_PROJECT_VERSION="${GITHUB_RUN_NUMBER}" \
-            CODE_SIGN_STYLE=Manual \
-            CODE_SIGN_IDENTITY="${APPLE_SIGNING_IDENTITY}" \
-            DEVELOPMENT_TEAM="${APPLE_TEAM_ID}" \
-            OTHER_CODE_SIGN_FLAGS="--timestamp" \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO \
             build
 
-      - name: Locate and verify app
+      - name: Locate and ad-hoc sign app
         id: app
         shell: bash
-        env:
-          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
         run: |
           set -euo pipefail
           APP_PATH=$(find DerivedData -name "${APP_NAME}.app" -maxdepth 8 | head -1)
@@ -142,8 +106,9 @@ jobs:
             echo "Could not locate built app."
             exit 1
           fi
+          # Ad-hoc signature ("-") so the app launches on Apple Silicon after download.
+          codesign --force --deep --sign - "${APP_PATH}"
           codesign --verify --deep --strict --verbose=2 "${APP_PATH}"
-          codesign --display --verbose=4 "${APP_PATH}"
           echo "app_path=${APP_PATH}" >> "${GITHUB_OUTPUT}"
 
       - name: Create DMG
@@ -166,32 +131,7 @@ jobs:
             "${DMG_NAME}"
           echo "name=${DMG_NAME}" >> "${GITHUB_OUTPUT}"
 
-      - name: Sign DMG
-        shell: bash
-        env:
-          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-        run: |
-          set -euo pipefail
-          codesign --force --timestamp --sign "${APPLE_SIGNING_IDENTITY}" "${{ steps.dmg.outputs.name }}"
-          codesign --verify --verbose=2 "${{ steps.dmg.outputs.name }}"
-
-      - name: Notarize DMG
-        shell: bash
-        env:
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-        run: |
-          set -euo pipefail
-          xcrun notarytool submit "${{ steps.dmg.outputs.name }}" \
-            --apple-id "${APPLE_ID}" \
-            --password "${APPLE_PASSWORD}" \
-            --team-id "${APPLE_TEAM_ID}" \
-            --wait
-          xcrun stapler staple "${{ steps.dmg.outputs.name }}"
-          xcrun stapler validate "${{ steps.dmg.outputs.name }}"
-
-      - name: Checksum and update manifest
+      - name: Checksum and manifest
         id: manifest
         shell: bash
         run: |
@@ -223,14 +163,28 @@ jobs:
           cat > RELEASE_NOTES.md <<EOF
           ## QuotaWarmer ${{ steps.version.outputs.version }}
 
-          Signed and notarized macOS menu bar app for starting Claude Code and Codex quota windows with minimal warmup messages.
+          macOS menu bar app for starting Claude Code and Codex quota windows with minimal warmup messages.
 
-          ### Install
+          > This build is **ad-hoc signed but not Apple-notarized**. macOS Gatekeeper
+          > will warn on first launch. Clear quarantine once after installing:
+          >
+          > \`\`\`
+          > xattr -dr com.apple.quarantine /Applications/QuotaWarmer.app
+          > \`\`\`
+          >
+          > or right-click the app and choose **Open** the first time.
 
-          1. Download `${{ steps.dmg.outputs.name }}` below.
-          2. Open the DMG.
-          3. Drag **QuotaWarmer.app** to Applications.
-          4. Open QuotaWarmer from Applications.
+          ### Install via Homebrew
+
+          \`\`\`
+          brew install --cask bcanozgur/tap/quotawarmer
+          \`\`\`
+
+          ### Install manually
+
+          1. Download \`${{ steps.dmg.outputs.name }}\` below.
+          2. Open the DMG and drag **QuotaWarmer.app** to Applications.
+          3. Clear quarantine (command above) or right-click → Open.
 
           ### Verification
 
@@ -240,16 +194,6 @@ jobs:
           $(cat "${{ steps.dmg.outputs.name }}.sha256")
           \`\`\`
           EOF
-
-      - name: Upload workflow artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ env.APP_NAME }}-${{ steps.version.outputs.version }}
-          path: |
-            ${{ steps.dmg.outputs.name }}
-            ${{ steps.dmg.outputs.name }}.sha256
-            latest.json
-          retention-days: 30
 
       - name: Create GitHub release
         if: startsWith(github.ref, 'refs/tags/')
@@ -264,15 +208,3 @@ jobs:
             latest.json
           draft: false
           prerelease: ${{ contains(steps.version.outputs.version, '-') }}
-
-      - name: Verify GitHub release assets
-        if: startsWith(github.ref, 'refs/tags/')
-        shell: bash
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          set -euo pipefail
-          ASSETS=$(gh release view "${{ steps.version.outputs.tag }}" --repo "${GITHUB_REPOSITORY}" --json assets --jq '.assets[].name' | tr -d '\r')
-          printf '%s\n' "${ASSETS}" | grep -Fxq "${{ steps.dmg.outputs.name }}" || { echo "Missing DMG asset"; exit 1; }
-          printf '%s\n' "${ASSETS}" | grep -Fxq "${{ steps.dmg.outputs.name }}.sha256" || { echo "Missing checksum asset"; exit 1; }
-          printf '%s\n' "${ASSETS}" | grep -Fxq "latest.json" || { echo "Missing latest.json asset"; exit 1; }
