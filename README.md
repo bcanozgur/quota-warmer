@@ -52,16 +52,30 @@ QuotaWarmer shows setup guidance on first launch if a required CLI is missing.
 
 ## Install
 
-1. Download the latest `QuotaWarmer-<version>-universal.dmg` from [Releases](https://github.com/bcanozgur/quota-warmer/releases).
-2. Open the DMG.
-3. Drag **QuotaWarmer.app** to **Applications**.
-4. Launch **QuotaWarmer** from Applications.
-
-Release builds are signed and notarized. For local unsigned builds, you may need to clear quarantine once:
+### Homebrew (recommended)
 
 ```bash
-xattr -cr /Applications/QuotaWarmer.app
+brew install --cask bcanozgur/tap/quotawarmer
 ```
+
+Update later with `brew upgrade --cask quotawarmer`.
+
+### Manual download
+
+1. Download the latest `QuotaWarmer-<version>-universal.dmg` from [Releases](https://github.com/bcanozgur/quota-warmer/releases).
+2. Open the DMG and drag **QuotaWarmer.app** to **Applications**.
+3. Launch **QuotaWarmer** from Applications.
+
+### First launch (Gatekeeper)
+
+QuotaWarmer is ad-hoc signed but **not Apple-notarized**, so macOS quarantines it on
+download. Clear the quarantine once after installing:
+
+```bash
+xattr -dr com.apple.quarantine "/Applications/QuotaWarmer.app"
+```
+
+…or right-click **QuotaWarmer.app** in Applications and choose **Open** the first time.
 
 ## Build From Source
 
