@@ -51,10 +51,12 @@ struct MenuBarLabel: View {
     private func composeItems() -> [MenuBarComposer.Item] {
         visibleTools.map { tool in
             let st = appState.state(for: tool)
-            let prominent = (st.isActive && st.freshness == .fresh) || st.isWarming
+            let prominent = st.isWarming || (st.isActive && st.sourceHealth == .healthy && st.freshness == .fresh)
 
             let text: String
-            if st.isWarming {
+            if st.authStatus == .failed || st.authStatus == .missing {
+                text = "login"
+            } else if st.isWarming {
                 text = "warming"
             } else if let r = st.timeUntilReset {
                 text = compactQuotaText(time: r, metric: st.primaryMetric)

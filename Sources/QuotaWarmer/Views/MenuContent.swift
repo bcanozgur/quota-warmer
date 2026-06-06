@@ -171,7 +171,7 @@ struct MenuContent: View {
             if state.isFetchingQuota { return "Updating..." }
             if let next = state.nextRefreshAt { return "Next update in \(compactCountdown(next))" }
         }
-        return "Ready"
+        return "Idle"
     }
 
     private var isFooterRefreshing: Bool {

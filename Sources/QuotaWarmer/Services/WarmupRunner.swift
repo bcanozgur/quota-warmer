@@ -2,6 +2,7 @@ import Foundation
 
 enum WarmupError: LocalizedError {
     case cliNotFound(String)
+    case authenticationRequired(String)
     case exitCode(Int32)
     case timeout
     case workspaceUnavailable
@@ -9,6 +10,7 @@ enum WarmupError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .cliNotFound(let cmd): return "CLI not found: \(cmd)"
+        case .authenticationRequired(let message): return message
         case .exitCode(let code):   return "Process exited with code \(code)"
         case .timeout:              return "Warmup timed out after 60s"
         case .workspaceUnavailable: return "Could not prepare isolated warmup directory"
@@ -22,16 +24,56 @@ struct WarmupResult {
     let output: String
 }
 
+enum CLIAuthenticationStatus: Equatable {
+    case authenticated(String?)
+    case notAuthenticated(String)
+    case unknown(String)
+
+    var isAuthenticated: Bool {
+        if case .authenticated = self { return true }
+        return false
+    }
+}
+
+struct ClaudeCLIAuthSnapshot {
+    let loggedIn: Bool
+    let authMethod: String?
+    let apiProvider: String?
+
+    static func parse(_ text: String) -> ClaudeCLIAuthSnapshot? {
+        guard let data = text.data(using: .utf8),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let loggedIn = object["loggedIn"] as? Bool else {
+            return nil
+        }
+        return ClaudeCLIAuthSnapshot(
+            loggedIn: loggedIn,
+            authMethod: object["authMethod"] as? String,
+            apiProvider: object["apiProvider"] as? String
+        )
+    }
+}
+
 class WarmupRunner {
+    static let claudeLoginRequiredMessage = "Claude Code is not logged in. Run `claude auth login` in Terminal, then retry warmup."
 
     func warmup(_ tool: ToolID) async throws -> WarmupResult {
         let cliName = tool == .claude ? "claude" : "codex"
         guard let cliURL = await resolveCLI(named: cliName) else {
             throw WarmupError.cliNotFound(cliName)
         }
-        let workspaceURL = try warmupWorkspaceURL()
         let pathPrefix = cliURL.deletingLastPathComponent().path
 
+        if tool == .claude {
+            switch await claudeAuthenticationStatus(pathPrefix: pathPrefix) {
+            case .authenticated, .unknown:
+                break
+            case .notAuthenticated(let message):
+                throw WarmupError.authenticationRequired(message)
+            }
+        }
+
+        let workspaceURL = try warmupWorkspaceURL()
         do {
             return try await runWarmupCommand(tool.warmupCommand, cliName: cliName, pathPrefix: pathPrefix, workspaceURL: workspaceURL)
         } catch WarmupError.exitCode where tool.fallbackWarmupCommand != nil {
@@ -39,9 +81,17 @@ class WarmupRunner {
             return WarmupResult(
                 date: result.date,
                 command: result.command,
-                output: "Primary warmup model was unavailable; retried with configured Codex default model.\n\(result.output)"
+                output: "Primary warmup command failed; retried with the configured fallback command.\n\(result.output)"
             )
         }
+    }
+
+    func cliAuthenticationStatus(for tool: ToolID) async -> CLIAuthenticationStatus {
+        guard tool == .claude else { return .authenticated(nil) }
+        guard let cliURL = await resolveCLI(named: "claude") else {
+            return .unknown("Claude CLI not found")
+        }
+        return await claudeAuthenticationStatus(pathPrefix: cliURL.deletingLastPathComponent().path)
     }
 
     private func runWarmupCommand(_ command: String, cliName: String, pathPrefix: String, workspaceURL: URL) async throws -> WarmupResult {
@@ -87,6 +137,8 @@ class WarmupRunner {
 
                 if p.terminationStatus == 0 {
                     continuation.resume(returning: WarmupResult(date: Date(), command: command, output: combined.isEmpty ? "(no output)" : combined))
+                } else if cliName == "claude", Self.isClaudeAuthenticationFailure(combined) {
+                    continuation.resume(throwing: WarmupError.authenticationRequired(Self.claudeLoginRequiredMessage))
                 } else {
                     continuation.resume(throwing: WarmupError.exitCode(p.terminationStatus))
                 }
@@ -106,6 +158,95 @@ class WarmupRunner {
     func cliMissing(_ tool: ToolID) async -> Bool {
         let name = tool == .claude ? "claude" : "codex"
         return await resolveCLI(named: name) == nil
+    }
+
+    private func claudeAuthenticationStatus(pathPrefix: String) async -> CLIAuthenticationStatus {
+        let result = await runShellCommand(
+            "claude auth status",
+            pathPrefix: pathPrefix,
+            currentDirectoryURL: nil,
+            timeout: 15
+        )
+
+        if let snapshot = ClaudeCLIAuthSnapshot.parse(result.output) {
+            return snapshot.loggedIn
+                ? .authenticated(snapshot.authMethod)
+                : .notAuthenticated(Self.claudeLoginRequiredMessage)
+        }
+
+        if result.exitCode != 0, Self.isClaudeAuthenticationFailure(result.output) {
+            return .notAuthenticated(Self.claudeLoginRequiredMessage)
+        }
+
+        if result.exitCode != 0 {
+            return .unknown("Claude auth status failed")
+        }
+
+        return .authenticated(nil)
+    }
+
+    private static func isClaudeAuthenticationFailure(_ output: String) -> Bool {
+        let text = output.lowercased()
+        return text.contains("not logged in")
+            || text.contains("please run /login")
+            || text.contains("run claude auth login")
+    }
+
+    private struct ShellCommandResult {
+        let exitCode: Int32
+        let output: String
+    }
+
+    private func runShellCommand(
+        _ command: String,
+        pathPrefix: String?,
+        currentDirectoryURL: URL?,
+        timeout: TimeInterval
+    ) async -> ShellCommandResult {
+        await withCheckedContinuation { continuation in
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: "/bin/zsh")
+            process.arguments = ["-lc", command]
+            process.currentDirectoryURL = currentDirectoryURL
+            process.environment = environment(prependingPath: pathPrefix)
+            process.standardInput = FileHandle.nullDevice
+
+            let outPipe = Pipe()
+            let errPipe = Pipe()
+            process.standardOutput = outPipe
+            process.standardError = errPipe
+
+            let gate = WarmupContinuationGate()
+            let timeoutWork = DispatchWorkItem {
+                process.terminate()
+                if gate.tryResume() {
+                    continuation.resume(returning: ShellCommandResult(exitCode: -1, output: "timeout"))
+                }
+            }
+
+            DispatchQueue.global().asyncAfter(deadline: .now() + timeout, execute: timeoutWork)
+
+            process.terminationHandler = { p in
+                timeoutWork.cancel()
+                guard gate.tryResume() else { return }
+                let outData = outPipe.fileHandleForReading.readDataToEndOfFile()
+                let errData = errPipe.fileHandleForReading.readDataToEndOfFile()
+                let combined = [outData, errData]
+                    .compactMap { String(data: $0, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) }
+                    .filter { !$0.isEmpty }
+                    .joined(separator: "\n")
+                continuation.resume(returning: ShellCommandResult(exitCode: p.terminationStatus, output: combined))
+            }
+
+            do {
+                try process.run()
+            } catch {
+                timeoutWork.cancel()
+                if gate.tryResume() {
+                    continuation.resume(returning: ShellCommandResult(exitCode: -1, output: error.localizedDescription))
+                }
+            }
+        }
     }
 
     private func resolveCLI(named name: String) async -> URL? {

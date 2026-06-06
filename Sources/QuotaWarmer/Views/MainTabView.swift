@@ -29,11 +29,49 @@ struct MainTabView: View {
                     .foregroundStyle(DS.C.textMuted)
             }
             Spacer()
-            Toggle("", isOn: $appState.globalPassive)
-                .toggleStyle(.switch)
-                .scaleEffect(0.70)
-                .tint(DS.C.red)
+            automationControl
         }
+    }
+
+    private var automationControl: some View {
+        let paused = appState.globalPassive
+        let helpText = paused ? "Resume automatic warmups" : "Pause all automatic warmups"
+        let stateColor = paused ? DS.C.red : DS.C.green
+
+        return HStack(spacing: 7) {
+            HStack(spacing: 5) {
+                Circle()
+                    .fill(stateColor)
+                    .frame(width: 6, height: 6)
+                Text(paused ? "Paused" : "Active")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(DS.C.textSub)
+                    .lineLimit(1)
+            }
+            .padding(.horizontal, 9)
+            .frame(height: 28)
+            .background(stateColor.opacity(0.08), in: RoundedRectangle(cornerRadius: 6))
+            .overlay(
+                RoundedRectangle(cornerRadius: 6)
+                    .stroke(stateColor.opacity(0.28), lineWidth: 1)
+            )
+
+            Button(action: { appState.globalPassive.toggle() }) {
+                Image(systemName: paused ? "play.fill" : "pause.fill")
+                    .font(.system(size: 12, weight: .bold))
+                    .foregroundStyle(paused ? DS.C.green : DS.C.red)
+                    .frame(width: 32, height: 28)
+                    .background(DS.C.surfaceHigh, in: RoundedRectangle(cornerRadius: 6))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 6)
+                            .stroke(paused ? DS.C.green.opacity(0.35) : DS.C.red.opacity(0.30), lineWidth: 1)
+                    )
+            }
+            .buttonStyle(.plain)
+            .help(helpText)
+            .accessibilityLabel(Text(helpText))
+        }
+        .help(helpText)
     }
 
     private var providerList: some View {
@@ -80,6 +118,18 @@ struct MainTabView: View {
 
                 quotaLine("5h", metric: state.primaryMetric, refreshing: state.isFetchingQuota)
                 quotaLine("Week", metric: state.weeklyMetric, refreshing: state.isFetchingQuota)
+                if let credentialText = credentialSourceText(state) {
+                    HStack(spacing: 4) {
+                        Image(systemName: state.authRetryScheduledAt == nil ? "key.fill" : "clock.arrow.circlepath")
+                            .font(.system(size: 8.5, weight: .semibold))
+                        Text(credentialText)
+                            .font(.system(size: 9.5, weight: .medium))
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                    }
+                    .foregroundStyle(state.sourceHealth == .authFailure ? DS.C.red : DS.C.textMuted)
+                    .help(credentialText)
+                }
             }
 
             VStack(spacing: 8) {
@@ -92,7 +142,7 @@ struct MainTabView: View {
                 .tint(DS.C.accent(tool))
 
                 Button(action: { Task { await appState.refreshQuota(for: tool) } }) {
-                    Image(systemName: state.isFetchingQuota ? "hourglass" : "arrow.clockwise")
+                    Image(systemName: state.isFetchingQuota ? "hourglass" : state.quotaBackoffActive ? "clock.arrow.circlepath" : "arrow.clockwise")
                         .font(.system(size: 11.5, weight: .semibold))
                         .foregroundStyle(DS.C.textSub)
                         .frame(width: 29, height: 27)
@@ -100,7 +150,7 @@ struct MainTabView: View {
                         .overlay(RoundedRectangle(cornerRadius: DS.R.sm).stroke(DS.C.border))
                 }
                 .buttonStyle(.plain)
-                .disabled(state.isFetchingQuota)
+                .disabled(state.isFetchingQuota || state.quotaBackoffActive)
             }
             .frame(width: 44)
         }
@@ -191,9 +241,25 @@ struct MainTabView: View {
     private func providerStatus(_ state: ToolState) -> String {
         if state.isFetchingQuota { return "updating" }
         if state.isWarming { return "warming" }
+        if let retryAt = state.authRetryScheduledAt, retryAt > Date() {
+            return "recheck at \(shortClock(retryAt))"
+        }
         if let error = state.errorMessage, !error.isEmpty { return error }
         if let last = state.lastSuccessfulFetch { return "checked \(relativeTime(last))" }
         return state.isActive ? "active" : "passive"
+    }
+
+    private func credentialSourceText(_ state: ToolState) -> String? {
+        if let retryAt = state.authRetryScheduledAt, retryAt > Date() {
+            return "Auth recheck at \(shortClock(retryAt))"
+        }
+        if let source = state.credentialSource, !source.isEmpty {
+            return "Credential: \(source)"
+        }
+        if state.sourceHealth == .authFailure {
+            return "Credential not available"
+        }
+        return nil
     }
 
     private func relativeTime(_ date: Date) -> String {
@@ -201,6 +267,13 @@ struct MainTabView: View {
         if seconds < 60 { return "\(seconds)s ago" }
         if seconds < 3600 { return "\(seconds / 60)m ago" }
         return "\(seconds / 3600)h ago"
+    }
+
+    private func shortClock(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.dateStyle = .none
+        formatter.timeStyle = .short
+        return formatter.string(from: date)
     }
 }
 

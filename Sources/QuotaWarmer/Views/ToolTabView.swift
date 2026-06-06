@@ -50,6 +50,14 @@ struct ToolTabView: View {
             ForEach(rows) { row in
                 QuotaRowView(row: row, refreshing: toolState.isFetchingQuota)
             }
+            if let sourceText = credentialSourceText {
+                Label(sourceText, systemImage: toolState.authRetryScheduledAt == nil ? "key.fill" : "clock.arrow.circlepath")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(toolState.sourceHealth == .authFailure ? DS.C.red : DS.C.textMuted)
+                    .lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .help(sourceText)
+            }
             if let error = toolState.errorMessage {
                 Text(error)
                     .font(.system(size: 11.5))
@@ -57,6 +65,19 @@ struct ToolTabView: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
+    }
+
+    private var credentialSourceText: String? {
+        if let retryAt = toolState.authRetryScheduledAt, retryAt > now {
+            return "Auth recheck scheduled at \(shortClock(retryAt))"
+        }
+        if let source = toolState.credentialSource, !source.isEmpty {
+            return "Credential source: \(source)"
+        }
+        if toolState.sourceHealth == .authFailure {
+            return "Credential source unavailable"
+        }
+        return nil
     }
 
     private var rows: [QuotaDisplayRow] {
@@ -79,15 +100,22 @@ struct ToolTabView: View {
             title: title,
             progressFraction: percent,
             leadingValue: leading,
-            resetText: resetText(for: metric, includeRemaining: title == "5h Window"),
+            resetText: resetText(
+                for: metric,
+                resetAt: title == "5h Window" ? toolState.resetAt : metric?.resetAt,
+                includeRemaining: title == "5h Window"
+            ),
             metricID: metric?.id
         )
     }
 
-    private func resetText(for metric: QuotaMetric?, includeRemaining: Bool) -> String {
-        guard let resetAt = metric?.resetAt else {
+    private func resetText(for metric: QuotaMetric?, resetAt: Date?, includeRemaining: Bool) -> String {
+        guard let resetAt else {
             guard metric != nil else {
                 return toolState.isFetchingQuota ? "Updating..." : "No live quota"
+            }
+            if let metric, metric.isIdleFiveHourWindow {
+                return "\(Int(metric.remainingFraction * 100))% left"
             }
             return freshnessFallback
         }
@@ -113,6 +141,13 @@ struct ToolTabView: View {
         case .expired: return "Expired data"
         case .unknown: return "No live quota"
         }
+    }
+
+    private func shortClock(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.dateStyle = .none
+        formatter.timeStyle = .short
+        return formatter.string(from: date)
     }
 
     private var activeControl: some View {
@@ -147,7 +182,7 @@ struct ToolTabView: View {
             .disabled(toolState.isWarming)
 
             Button(action: onRefresh) {
-                Label("Refresh", systemImage: toolState.isFetchingQuota ? "hourglass" : "arrow.clockwise")
+                Label("Refresh", systemImage: toolState.isFetchingQuota ? "hourglass" : toolState.quotaBackoffActive ? "clock.arrow.circlepath" : "arrow.clockwise")
                     .font(.system(size: 12, weight: .semibold))
                     .frame(height: 32)
                     .padding(.horizontal, 12)
@@ -155,7 +190,7 @@ struct ToolTabView: View {
                     .background(DS.C.surfaceHigh, in: RoundedRectangle(cornerRadius: 6))
             }
             .buttonStyle(.plain)
-            .disabled(toolState.isFetchingQuota)
+            .disabled(toolState.isFetchingQuota || toolState.quotaBackoffActive)
         }
     }
 }

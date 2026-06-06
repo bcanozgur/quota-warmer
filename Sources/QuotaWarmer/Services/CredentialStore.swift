@@ -21,6 +21,18 @@ final class CredentialStore {
             }
         }
 
+        if let token = ProcessInfo.processInfo.environment["CLAUDE_CODE_OAUTH_TOKEN"]?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+           !token.isEmpty {
+            return Credential(
+                accessToken: token,
+                refreshToken: nil,
+                accountID: nil,
+                source: "env CLAUDE_CODE_OAUTH_TOKEN",
+                expiresAt: nil
+            )
+        }
+
         let url = fileManager.homeDirectoryForCurrentUser
             .appendingPathComponent(".claude/.credentials.json")
         if let data = try? Data(contentsOf: url),
@@ -51,6 +63,23 @@ final class CredentialStore {
         }
 
         throw CredentialError.missing("Codex")
+    }
+
+    func credentialSourceSummary(for tool: ToolID) -> String {
+        switch tool {
+        case .claude:
+            return (claudeKeychainServices().map { "Keychain \($0)" } + [
+                "env CLAUDE_CODE_OAUTH_TOKEN",
+                "~/.claude/.credentials.json"
+            ]).joined(separator: ", ")
+        case .codex:
+            return [
+                "$CODEX_HOME/auth.json",
+                "~/.config/codex/auth.json",
+                "~/.codex/auth.json",
+                "Keychain Codex Auth"
+            ].joined(separator: ", ")
+        }
     }
 
     private func claudeKeychainServices() -> [String] {

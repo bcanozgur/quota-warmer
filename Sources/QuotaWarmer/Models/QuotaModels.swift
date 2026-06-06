@@ -63,6 +63,82 @@ enum HistoryKind: String {
     case updateCheck
 }
 
+enum ScheduledWarmupSkipReason: String {
+    case alreadySucceeded
+    case beforeScheduledTime
+    case outsideCatchUpHorizon
+    case activeWindowInProgress
+    case userAlreadyActive
+}
+
+enum ScheduledWarmupDecision {
+    case run(caughtUp: Bool)
+    case skip(ScheduledWarmupSkipReason)
+
+    var shouldRun: Bool {
+        if case .run = self { return true }
+        return false
+    }
+
+    var caughtUp: Bool {
+        if case .run(let caughtUp) = self { return caughtUp }
+        return false
+    }
+}
+
+struct MorningWarmupPolicy {
+    static let catchUpLatenessThreshold: TimeInterval = 15 * 60
+
+    static func resolvedLastSuccessfulDay(
+        perToolDay: String?,
+        legacyDay: String?,
+        currentDay: String
+    ) -> String? {
+        if let perToolDay {
+            return perToolDay
+        }
+        return legacyDay == currentDay ? legacyDay : nil
+    }
+
+    static func decision(
+        now: Date,
+        scheduledAt: Date,
+        dayKey: String,
+        lastSuccessfulDay: String?,
+        lastActivity: Date?,
+        activeWindowStartedAt: Date?,
+        windowDuration: TimeInterval,
+        catchUpHorizon: TimeInterval? = nil,
+        catchUpLatenessThreshold: TimeInterval = Self.catchUpLatenessThreshold
+    ) -> ScheduledWarmupDecision {
+        if lastSuccessfulDay == dayKey {
+            return .skip(.alreadySucceeded)
+        }
+
+        let lateness = now.timeIntervalSince(scheduledAt)
+        guard lateness >= 0 else {
+            return .skip(.beforeScheduledTime)
+        }
+
+        let horizon = catchUpHorizon ?? windowDuration
+        guard lateness <= horizon else {
+            return .skip(.outsideCatchUpHorizon)
+        }
+
+        if let activeWindowStartedAt,
+           activeWindowStartedAt <= now,
+           activeWindowStartedAt.addingTimeInterval(windowDuration) > now {
+            return .skip(.activeWindowInProgress)
+        }
+
+        if let lastActivity, lastActivity >= scheduledAt {
+            return .skip(.userAlreadyActive)
+        }
+
+        return .run(caughtUp: lateness > catchUpLatenessThreshold)
+    }
+}
+
 struct HistoryEvent: Identifiable {
     let id = UUID()
     let timestamp: Date
@@ -107,6 +183,10 @@ struct QuotaMetric: Identifiable {
         }
         return min(max(1 - clampedUsed, 0), 1)
     }
+
+    var isIdleFiveHourWindow: Bool {
+        resetAt == nil && context.contains("idle") && name.lowercased().contains("5h")
+    }
 }
 
 struct QuotaSnapshot {
@@ -125,6 +205,30 @@ struct QuotaSnapshot {
         if age <= 5 * 60 { return .fresh }
         if age <= 30 * 60 { return .stale }
         return .expired
+    }
+
+    func canAutoWarm(
+        now: Date = Date(),
+        windowDuration: TimeInterval,
+        remainingThreshold: Double = 0.95,
+        freshWindowGrace: TimeInterval = 10 * 60
+    ) -> Bool {
+        guard freshness(now: now) == .fresh,
+              let metric = fiveHour,
+              let resetAt = metric.resetAt,
+              metric.remainingFraction >= remainingThreshold else {
+            return false
+        }
+
+        let inferredWindowStart = resetAt.addingTimeInterval(-windowDuration)
+        let windowAge = now.timeIntervalSince(inferredWindowStart)
+        return windowAge >= 0 && windowAge <= freshWindowGrace
+    }
+
+    func isClaimableAutoWindow(previousFetchedAt: Date?, now: Date = Date()) -> Bool {
+        guard freshness(now: now) == .fresh else { return false }
+        guard let previousFetchedAt else { return true }
+        return fetchedAt > previousFetchedAt
     }
 }
 
@@ -156,7 +260,7 @@ enum CredentialError: LocalizedError {
 enum QuotaProviderError: LocalizedError {
     case missingCredentials(String)
     case authFailure(String)
-    case rateLimited(String)
+    case rateLimited(String, retryAfter: TimeInterval?)
     case unavailable(String)
     case malformed(String)
 
@@ -164,7 +268,7 @@ enum QuotaProviderError: LocalizedError {
         switch self {
         case .missingCredentials(let msg): return msg
         case .authFailure(let msg): return msg
-        case .rateLimited(let msg): return msg
+        case .rateLimited(let msg, _): return msg
         case .unavailable(let msg): return msg
         case .malformed(let msg): return msg
         }

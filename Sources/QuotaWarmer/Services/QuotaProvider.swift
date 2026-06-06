@@ -24,7 +24,9 @@ final class QuotaProvider: QuotaProviding {
         do {
             credential = try await credentialStore.credential(for: .claude)
         } catch {
-            throw QuotaProviderError.missingCredentials("Claude credentials not found")
+            throw QuotaProviderError.missingCredentials(
+                "Claude credentials not found; checked \(credentialStore.credentialSourceSummary(for: .claude))"
+            )
         }
 
         if credential.isExpired, let refreshed = try? await refreshClaudeCredential(credential) {
@@ -35,13 +37,13 @@ final class QuotaProvider: QuotaProviding {
         do {
             let payload = try await requestJSON(url: url, credential: credential)
             return try requireRecognizedMetrics(
-                snapshot(tool: .claude, source: "Claude OAuth usage", corroboratingSource: nil, payload: payload, message: credential.source)
+                claudeSnapshot(payload: payload, source: "Claude OAuth usage", corroboratingSource: nil, message: credential.source)
             )
         } catch QuotaProviderError.authFailure where credential.refreshToken != nil {
             let refreshed = try await refreshClaudeCredential(credential)
             let payload = try await requestJSON(url: url, credential: refreshed)
             return try requireRecognizedMetrics(
-                snapshot(tool: .claude, source: "Claude OAuth usage", corroboratingSource: nil, payload: payload, message: refreshed.source)
+                claudeSnapshot(payload: payload, source: "Claude OAuth usage", corroboratingSource: nil, message: refreshed.source)
             )
         }
     }
@@ -85,7 +87,9 @@ final class QuotaProvider: QuotaProviding {
         do {
             credential = try await credentialStore.credential(for: .codex)
         } catch {
-            throw QuotaProviderError.missingCredentials("Codex credentials not found")
+            throw QuotaProviderError.missingCredentials(
+                "Codex credentials not found; checked \(credentialStore.credentialSourceSummary(for: .codex))"
+            )
         }
 
         // The codex app-server `rateLimits/read` path is not reachable with a
@@ -119,7 +123,8 @@ final class QuotaProvider: QuotaProviding {
             case 401, 403:
                 throw QuotaProviderError.authFailure("Authorization failed for \(url.host ?? "quota source")")
             case 429:
-                throw QuotaProviderError.rateLimited("Quota source rate limited requests")
+                let retryAfter = (response as? HTTPURLResponse).flatMap { retryAfterDelay(from: $0) }
+                throw QuotaProviderError.rateLimited("Quota source rate limited requests", retryAfter: retryAfter)
             case 500..<600:
                 throw QuotaProviderError.unavailable("Quota source is unavailable (\(status))")
             default:
@@ -130,6 +135,20 @@ final class QuotaProvider: QuotaProviding {
         } catch {
             throw QuotaProviderError.unavailable("Could not reach quota source")
         }
+    }
+
+    private func retryAfterDelay(from response: HTTPURLResponse) -> TimeInterval? {
+        guard let value = response.value(forHTTPHeaderField: "Retry-After")?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !value.isEmpty else {
+            return nil
+        }
+        if let seconds = TimeInterval(value), seconds > 0 {
+            return seconds
+        }
+        if let date = HTTPDateFormatter.shared.date(from: value) {
+            return max(0, date.timeIntervalSinceNow)
+        }
+        return nil
     }
 
     private func requireRecognizedMetrics(_ snapshot: QuotaSnapshot) throws -> QuotaSnapshot {
@@ -155,8 +174,7 @@ final class QuotaProvider: QuotaProviding {
         }
         let keyParts = [
             source,
-            fiveHour?.resetAt.map { ISO8601DateFormatter().string(from: $0) } ?? "no-reset",
-            fiveHour.map { String(format: "%.3f", $0.remainingPercent ?? (1 - $0.clampedUsed)) } ?? "no-5h"
+            fiveHour?.resetAt.map { ISO8601DateFormatter().string(from: $0) } ?? "no-reset"
         ]
 
         return QuotaSnapshot(
@@ -172,6 +190,59 @@ final class QuotaProvider: QuotaProviding {
         )
     }
 
+    /// Claude's OAuth usage response reports the *active* rolling 5-hour window
+    /// in `five_hour` (top-level) or `rate_limits.five_hour`. When the user
+    /// hasn't touched Claude in the last 5 hours there is no active window and
+    /// that slot comes back as an explicit `null`, which the generic extractor
+    /// (correctly) drops — but for a tool whose whole job is the 5h window, a
+    /// missing 5h metric renders as a broken-looking "--" and a blank menu-bar
+    /// readout. Detect that explicit-null case and surface it as an idle, fully
+    /// available window (0% used, no reset) so the UI reads "100%" instead of
+    /// empty. A populated `five_hour` still parses through the generic path.
+    func claudeSnapshot(payload: Any, source: String, corroboratingSource: String?, message: String?) -> QuotaSnapshot {
+        let base = snapshot(
+            tool: .claude,
+            source: source,
+            corroboratingSource: corroboratingSource,
+            payload: payload,
+            message: message
+        )
+        guard base.fiveHour == nil, claudeReportsFiveHourSlot(payload) else { return base }
+
+        let idleWindow = QuotaMetric(
+            name: "5h",
+            usedPercent: 0,
+            remainingPercent: 1,
+            resetAt: nil,
+            detail: nil,
+            context: "5h idle window"
+        )
+        return QuotaSnapshot(
+            tool: .claude,
+            fetchedAt: base.fetchedAt,
+            primarySource: base.primarySource,
+            corroboratingSource: base.corroboratingSource,
+            fiveHour: idleWindow,
+            weekly: base.weekly,
+            extras: base.extras,
+            rawWindowKey: base.rawWindowKey,
+            message: base.message
+        )
+    }
+
+    /// True when the payload is shaped like a Claude usage response that carries
+    /// a `five_hour` slot (present even when its value is `null`) — so a missing
+    /// parsed 5h metric means "no active window", not "unrecognized payload".
+    private func claudeReportsFiveHourSlot(_ payload: Any) -> Bool {
+        guard let dict = payload as? [String: Any] else { return false }
+        if dict.keys.contains("five_hour") { return true }
+        if let rateLimits = dict["rate_limits"] as? [String: Any],
+           rateLimits.keys.contains("five_hour") {
+            return true
+        }
+        return false
+    }
+
     /// Parses the Codex `wham/usage` response, whose `rate_limit` block has a
     /// known shape: `primary_window` (the 5h window) and `secondary_window`
     /// (weekly). `used_percent` is on a 0–100 scale, so a value of `1` means
@@ -185,8 +256,7 @@ final class QuotaProvider: QuotaProviding {
             let weekly = codexWindowMetric(rateLimit["secondary_window"], defaultName: "Weekly")
             let keyParts = [
                 source,
-                fiveHour?.resetAt.map { ISO8601DateFormatter().string(from: $0) } ?? "no-reset",
-                fiveHour.map { String(format: "%.3f", $0.remainingFraction) } ?? "no-5h"
+                fiveHour?.resetAt.map { ISO8601DateFormatter().string(from: $0) } ?? "no-reset"
             ]
             return QuotaSnapshot(
                 tool: .codex,
@@ -448,11 +518,11 @@ struct MetricExtractor {
     private func firstNumber(_ fields: [Field], keys: [String]) -> Double? {
         for key in keys {
             guard let field = fields.first(where: { $0.normalizedKey == key }) else { continue }
-            if let bool = field.value as? Bool {
-                _ = bool
-                continue
+            if let number = field.value as? NSNumber {
+                if CFGetTypeID(number) == CFBooleanGetTypeID() { continue }
+                return number.doubleValue
             }
-            if let number = field.value as? NSNumber { return number.doubleValue }
+            if field.value is Bool { continue }
             if let double = field.value as? Double { return double }
             if let int = field.value as? Int { return Double(int) }
             if let string = field.value as? String, let double = Double(string) { return double }
@@ -557,4 +627,14 @@ struct MetricExtractor {
         }
         return nil
     }
+}
+
+private enum HTTPDateFormatter {
+    static let shared: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = TimeZone(secondsFromGMT: 0)
+        formatter.dateFormat = "EEE',' dd MMM yyyy HH':'mm':'ss z"
+        return formatter
+    }()
 }

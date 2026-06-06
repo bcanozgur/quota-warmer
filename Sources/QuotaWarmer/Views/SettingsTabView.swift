@@ -132,12 +132,12 @@ struct SettingsTabView: View {
                 group("PRIVACY") {
                     infoRow(
                         title: "Credential access",
-                        detail: "Active tools only. Claude reads Keychain Claude Code-credentials or ~/.claude/.credentials.json. Codex reads auth.json or Keychain Codex Auth."
+                        detail: "Active tools only. Claude reads Keychain Claude Code-credentials, env CLAUDE_CODE_OAUTH_TOKEN, or ~/.claude/.credentials.json. Codex reads auth.json or Keychain Codex Auth."
                     )
                     Divider().background(DS.C.border).padding(.leading, 36)
                     infoRow(
                         title: "Logs",
-                        detail: "Tokens and authorization headers are never written to history or warmup logs."
+                        detail: "History is mirrored to /tmp/quotawarmer-diagnostics.log. Tokens and authorization headers are redacted and are never written to history or warmup logs."
                     )
                 }
 

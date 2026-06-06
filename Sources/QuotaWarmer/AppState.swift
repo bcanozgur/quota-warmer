@@ -34,15 +34,29 @@ final class ToolState: ObservableObject {
     @Published var healthMessage: String = "not checked"
     @Published var nextRefreshAt: Date?
     @Published var backoffUntil: Date?
+    @Published var quotaBackoffUntil: Date?
+    @Published var authRetryScheduledAt: Date?
+    @Published var confirmedWarmupResetAt: Date?
     @Published var lastAutoWindowKey: String?
     @Published var warmupLogs: [WarmupLog] = []
     @Published var isLogExpanded = false
+    var quotaBackoffDelay: TimeInterval = 0
+    var authRetryAttempts = 0
+    var authRetryTask: Task<Void, Never>?
 
     init(tool: ToolID) {
         self.tool = tool
         self.isActive = UserDefaults.standard.object(forKey: "toolActive.\(tool.rawValue)") as? Bool ?? false
         self.menuBarVisible = UserDefaults.standard.object(forKey: "menuBarVisible.\(tool.rawValue)") as? Bool ?? true
         self.lastAutoWindowKey = UserDefaults.standard.string(forKey: "lastAutoWindowKey.\(tool.rawValue)")
+        if let storedReset = UserDefaults.standard.object(forKey: "confirmedWarmupResetAt.\(tool.rawValue)") as? TimeInterval {
+            let resetAt = Date(timeIntervalSince1970: storedReset)
+            if resetAt > Date() {
+                self.confirmedWarmupResetAt = resetAt
+            } else {
+                UserDefaults.standard.removeObject(forKey: "confirmedWarmupResetAt.\(tool.rawValue)")
+            }
+        }
     }
 
     var freshness: QuotaFreshness {
@@ -61,8 +75,18 @@ final class ToolState: ObservableObject {
         quotaSnapshot?.weekly
     }
 
+    var credentialSource: String? {
+        quotaSnapshot?.message
+    }
+
     var resetAt: Date? {
-        primaryMetric?.resetAt
+        if let liveReset = primaryMetric?.resetAt {
+            return liveReset
+        }
+        if let confirmedWarmupResetAt, confirmedWarmupResetAt > Date() {
+            return confirmedWarmupResetAt
+        }
+        return nil
     }
 
     var timeUntilReset: TimeInterval? {
@@ -76,16 +100,30 @@ final class ToolState: ObservableObject {
     }
 
     var canAutoWarmFromSnapshot: Bool {
-        guard freshness == .fresh, let metric = primaryMetric else { return false }
-        let remaining = metric.remainingFraction
-        if remaining >= 0.95 { return true }
-        if let resetAt = metric.resetAt, resetAt <= Date().addingTimeInterval(60) { return true }
-        return false
+        quotaSnapshot?.canAutoWarm(windowDuration: tool.windowDuration) ?? false
+    }
+
+    var quotaBackoffActive: Bool {
+        quotaBackoffUntil.map { $0 > Date() } ?? false
     }
 
     func rememberAutoWindow(_ key: String) {
         lastAutoWindowKey = key
         UserDefaults.standard.set(key, forKey: "lastAutoWindowKey.\(tool.rawValue)")
+    }
+
+    func rememberConfirmedWarmup(startedAt: Date, duration: TimeInterval) {
+        let resetAt = startedAt.addingTimeInterval(duration)
+        guard resetAt > Date() else { return }
+        confirmedWarmupResetAt = resetAt
+        UserDefaults.standard.set(resetAt.timeIntervalSince1970, forKey: "confirmedWarmupResetAt.\(tool.rawValue)")
+    }
+
+    func clearConfirmedWarmupIfLiveResetExistsOrExpired(now: Date = Date()) {
+        if primaryMetric?.resetAt != nil || (confirmedWarmupResetAt.map { $0 <= now } ?? false) {
+            confirmedWarmupResetAt = nil
+            UserDefaults.standard.removeObject(forKey: "confirmedWarmupResetAt.\(tool.rawValue)")
+        }
     }
 }
 
@@ -119,6 +157,7 @@ final class AppState: ObservableObject {
     private let updateChecker = UpdateChecker()
     private let quotaProvider: QuotaProviding = QuotaProvider()
     private let wakeScheduler = WakeScheduler()
+    private let claudeAuthRetryDelays: [TimeInterval] = [15, 45, 90]
     private var refreshTimer: Timer?
     private var morningTimer: Timer?
     private var morningReapplyTask: Task<Void, Never>?
@@ -141,7 +180,10 @@ final class AppState: ObservableObject {
         refreshAllActivity(allowAutomaticWarmup: false)
         startQuotaRefreshTimer()
         startUIRefreshTimer()
-        if morningPrewarmEnabled { scheduleMorningTimer() }
+        if morningPrewarmEnabled {
+            scheduleMorningTimer()
+            Task { await runScheduledMorningWarmupIfNeeded(source: .launch) }
+        }
         Task { await checkOnboarding() }
         Task { await checkForAppUpdate() }
     }
@@ -194,25 +236,37 @@ final class AppState: ObservableObject {
 
     func refreshQuota(for tool: ToolID, allowAutomaticWarmup: Bool = false) async {
         let state = state(for: tool)
+        if let backoffUntil = state.quotaBackoffUntil, backoffUntil > Date() {
+            state.nextRefreshAt = backoffUntil
+            state.errorMessage = rateLimitMessage(until: backoffUntil)
+            state.healthMessage = state.errorMessage ?? state.healthMessage
+            scheduleQuotaRefresh(for: tool, at: backoffUntil)
+            return
+        }
+
         state.isFetchingQuota = true
         state.errorMessage = nil
 
         do {
             let snapshot = try await quotaProvider.fetchQuota(for: tool)
+            clearQuotaBackoff(for: state)
+            clearAuthRetry(for: state)
             state.quotaSnapshot = snapshot
             state.sourceHealth = snapshot.freshness() == .fresh ? .healthy : .stale
             state.authStatus = .available
             state.healthMessage = snapshot.message ?? snapshot.primarySource
             state.nextRefreshAt = Date().addingTimeInterval(refreshInterval)
+            state.clearConfirmedWarmupIfLiveResetExistsOrExpired()
+            let cliReady = await applyCLIAuthenticationStatusIfNeeded(for: tool, to: state)
             addHistory(
                 tool: tool,
                 kind: .quotaFetch,
                 title: "Quota fetched",
-                detail: snapshot.corroboratingSource.map { "\(snapshot.primarySource), checked \($0)" } ?? snapshot.primarySource
+                detail: quotaFetchDetail(snapshot)
             )
             rescheduleRefresh(for: tool)
 
-            if allowAutomaticWarmup {
+            if allowAutomaticWarmup, cliReady {
                 await attemptAutomaticWarmup(tool: tool, reason: "fresh quota")
             }
         } catch {
@@ -303,32 +357,64 @@ final class AppState: ObservableObject {
         morningTimer?.invalidate()
         guard morningPrewarmEnabled, let fireDate = nextMorningFireDate() else { return }
         let timer = Timer(fire: fireDate, interval: 0, repeats: false) { [weak self] _ in
-            Task { @MainActor [weak self] in await self?.runMorningWarmup(viaWake: false) }
+            Task { @MainActor [weak self] in await self?.runScheduledMorningWarmupIfNeeded(source: .timer) }
         }
         RunLoop.main.add(timer, forMode: .common)
         morningTimer = timer
     }
 
-    /// Single morning-warm entry point, deduplicated to once per calendar day so
-    /// the in-app timer and the system-wake handler can both route here safely.
-    private func runMorningWarmup(viaWake: Bool) async {
-        let todayKey = Self.dayKey(Date())
-        guard lastMorningWarmDay != todayKey else { scheduleMorningTimer(); return }
-        if morningWeekdaysOnly, Calendar.current.isDateInWeekend(Date()) {
+    private enum ScheduledMorningSource {
+        case timer
+        case wake
+        case launch
+    }
+
+    /// Scheduled pre-warm is intentionally separate from fresh-reset detection:
+    /// it may start a not-yet-active window after a missed launch/wake, so it
+    /// must not depend on `resetAt` being present in quota API payloads.
+    private func runScheduledMorningWarmupIfNeeded(source: ScheduledMorningSource) async {
+        guard morningPrewarmEnabled, !globalPassive else { scheduleMorningTimer(); return }
+
+        let now = Date()
+        let todayKey = Self.dayKey(now)
+        if morningWeekdaysOnly, Calendar.current.isDateInWeekend(now) {
             scheduleMorningTimer(); return
         }
-        lastMorningWarmDay = todayKey
 
-        let lateness = todaysMorningDate().map { Date().timeIntervalSince($0) } ?? 0
-        let caughtUp = viaWake && lateness > 15 * 60
-
-        for tool in ToolID.allCases where state(for: tool).isActive {
-            await attemptAutomaticWarmup(
-                tool: tool,
-                reason: caughtUp ? "morning pre-warm (caught up on wake)" : "morning pre-warm"
-            )
+        guard let scheduledAt = todaysMorningDate(now: now) else {
+            scheduleMorningTimer(); return
         }
-        if caughtUp {
+
+        var caughtUpSuccessfully = false
+        for tool in ToolID.allCases where state(for: tool).isActive {
+            let lastActivity = scanner.lastActivity(for: tool)
+            let activeWindowStartedAt = scanner.windowStartTime(for: tool)
+            let decision = MorningWarmupPolicy.decision(
+                now: now,
+                scheduledAt: scheduledAt,
+                dayKey: todayKey,
+                lastSuccessfulDay: lastMorningWarmDay(for: tool, todayKey: todayKey),
+                lastActivity: lastActivity,
+                activeWindowStartedAt: activeWindowStartedAt,
+                windowDuration: tool.windowDuration
+            )
+
+            guard case .run(let caughtUp) = decision else { continue }
+            guard canAttemptManagedWarmup(for: tool) else { continue }
+
+            let previousQuotaFetchedAt = state(for: tool).quotaSnapshot?.fetchedAt
+            let succeeded = await triggerWarmup(
+                tool: tool,
+                mode: caughtUp ? "scheduled-catchup" : "scheduled"
+            )
+            if succeeded {
+                rememberMorningWarmSuccess(for: tool, dayKey: todayKey)
+                claimAutoWindowFromPostWarmQuota(for: tool, previousFetchedAt: previousQuotaFetchedAt)
+                caughtUpSuccessfully = caughtUpSuccessfully || caughtUp
+            }
+        }
+
+        if caughtUpSuccessfully, source != .timer {
             NotificationManager.shared.notifyMorningCatchUp(onBattery: !WakeScheduler.isOnACPower())
         }
         scheduleMorningTimer()
@@ -336,8 +422,8 @@ final class AppState: ObservableObject {
 
     private func handleSystemWake() {
         guard morningPrewarmEnabled else { return }
-        guard let todaysMorning = todaysMorningDate(), Date() >= todaysMorning else { return }
-        Task { @MainActor in await runMorningWarmup(viaWake: true) }
+        guard let todaysMorning = todaysMorningDate(now: Date()), Date() >= todaysMorning else { return }
+        Task { @MainActor in await runScheduledMorningWarmupIfNeeded(source: .wake) }
     }
 
     private func nextMorningFireDate() -> Date? {
@@ -358,8 +444,8 @@ final class AppState: ObservableObject {
         return next
     }
 
-    private func todaysMorningDate() -> Date? {
-        var comps = Calendar.current.dateComponents([.year, .month, .day], from: Date())
+    private func todaysMorningDate(now: Date = Date()) -> Date? {
+        var comps = Calendar.current.dateComponents([.year, .month, .day], from: now)
         comps.hour = morningHour
         comps.minute = morningMinute
         comps.second = 0
@@ -370,9 +456,22 @@ final class AppState: ObservableObject {
     private var morningMinute: Int { UserDefaults.standard.object(forKey: "morningPrewarmMinute") as? Int ?? 0 }
     private var morningWeekdaysOnly: Bool { UserDefaults.standard.object(forKey: "morningPrewarmWeekdaysOnly") as? Bool ?? true }
 
-    private var lastMorningWarmDay: String? {
-        get { UserDefaults.standard.string(forKey: "lastMorningWarmDay") }
-        set { UserDefaults.standard.set(newValue, forKey: "lastMorningWarmDay") }
+    private func lastMorningWarmDay(for tool: ToolID, todayKey: String) -> String? {
+        let perToolDay = UserDefaults.standard.string(forKey: "lastMorningWarmDay.\(tool.rawValue)")
+        let legacyDay = UserDefaults.standard.string(forKey: "lastMorningWarmDay")
+        let resolved = MorningWarmupPolicy.resolvedLastSuccessfulDay(
+            perToolDay: perToolDay,
+            legacyDay: legacyDay,
+            currentDay: todayKey
+        )
+        if perToolDay == nil, resolved == todayKey {
+            rememberMorningWarmSuccess(for: tool, dayKey: todayKey)
+        }
+        return resolved
+    }
+
+    private func rememberMorningWarmSuccess(for tool: ToolID, dayKey: String) {
+        UserDefaults.standard.set(dayKey, forKey: "lastMorningWarmDay.\(tool.rawValue)")
     }
 
     private static func dayKey(_ date: Date) -> String {
@@ -387,16 +486,12 @@ final class AppState: ObservableObject {
 
     private func attemptAutomaticWarmup(tool: ToolID, reason: String) async {
         let state = state(for: tool)
-        guard state.isActive, !globalPassive else { return }
-        guard !state.isWarming else { return }
-        if UserDefaults.standard.object(forKey: "rateLimitGuard") as? Bool ?? true,
-           let backoffUntil = state.backoffUntil,
-           backoffUntil > Date() {
-            return
-        }
+        guard canAttemptManagedWarmup(for: tool) else { return }
 
         await refreshQuotaForAutomaticDecision(tool: tool)
-        guard state.canAutoWarmFromSnapshot, let snapshot = state.quotaSnapshot else {
+        guard state.sourceHealth == .healthy,
+              state.canAutoWarmFromSnapshot,
+              let snapshot = state.quotaSnapshot else {
             return
         }
         guard state.lastAutoWindowKey != snapshot.rawWindowKey else {
@@ -413,9 +508,30 @@ final class AppState: ObservableObject {
         }
     }
 
+    private func canAttemptManagedWarmup(for tool: ToolID) -> Bool {
+        let state = state(for: tool)
+        guard state.isActive, !globalPassive, !state.isWarming else { return false }
+        guard state.authStatus != .failed, state.authStatus != .missing else { return false }
+        if UserDefaults.standard.object(forKey: "rateLimitGuard") as? Bool ?? true,
+           let backoffUntil = state.backoffUntil,
+           backoffUntil > Date() {
+            return false
+        }
+        return true
+    }
+
+    private func claimAutoWindowFromPostWarmQuota(for tool: ToolID, previousFetchedAt: Date?) {
+        let state = state(for: tool)
+        guard let snapshot = state.quotaSnapshot,
+              snapshot.isClaimableAutoWindow(previousFetchedAt: previousFetchedAt) else {
+            return
+        }
+        state.rememberAutoWindow(snapshot.rawWindowKey)
+    }
+
     private func refreshQuotaForAutomaticDecision(tool: ToolID) async {
         let state = state(for: tool)
-        if state.freshness == .fresh { return }
+        if state.freshness == .fresh, state.sourceHealth != .rateLimited { return }
         await refreshQuota(for: tool, allowAutomaticWarmup: false)
     }
 
@@ -437,13 +553,27 @@ final class AppState: ObservableObject {
             state.backoffUntil = nil
             addHistory(
                 tool: tool,
-                kind: mode == "auto" ? .autoWarmup : .manualWarmup,
-                title: mode == "auto" ? "Auto warmup sent" : "Manual warmup sent",
+                kind: historyKind(forWarmupMode: mode),
+                title: historyTitle(forWarmupMode: mode),
                 detail: "Command completed"
             )
-            notifications.notifyActivated(tool: tool)
+            notifications.notifyWarmupCommandSent(tool: tool)
             await refreshQuota(for: tool, allowAutomaticWarmup: false)
+            if state.primaryMetric?.resetAt == nil {
+                state.rememberConfirmedWarmup(startedAt: result.date, duration: tool.windowDuration)
+            }
+            if state.sourceHealth == .healthy, state.timeUntilReset != nil {
+                notifications.notifyActivated(tool: tool)
+            }
             succeeded = true
+        } catch WarmupError.authenticationRequired(let message) {
+            state.errorMessage = message
+            state.healthMessage = message
+            state.sourceHealth = .authFailure
+            state.authStatus = .failed
+            state.backoffUntil = nil
+            addHistory(tool: tool, kind: .authFailure, title: "Warmup blocked", detail: message)
+            scheduleClaudeAuthRecheckIfNeeded(for: state, reason: message)
         } catch {
             state.errorMessage = error.localizedDescription
             state.backoffUntil = Date().addingTimeInterval(nextBackoff(for: state))
@@ -454,6 +584,108 @@ final class AppState: ObservableObject {
         return succeeded
     }
 
+    private func historyKind(forWarmupMode mode: String) -> HistoryKind {
+        switch mode {
+        case "auto", "scheduled", "scheduled-catchup":
+            return .autoWarmup
+        default:
+            return .manualWarmup
+        }
+    }
+
+    private func historyTitle(forWarmupMode mode: String) -> String {
+        switch mode {
+        case "auto":
+            return "Auto warmup sent"
+        case "scheduled":
+            return "Scheduled warmup sent"
+        case "scheduled-catchup":
+            return "Scheduled catch-up warmup sent"
+        default:
+            return "Manual warmup sent"
+        }
+    }
+
+    private func applyQuotaBackoff(for state: ToolState, retryAfter: TimeInterval?) -> Date {
+        let baseDelay: TimeInterval = 5 * 60
+        let maxDelay: TimeInterval = 60 * 60
+        let fallbackDelay = state.quotaBackoffDelay > 0
+            ? min(state.quotaBackoffDelay * 2, maxDelay)
+            : baseDelay
+        let delay = max(fallbackDelay, retryAfter ?? 0)
+        let retryAt = Date().addingTimeInterval(delay)
+
+        state.quotaBackoffDelay = delay
+        state.quotaBackoffUntil = retryAt
+        state.nextRefreshAt = retryAt
+        scheduleQuotaRefresh(for: state.tool, at: retryAt)
+        return retryAt
+    }
+
+    private func clearQuotaBackoff(for state: ToolState) {
+        state.quotaBackoffUntil = nil
+        state.quotaBackoffDelay = 0
+    }
+
+    private func clearAuthRetry(for state: ToolState) {
+        state.authRetryTask?.cancel()
+        state.authRetryTask = nil
+        state.authRetryAttempts = 0
+        state.authRetryScheduledAt = nil
+    }
+
+    private func applyCLIAuthenticationStatusIfNeeded(for tool: ToolID, to state: ToolState) async -> Bool {
+        guard tool == .claude else { return true }
+
+        switch await runner.cliAuthenticationStatus(for: tool) {
+        case .authenticated:
+            if state.authStatus == .failed || state.authStatus == .missing {
+                addHistory(tool: tool, kind: .quotaFetch, title: "Claude CLI auth restored", detail: "Warmup can run again")
+            }
+            state.authStatus = .available
+            if state.sourceHealth == .authFailure, let snapshot = state.quotaSnapshot {
+                state.sourceHealth = snapshot.freshness() == .fresh ? .healthy : .stale
+            }
+            if state.errorMessage == WarmupRunner.claudeLoginRequiredMessage {
+                state.errorMessage = nil
+            }
+            state.backoffUntil = nil
+            clearAuthRetry(for: state)
+            return true
+        case .notAuthenticated(let message):
+            let wasAlreadyBlocked = state.authStatus == .failed && state.errorMessage == message
+            state.authStatus = .failed
+            state.sourceHealth = .authFailure
+            state.errorMessage = message
+            state.healthMessage = message
+            state.backoffUntil = nil
+            if !wasAlreadyBlocked {
+                addHistory(tool: tool, kind: .authFailure, title: "Claude CLI login required", detail: message)
+            }
+            scheduleClaudeAuthRecheckIfNeeded(for: state, reason: message)
+            return false
+        case .unknown(let message):
+            DiagnosticLogger.append("cli_auth_status_unknown tool=\(tool.rawValue) reason=\(message)")
+            return true
+        }
+    }
+
+    private func scheduleQuotaRefresh(for tool: ToolID, at date: Date) {
+        guard state(for: tool).isActive, !globalPassive else { return }
+        scheduler.schedule(tool: tool, at: date)
+    }
+
+    private func rateLimitMessage(until date: Date) -> String {
+        "rate limited; retry at \(shortTime(date))"
+    }
+
+    private func shortTime(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.dateStyle = .none
+        formatter.timeStyle = .short
+        return formatter.string(from: date)
+    }
+
     private func applyQuotaError(_ error: Error, to state: ToolState) {
         let message = error.localizedDescription
         state.errorMessage = message
@@ -462,25 +694,93 @@ final class AppState: ObservableObject {
         if let providerError = error as? QuotaProviderError {
             switch providerError {
             case .authFailure:
+                clearQuotaBackoff(for: state)
                 state.sourceHealth = .authFailure
                 state.authStatus = .failed
                 addHistory(tool: state.tool, kind: .authFailure, title: "Authorization failed", detail: message)
+                scheduleClaudeAuthRecheckIfNeeded(for: state, reason: message)
             case .missingCredentials:
+                clearQuotaBackoff(for: state)
                 state.sourceHealth = .authFailure
                 state.authStatus = .missing
                 addHistory(tool: state.tool, kind: .authFailure, title: "Credentials missing", detail: message)
-            case .rateLimited:
+                scheduleClaudeAuthRecheckIfNeeded(for: state, reason: message)
+            case .rateLimited(_, let retryAfter):
+                clearAuthRetry(for: state)
+                let retryAt = applyQuotaBackoff(for: state, retryAfter: retryAfter)
+                let retryMessage = rateLimitMessage(until: retryAt)
                 state.sourceHealth = .rateLimited
                 state.authStatus = .available
-                addHistory(tool: state.tool, kind: .rateLimit, title: "Rate limited", detail: message)
+                state.errorMessage = retryMessage
+                state.healthMessage = retryMessage
+                addHistory(tool: state.tool, kind: .rateLimit, title: "Rate limited", detail: "\(message). Retrying at \(shortTime(retryAt)).")
             case .unavailable, .malformed:
+                clearQuotaBackoff(for: state)
+                clearAuthRetry(for: state)
                 state.sourceHealth = state.quotaSnapshot == nil ? .unavailable : .stale
                 addHistory(tool: state.tool, kind: .pollingError, title: "Quota fetch failed", detail: message)
             }
         } else {
+            clearQuotaBackoff(for: state)
+            clearAuthRetry(for: state)
             state.sourceHealth = state.quotaSnapshot == nil ? .unavailable : .stale
             addHistory(tool: state.tool, kind: .pollingError, title: "Quota fetch failed", detail: message)
         }
+    }
+
+    private func quotaFetchDetail(_ snapshot: QuotaSnapshot) -> String {
+        var parts = [snapshot.primarySource]
+        if let corroborating = snapshot.corroboratingSource {
+            parts.append("checked \(corroborating)")
+        }
+        if let credentialSource = snapshot.message, !credentialSource.isEmpty {
+            parts.append("via \(credentialSource)")
+        }
+        return parts.joined(separator: ", ")
+    }
+
+    private func scheduleClaudeAuthRecheckIfNeeded(for state: ToolState, reason: String) {
+        guard state.tool == .claude, state.isActive, !globalPassive else { return }
+        guard state.authRetryAttempts < claudeAuthRetryDelays.count else {
+            DiagnosticLogger.append(
+                "auth_recheck_exhausted tool=\(state.tool.rawValue) attempts=\(state.authRetryAttempts) reason=\(reason)"
+            )
+            return
+        }
+
+        state.authRetryTask?.cancel()
+        let delay = claudeAuthRetryDelays[state.authRetryAttempts]
+        state.authRetryAttempts += 1
+        let attempt = state.authRetryAttempts
+        let retryAt = Date().addingTimeInterval(delay)
+        state.authRetryScheduledAt = retryAt
+        state.nextRefreshAt = retryAt
+
+        addHistory(
+            tool: state.tool,
+            kind: .quotaFetch,
+            title: "Auth recheck scheduled",
+            detail: "Retry \(attempt)/\(claudeAuthRetryDelays.count) at \(shortTime(retryAt)) after Claude login"
+        )
+        DiagnosticLogger.append(
+            "auth_recheck_scheduled tool=\(state.tool.rawValue) attempt=\(attempt) retryAt=\(ISO8601DateFormatter().string(from: retryAt)) reason=\(reason)"
+        )
+
+        state.authRetryTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+            guard !Task.isCancelled else { return }
+            await self?.runClaudeAuthRecheck(attempt: attempt)
+        }
+    }
+
+    private func runClaudeAuthRecheck(attempt: Int) async {
+        let state = state(for: .claude)
+        guard state.authRetryAttempts == attempt else { return }
+        state.authRetryTask = nil
+        state.authRetryScheduledAt = nil
+        DiagnosticLogger.append("auth_recheck_running tool=claude attempt=\(attempt)")
+        guard await applyCLIAuthenticationStatusIfNeeded(for: .claude, to: state) else { return }
+        await refreshQuota(for: .claude, allowAutomaticWarmup: false)
     }
 
     private func rescheduleRefresh(for tool: ToolID) {
@@ -528,8 +828,10 @@ final class AppState: ObservableObject {
     }
 
     private func addHistory(tool: ToolID?, kind: HistoryKind, title: String, detail: String) {
-        history.insert(HistoryEvent(timestamp: Date(), tool: tool, kind: kind, title: title, detail: detail), at: 0)
+        let event = HistoryEvent(timestamp: Date(), tool: tool, kind: kind, title: title, detail: detail)
+        history.insert(event, at: 0)
         if history.count > 10 { history.removeLast(history.count - 10) }
+        DiagnosticLogger.appendHistory(event)
     }
 
     private func nextBackoff(for state: ToolState) -> TimeInterval {
@@ -547,5 +849,52 @@ final class AppState: ObservableObject {
         if anyMissing && !UserDefaults.standard.bool(forKey: "onboardingDismissed") {
             showOnboarding = true
         }
+    }
+}
+
+enum DiagnosticLogger {
+    static let fileURL = URL(fileURLWithPath: "/tmp/quotawarmer-diagnostics.log")
+
+    private static let formatter: ISO8601DateFormatter = {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter
+    }()
+
+    static func appendHistory(_ event: HistoryEvent) {
+        let tool = event.tool?.rawValue ?? "app"
+        append("history tool=\(tool) kind=\(event.kind.rawValue) title=\(event.title) detail=\(event.detail)")
+    }
+
+    static func append(_ message: String) {
+        let line = "[\(formatter.string(from: Date()))] \(redacted(message))\n"
+        guard let data = line.data(using: .utf8) else { return }
+
+        if FileManager.default.fileExists(atPath: fileURL.path),
+           let handle = try? FileHandle(forWritingTo: fileURL) {
+            defer { try? handle.close() }
+            _ = try? handle.seekToEnd()
+            try? handle.write(contentsOf: data)
+        } else {
+            try? data.write(to: fileURL, options: .atomic)
+        }
+    }
+
+    private static func redacted(_ text: String) -> String {
+        var output = text
+        let patterns = [
+            #"sk-[A-Za-z0-9._-]{12,}"#,
+            #"Bearer\s+[A-Za-z0-9._-]{12,}"#,
+            #"Authorization[:=]\s*[A-Za-z0-9._\-\s]{12,}"#
+        ]
+
+        for pattern in patterns {
+            output = output.replacingOccurrences(
+                of: pattern,
+                with: "<redacted>",
+                options: .regularExpression
+            )
+        }
+        return output
     }
 }
