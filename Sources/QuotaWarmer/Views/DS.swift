@@ -68,7 +68,10 @@ enum DS {
     }
 
     // MARK: - Layout
-    static let panelScale: CGFloat = 0.90
+    // The panel is laid out at totalWidth × totalHeight then uniformly
+    // scaled by panelScale, so this knob shrinks the whole UI proportionally
+    // without any reflow. 0.81 = a 10% more compact panel than the prior 0.90.
+    static let panelScale: CGFloat = 0.81
     static let sidebarWidth: CGFloat = 56
     static let contentWidth: CGFloat = 372
     static let totalWidth:   CGFloat = sidebarWidth + contentWidth
