@@ -5,7 +5,7 @@ QuotaWarmer is a compact macOS menu bar app that manages your Claude Code and Co
 By default it only **monitors**: it watches live quota snapshots and shows each provider's window directly in the menu bar. Switch a tool to **Auto-warm** and it will also send a single minimal warm-up command through your own logged-in CLI the instant a fresh 5-hour window opens — then verify the window actually started.
 
 <p align="center">
-  <img src="docs/images/quota-warmer-menu.png" alt="QuotaWarmer menu bar popover" width="710">
+  <img src="docs/images/quota-warmer-menu.png" alt="QuotaWarmer menu bar popover" width="560">
 </p>
 
 ## Highlights
