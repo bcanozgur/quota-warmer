@@ -1,10 +1,20 @@
 import AppKit
 import SwiftUI
 
-struct MenuBarLabel: View {
-    @EnvironmentObject var appState: AppState
+/// Builds the menu-bar status-item image from `AppState`. Drives the AppKit
+/// `NSStatusItem` button (see `AppDelegate`) — we use a plain status item rather
+/// than `MenuBarExtra` so the icon supports both a left-click panel and a
+/// right-click menu. Both pinned tools are composited into one `NSImage`.
+@MainActor
+enum MenuBarStatus {
+    static func image(for appState: AppState) -> NSImage {
+        let items = composeItems(appState)
+        let image = items.isEmpty ? fallbackImage(appState) : MenuBarComposer.image(for: items)
+        image.isTemplate = false
+        return image
+    }
 
-    private var isHealthy: Bool {
+    private static func isHealthy(_ appState: AppState) -> Bool {
         guard !appState.globalPassive, !appState.watcherStale else { return false }
         return appState.toolStates.values.allSatisfy { state in
             if !state.isMonitored { return true }
@@ -12,45 +22,14 @@ struct MenuBarLabel: View {
         }
     }
 
-    @ViewBuilder
-    var body: some View {
-        // macOS renders a MenuBarExtra label's content as a *single* status-item
-        // view and only the first child of a multi-element layout shows up. So
-        // both pinned tools are composited into one NSImage, which is then shown
-        // as a single Image — guaranteed to render at full width.
-        // (Per-second ticking is driven by AppState's UI refresh timer, which
-        // pokes this view; TimelineView doesn't render as a menu-bar label.)
-        let items = composeItems()
-        if items.isEmpty {
-            fallbackLabel
-                .frame(height: 16)
-                .fixedSize()
-        } else {
-            Image(nsImage: MenuBarComposer.image(for: items))
-                .renderingMode(.original)
-        }
-    }
-
     /// Tools the user has pinned to the menu bar, shown side by side. Order
     /// follows `ToolID.allCases` so the layout is stable.
-    private var visibleTools: [ToolID] {
+    private static func visibleTools(_ appState: AppState) -> [ToolID] {
         ToolID.allCases.filter { appState.state(for: $0).menuBarVisible }
     }
 
-    @ViewBuilder
-    private var fallbackLabel: some View {
-        HStack(spacing: 2) {
-            Image(systemName: "flame.fill")
-                .font(.system(size: 10, weight: .semibold))
-                .foregroundStyle(DS.C.accent(.claude))
-            Circle()
-                .fill(isHealthy ? DS.C.green : DS.C.red)
-                .frame(width: 5.5, height: 5.5)
-        }
-    }
-
-    private func composeItems() -> [MenuBarComposer.Item] {
-        visibleTools.map { tool in
+    private static func composeItems(_ appState: AppState) -> [MenuBarComposer.Item] {
+        visibleTools(appState).map { tool in
             let st = appState.state(for: tool)
             let prominent = st.isWarming || (st.isMonitored && st.sourceHealth == .healthy && st.freshness == .fresh)
 
@@ -69,17 +48,17 @@ struct MenuBarLabel: View {
 
             return MenuBarComposer.Item(
                 assetName: tool == .claude ? "ClaudeCode" : "Codex",
-                dotColor: nsStatusColor(for: st),
+                dotColor: nsStatusColor(for: st, appState: appState),
                 text: text,
-                // Match the prior look: neutral menu-bar-white text (the
-                // colored status dot conveys state), not a saturated color.
+                // Neutral menu-bar-white text (the colored status dot conveys
+                // state), not a saturated color.
                 textColor: .white,
                 dimmed: !prominent
             )
         }
     }
 
-    private func compactTime(_ secs: TimeInterval) -> String {
+    private static func compactTime(_ secs: TimeInterval) -> String {
         let total = Int(secs)
         let d = total / 86_400
         let h = (total % 86_400) / 3600
@@ -88,18 +67,41 @@ struct MenuBarLabel: View {
         return h > 0 ? "\(h)h\(String(format: "%02d", m))m" : "\(m)m"
     }
 
-    private func compactQuotaText(time: TimeInterval, metric: QuotaMetric?) -> String {
+    private static func compactQuotaText(time: TimeInterval, metric: QuotaMetric?) -> String {
         let percent = Int((metric?.remainingFraction ?? 0) * 100)
         return "\(compactTime(time)) - \(percent)%"
     }
 
-    private func nsStatusColor(for state: ToolState) -> NSColor {
+    private static func nsStatusColor(for state: ToolState, appState: AppState) -> NSColor {
         // Off / globally-paused tools get a neutral gray dot so they no longer
         // look like an error (which is red).
         if appState.globalPassive || !state.isMonitored { return .systemGray }
         if state.sourceHealth == .healthy && state.freshness == .fresh { return .systemGreen }
         if state.sourceHealth == .authFailure || state.sourceHealth == .unavailable { return .systemRed }
         return .systemYellow
+    }
+
+    /// Shown when no tool is pinned to the menu bar: a flame glyph plus an
+    /// overall-health dot, so the status item is never blank.
+    private static func fallbackImage(_ appState: AppState) -> NSImage {
+        let healthy = isHealthy(appState)
+        let size = NSSize(width: 21, height: 18)
+        return NSImage(size: size, flipped: false) { _ in
+            let glyphRect = NSRect(x: 0, y: 1, width: 14, height: 14)
+            if let flame = NSImage(systemSymbolName: "flame.fill", accessibilityDescription: nil) {
+                let cfg = NSImage.SymbolConfiguration(pointSize: 11, weight: .semibold)
+                let img = flame.withSymbolConfiguration(cfg) ?? flame
+                img.draw(in: glyphRect, from: .zero, operation: .sourceOver, fraction: 1,
+                         respectFlipped: true, hints: [.interpolation: NSImageInterpolation.high])
+                NSColor(calibratedRed: 0.90, green: 0.38, blue: 0.05, alpha: 1).setFill()
+                glyphRect.fill(using: .sourceAtop)
+            }
+            let dot: CGFloat = 6
+            let dotRect = NSRect(x: glyphRect.maxX + 1, y: (size.height - dot) / 2, width: dot, height: dot)
+            (healthy ? NSColor.systemGreen : NSColor.systemRed).setFill()
+            NSBezierPath(ovalIn: dotRect).fill()
+            return true
+        }
     }
 }
 

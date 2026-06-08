@@ -6,27 +6,27 @@ struct MainTabView: View {
 
     var body: some View {
         ScrollView(.vertical, showsIndicators: false) {
-            VStack(alignment: .leading, spacing: 13) {
+            VStack(alignment: .leading, spacing: 14) {
                 header
                 if !outcomeTools.isEmpty { statusCard }
                 providerList
                 historySection
             }
-            .padding(.horizontal, 17)
-            .padding(.top, 17)
-            .padding(.bottom, 14)
+            .padding(.horizontal, 18)
+            .padding(.top, 18)
+            .padding(.bottom, 16)
         }
         .background(DS.C.bg)
     }
 
     private var header: some View {
-        HStack {
-            VStack(alignment: .leading, spacing: 2) {
+        HStack(alignment: .top) {
+            VStack(alignment: .leading, spacing: 3) {
                 Text("QuotaWarmer")
-                    .font(.system(size: 18, weight: .bold))
+                    .font(.system(size: 22, weight: .bold))
                     .foregroundStyle(DS.C.text)
-                Text("Choose a tool to keep warm.")
-                    .font(.system(size: 11.5, weight: .medium))
+                Text("Keep your quota windows warm.")
+                    .font(.system(size: 12, weight: .medium))
                     .foregroundStyle(DS.C.textMuted)
             }
             Spacer()
@@ -40,37 +40,15 @@ struct MainTabView: View {
         let stateColor = paused ? DS.C.red : DS.C.green
 
         return HStack(spacing: 7) {
-            HStack(spacing: 5) {
-                Circle()
-                    .fill(stateColor)
-                    .frame(width: 6, height: 6)
-                Text(paused ? "Paused" : "Active")
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(DS.C.textSub)
-                    .lineLimit(1)
-            }
-            .padding(.horizontal, 9)
-            .frame(height: 28)
-            .background(stateColor.opacity(0.08), in: RoundedRectangle(cornerRadius: 6))
-            .overlay(
-                RoundedRectangle(cornerRadius: 6)
-                    .stroke(stateColor.opacity(0.28), lineWidth: 1)
-            )
+            StatusBadge(text: paused ? "Paused" : "Active", color: stateColor)
 
-            Button(action: { appState.globalPassive.toggle() }) {
-                Image(systemName: paused ? "play.fill" : "pause.fill")
-                    .font(.system(size: 12, weight: .bold))
-                    .foregroundStyle(paused ? DS.C.green : DS.C.red)
-                    .frame(width: 32, height: 28)
-                    .background(DS.C.surfaceHigh, in: RoundedRectangle(cornerRadius: 6))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 6)
-                            .stroke(paused ? DS.C.green.opacity(0.35) : DS.C.red.opacity(0.30), lineWidth: 1)
-                    )
-            }
-            .buttonStyle(.plain)
-            .help(helpText)
-            .accessibilityLabel(Text(helpText))
+            IconButton(
+                systemName: paused ? "play.fill" : "pause.fill",
+                help: helpText,
+                tint: paused ? DS.C.green : DS.C.red,
+                border: (paused ? DS.C.green : DS.C.red).opacity(0.30),
+                size: 26
+            ) { appState.globalPassive.toggle() }
         }
         .help(helpText)
     }
@@ -80,77 +58,93 @@ struct MainTabView: View {
             ForEach(ToolID.allCases) { tool in
                 providerRow(tool)
                 if tool != ToolID.allCases.last {
-                    Divider()
-                        .padding(.leading, 42)
+                    Rectangle()
+                        .fill(DS.C.border)
+                        .frame(height: 1)
+                        .padding(.vertical, 18)
                 }
             }
         }
-        .padding(.vertical, 2)
-        .background(DS.C.surface, in: RoundedRectangle(cornerRadius: DS.R.md))
-        .overlay(RoundedRectangle(cornerRadius: DS.R.md).stroke(DS.C.border))
     }
 
     private func providerRow(_ tool: ToolID) -> some View {
         let state = appState.state(for: tool)
-        return HStack(alignment: .top, spacing: 12) {
-            Image(tool == .claude ? "ClaudeCode" : "Codex")
-                .resizable()
-                .renderingMode(.template)
-                .scaledToFit()
-                .frame(width: 20, height: 20)
-                .foregroundStyle(DS.C.text)
-                .padding(.top, 4)
-
-            VStack(alignment: .leading, spacing: 8.5) {
-                HStack(spacing: 6) {
-                    Text(tool.displayName)
-                        .font(.system(size: 13.5, weight: .bold))
-                        .foregroundStyle(DS.C.text)
-                    Circle()
-                        .fill(ToolModeMenu.color(state.mode))
-                        .frame(width: 5.5, height: 5.5)
-                    Text(providerStatus(state))
-                        .font(.system(size: 11, weight: .medium))
-                        .foregroundStyle(state.sourceHealth == .authFailure ? DS.C.red : DS.C.textMuted)
-                        .lineLimit(1)
-                    Spacer(minLength: 0)
-                    menuBarPin(tool, state)
-                }
-
-                quotaLine("5h", metric: state.primaryMetric, refreshing: state.isFetchingQuota)
-                quotaLine("Week", metric: state.weeklyMetric, refreshing: state.isFetchingQuota)
-                if let weeklyText = weeklyResetText(state) {
-                    HStack(spacing: 4) {
-                        Image(systemName: "calendar")
-                            .font(.system(size: 8.5, weight: .semibold))
-                        Text(weeklyText)
-                            .font(.system(size: 9.5, weight: .medium))
-                            .lineLimit(1)
-                    }
-                    .foregroundStyle(DS.C.textMuted)
-                    .help(weeklyResetHelp(state) ?? weeklyText)
-                }
-            }
-
-            VStack(spacing: 7) {
+        return VStack(alignment: .leading, spacing: 16) {
+            // Tool name on the left, the same mode / refresh / pin controls on
+            // the right (where the reference shows the plan badge).
+            HStack(spacing: 8) {
+                Text(tool.shortName)
+                    .font(.system(size: 20, weight: .bold))
+                    .foregroundStyle(DS.C.text)
+                Spacer(minLength: 6)
                 ToolModeMenu(mode: state.mode, compact: true) { appState.setMode($0, for: tool) }
-
-                Button(action: { Task { await appState.refreshQuota(for: tool) } }) {
-                    Image(systemName: state.isFetchingQuota ? "hourglass" : state.quotaBackoffActive ? "clock.arrow.circlepath" : "arrow.clockwise")
-                        .font(.system(size: 11.5, weight: .semibold))
-                        .foregroundStyle(DS.C.textSub)
-                        .frame(maxWidth: .infinity)
-                        .frame(height: 26)
-                        .background(DS.C.bg, in: RoundedRectangle(cornerRadius: 6))
-                        .overlay(RoundedRectangle(cornerRadius: DS.R.sm).stroke(DS.C.border))
-                }
-                .buttonStyle(.plain)
-                .disabled(state.isFetchingQuota || state.quotaBackoffActive)
+                    .fixedSize()
+                IconButton(
+                    systemName: state.isFetchingQuota ? "hourglass" : state.quotaBackoffActive ? "clock.arrow.circlepath" : "arrow.clockwise",
+                    help: "Refresh \(tool.shortName) quota now",
+                    size: 26,
+                    isDisabled: state.isFetchingQuota || state.quotaBackoffActive
+                ) { Task { await appState.refreshQuota(for: tool) } }
+                menuBarPin(tool, state)
             }
-            .frame(width: 84)
+
+            if let issue = providerIssue(state) {
+                Text(issue)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(DS.C.red)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            windowRow(state, title: "Session", metric: state.primaryMetric,
+                      resetAt: state.resetAt, windowDuration: tool.windowDuration)
+            windowRow(state, title: "Weekly", metric: state.weeklyMetric,
+                      resetAt: state.weeklyMetric?.resetAt, windowDuration: tool.weeklyWindowDuration)
         }
-        .padding(.horizontal, 13)
-        .padding(.vertical, 12)
+    }
+
+    private func windowRow(_ state: ToolState, title: String, metric: QuotaMetric?, resetAt: Date?, windowDuration: TimeInterval) -> some View {
+        let quotaLeft = metric?.remainingFraction ?? 0
+        let leftText = metric == nil ? "-- left" : "\(Int(quotaLeft * 100))% left"
+        let pace = QuotaPace.compute(
+            quotaLeft: quotaLeft,
+            resetAt: resetAt,
+            windowDuration: windowDuration,
+            now: Date(),
+            fallbackResetText: fallbackResetText(state, metric: metric)
+        )
+        return QuotaWindowRow(
+            title: title,
+            hasMetric: metric != nil,
+            quotaLeft: quotaLeft,
+            leftText: leftText,
+            pace: pace,
+            refreshing: state.isFetchingQuota
+        )
+    }
+
+    private func fallbackResetText(_ state: ToolState, metric: QuotaMetric?) -> String {
+        guard metric != nil else {
+            return state.isFetchingQuota ? "Updating..." : "No live quota"
+        }
+        if let metric, metric.isIdleFiveHourWindow {
+            return "\(Int(metric.remainingFraction * 100))% left"
+        }
+        switch state.freshness {
+        case .fresh: return "Fresh"
+        case .stale: return "Stale"
+        case .expired: return "Expired data"
+        case .unknown: return "No live quota"
+        }
+    }
+
+    private func providerIssue(_ state: ToolState) -> String? {
+        if state.sourceHealth == .authFailure, let msg = state.errorMessage, !msg.isEmpty {
+            return msg
+        }
+        if let retryAt = state.authRetryScheduledAt, retryAt > Date() {
+            return "Re-checking auth at \(shortClock(retryAt))"
+        }
+        return nil
     }
 
     /// Minimal pin toggle: shows/hides this tool's quota in the menu bar,
@@ -162,15 +156,16 @@ struct MainTabView: View {
                 .foregroundStyle(state.menuBarVisible ? DS.C.accent(tool) : DS.C.textMuted)
                 .opacity(state.menuBarVisible ? 1.0 : 0.45)
         }
-        .buttonStyle(.plain)
+        .buttonStyle(PressableButtonStyle())
         .help(state.menuBarVisible ? "Showing in menu bar — click to hide" : "Hidden from menu bar — click to show")
+        .accessibilityLabel(Text(state.menuBarVisible ? "Hide \(tool.shortName) from menu bar" : "Show \(tool.shortName) in menu bar"))
     }
 
     private var historySection: some View {
-        VStack(alignment: .leading, spacing: 9) {
+        VStack(alignment: .leading, spacing: 10) {
             Button(action: { historyExpanded.toggle() }) {
-                HStack {
-                    Text("History").font(.system(size: 13, weight: .bold))
+                HStack(spacing: 6) {
+                    Text("History").dsSectionLabel()
                     Spacer()
                     Text("\(appState.history.count)")
                         .font(.system(size: 10, weight: .semibold))
@@ -179,8 +174,10 @@ struct MainTabView: View {
                         .font(.system(size: 9, weight: .semibold))
                         .foregroundStyle(DS.C.textMuted)
                 }
+                .contentShape(Rectangle())
             }
-            .buttonStyle(.plain)
+            .buttonStyle(PressableButtonStyle())
+            .accessibilityLabel(Text(historyExpanded ? "Collapse history" : "Expand history"))
             if historyExpanded {
                 if appState.history.isEmpty {
                     Text("No events yet")
@@ -189,7 +186,7 @@ struct MainTabView: View {
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, DS.Space.lg)
                 } else {
-                    LazyVStack(alignment: .leading, spacing: 6) {
+                    LazyVStack(alignment: .leading, spacing: 7) {
                         ForEach(appState.history.prefix(10)) { event in
                             HistoryRow(event: event)
                         }
@@ -197,49 +194,46 @@ struct MainTabView: View {
                 }
             }
         }
-        .padding(.horizontal, 13)
-        .padding(.vertical, 12)
-        .background(DS.C.surface, in: RoundedRectangle(cornerRadius: DS.R.md))
-        .overlay(RoundedRectangle(cornerRadius: DS.R.md).stroke(DS.C.border))
+        .padding(.horizontal, 14)
+        .padding(.vertical, 13)
+        .dsCard()
     }
 
     // MARK: - Last warm-up status card ("did it actually work?")
 
     private var outcomeTools: [ToolID] {
+        // Only show a row once an actual warm-up outcome exists. Mode is already
+        // visible in each provider row (its colored dot + status text), so the
+        // Auto-warm state no longer adds a card here — that previously made the
+        // panel grow/shrink on every mode toggle and jolt the scroll position.
         ToolID.allCases.filter { tool in
-            let state = appState.state(for: tool)
-            // Show a row once a warm-up has happened, or proactively for any
-            // tool set to Auto-warm so the mode's effect is visible immediately.
-            if case .none = state.lastWarmupOutcome { return state.mode == .autoWarm }
+            if case .none = appState.state(for: tool).lastWarmupOutcome { return false }
             return true
         }
     }
 
     private var statusCard: some View {
-        VStack(alignment: .leading, spacing: 9) {
-            Text("WINDOW STATUS")
-                .font(.system(size: 9, weight: .bold))
-                .foregroundStyle(DS.C.textMuted)
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Window Status")
+                .dsSectionLabel()
             ForEach(outcomeTools) { tool in
                 outcomeRow(tool)
             }
         }
-        .padding(13)
+        .padding(.horizontal, 13)
+        .padding(.vertical, 11)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(DS.C.surface, in: RoundedRectangle(cornerRadius: DS.R.md))
-        .overlay(RoundedRectangle(cornerRadius: DS.R.md).stroke(DS.C.border))
+        .dsCard()
     }
 
     private func outcomeRow(_ tool: ToolID) -> some View {
         let state = appState.state(for: tool)
         let info = outcomeInfo(state.lastWarmupOutcome, mode: state.mode)
-        return HStack(alignment: .top, spacing: 8) {
-            Circle()
-                .fill(info.color)
-                .frame(width: 7, height: 7)
+        return HStack(alignment: .top, spacing: 9) {
+            StatusDot(color: info.color, size: 7)
                 .padding(.top, 3)
             VStack(alignment: .leading, spacing: 1) {
-                Text(tool.displayName)
+                Text(tool.shortName)
                     .font(.system(size: 11.5, weight: .bold))
                     .foregroundStyle(DS.C.text)
                 Text(info.message)
@@ -252,13 +246,14 @@ struct MainTabView: View {
                 Button(action: { appState.activate(tool) }) {
                     Text("Warm")
                         .font(.system(size: 10.5, weight: .semibold))
-                        .padding(.horizontal, 10)
+                        .padding(.horizontal, 12)
                         .frame(height: 24)
-                        .background(DS.C.accent(tool), in: RoundedRectangle(cornerRadius: DS.R.sm))
+                        .background(DS.C.accent(tool), in: Capsule())
                         .foregroundStyle(.white)
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(PressableButtonStyle())
                 .disabled(state.isWarming)
+                .accessibilityLabel(Text("Warm \(tool.shortName) now"))
             }
         }
     }
@@ -284,84 +279,6 @@ struct MainTabView: View {
         case .failed(_, let reason):
             return (DS.C.red, "Warm-up failed: \(reason)", true)
         }
-    }
-
-    private func quotaLine(_ label: String, metric: QuotaMetric?, refreshing: Bool) -> some View {
-        let remaining = metric?.remainingFraction ?? 0
-        return HStack(spacing: 8) {
-            Text(label)
-                .font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(DS.C.textMuted)
-                .frame(width: 34, alignment: .leading)
-            GeometryReader { geometry in
-                ZStack(alignment: .leading) {
-                    Capsule()
-                        .fill(DS.C.track)
-                    Capsule()
-                        .fill(DS.C.ink)
-                        .frame(width: geometry.size.width * CGFloat(remaining))
-                    if refreshing {
-                        Capsule()
-                            .fill(.white.opacity(0.22))
-                            .frame(width: geometry.size.width * 0.25)
-                            .offset(x: geometry.size.width * 0.25)
-                    }
-                }
-            }
-            .frame(height: 8)
-            Text(metric.map { "\(Int($0.remainingFraction * 100))%" } ?? "--")
-                .font(DS.mono(10.5, weight: .semibold))
-                .foregroundStyle(DS.C.textSub)
-                .frame(width: 34, alignment: .trailing)
-        }
-    }
-
-    private func providerStatus(_ state: ToolState) -> String {
-        if state.isFetchingQuota { return "updating" }
-        if state.isWarming { return "warming" }
-        if let retryAt = state.authRetryScheduledAt, retryAt > Date() {
-            return "recheck at \(shortClock(retryAt))"
-        }
-        if let error = state.errorMessage, !error.isEmpty { return error }
-        if let last = state.lastSuccessfulFetch { return "checked \(relativeTime(last))" }
-        return state.mode.label.lowercased()
-    }
-
-    private func weeklyResetText(_ state: ToolState) -> String? {
-        guard let resetAt = state.weeklyMetric?.resetAt else { return nil }
-        let seconds = max(0, Int(resetAt.timeIntervalSinceNow))
-        let timeText: String
-        if seconds < 60 {
-            timeText = "\(seconds)s"
-        } else if seconds < 3600 {
-            timeText = "\(seconds / 60)m"
-        } else if seconds < 86_400 {
-            timeText = "\(seconds / 3600)h \((seconds % 3600) / 60)m"
-        } else {
-            timeText = "\(seconds / 86_400)d \((seconds % 86_400) / 3600)h"
-        }
-        return "Weekly resets in \(timeText) · \(Self.weekdayDateFormatter.string(from: resetAt))"
-    }
-
-    private static let weekdayDateFormatter: DateFormatter = {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "EEE, MMM d"
-        return formatter
-    }()
-
-    private func weeklyResetHelp(_ state: ToolState) -> String? {
-        guard let resetAt = state.weeklyMetric?.resetAt else { return nil }
-        let formatter = DateFormatter()
-        formatter.dateStyle = .medium
-        formatter.timeStyle = .short
-        return "Weekly window resets on \(formatter.string(from: resetAt))"
-    }
-
-    private func relativeTime(_ date: Date) -> String {
-        let seconds = max(0, Int(Date().timeIntervalSince(date)))
-        if seconds < 60 { return "\(seconds)s ago" }
-        if seconds < 3600 { return "\(seconds / 60)m ago" }
-        return "\(seconds / 3600)h ago"
     }
 
     private func shortClock(_ date: Date) -> String {
@@ -395,7 +312,7 @@ struct HistoryRow: View {
 
     private var title: String {
         if let tool = event.tool {
-            return "\(tool.displayName): \(event.title)"
+            return "\(tool.shortName): \(event.title)"
         }
         return event.title
     }

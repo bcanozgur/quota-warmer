@@ -180,6 +180,9 @@ final class ToolState: ObservableObject {
 final class AppState: ObservableObject {
     @Published var showOnboarding = false
     @Published var isRefreshing = false
+    /// Which tab the panel shows. Lifted out of `MenuContent` so the menu-bar
+    /// right-click menu ("Show Stats" / "Go to Settings") can drive it.
+    @Published var selectedTab: AppTab = .main
     @Published var updateInfo: ReleaseInfo?
     @Published private(set) var toolStates: [ToolID: ToolState]
     @Published var history: [HistoryEvent] = []
@@ -1012,6 +1015,30 @@ final class AppState: ObservableObject {
     }
 }
 
+/// Diagnostic logging verbosity, set from the menu-bar right-click menu.
+/// `.off` silences the on-disk diagnostics log entirely.
+enum DebugLevel: Int, CaseIterable {
+    case off = 0
+    case normal = 1
+    case verbose = 2
+
+    var title: String {
+        switch self {
+        case .off:     return "Off"
+        case .normal:  return "Normal"
+        case .verbose: return "Verbose"
+        }
+    }
+
+    static var current: DebugLevel {
+        get {
+            let raw = UserDefaults.standard.object(forKey: "debugLevel") as? Int ?? DebugLevel.normal.rawValue
+            return DebugLevel(rawValue: raw) ?? .normal
+        }
+        set { UserDefaults.standard.set(newValue.rawValue, forKey: "debugLevel") }
+    }
+}
+
 enum DiagnosticLogger {
     static let fileURL = URL(fileURLWithPath: "/tmp/quotawarmer-diagnostics.log")
 
@@ -1027,6 +1054,7 @@ enum DiagnosticLogger {
     }
 
     static func append(_ message: String) {
+        guard DebugLevel.current != .off else { return }
         let line = "[\(formatter.string(from: Date()))] \(redacted(message))\n"
         guard let data = line.data(using: .utf8) else { return }
 

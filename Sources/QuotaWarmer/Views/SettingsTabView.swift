@@ -47,13 +47,13 @@ struct SettingsTabView: View {
                         Button(action: { appState.refreshAllActivity() }) {
                             Text("Refresh")
                                 .font(.system(size: 11, weight: .semibold))
-                                .padding(.horizontal, 11)
+                                .padding(.horizontal, 13)
                                 .frame(height: 26)
-                                .background(DS.C.surfaceHigh, in: RoundedRectangle(cornerRadius: 6))
-                                .foregroundStyle(DS.C.text)
-                                .overlay(RoundedRectangle(cornerRadius: DS.R.sm).stroke(DS.C.border, lineWidth: 1))
+                                .background(DS.C.surfaceHigh, in: Capsule())
+                                .foregroundStyle(DS.C.textSub)
+                                .overlay(Capsule().stroke(DS.C.border, lineWidth: 1))
                         }
-                        .buttonStyle(.plain)
+                        .buttonStyle(PressableButtonStyle())
                     }
                 }
 
@@ -203,13 +203,13 @@ struct SettingsTabView: View {
                             Button(action: { Task { await appState.checkForAppUpdate() } }) {
                                 Text("Check")
                                     .font(.system(size: 11, weight: .semibold))
-                                    .padding(.horizontal, 11)
+                                    .padding(.horizontal, 13)
                                     .frame(height: 26)
-                                    .background(DS.C.surfaceHigh, in: RoundedRectangle(cornerRadius: 6))
-                                    .foregroundStyle(DS.C.text)
-                                    .overlay(RoundedRectangle(cornerRadius: DS.R.sm).stroke(DS.C.border))
+                                    .background(DS.C.surfaceHigh, in: Capsule())
+                                    .foregroundStyle(DS.C.textSub)
+                                    .overlay(Capsule().stroke(DS.C.border, lineWidth: 1))
                             }
-                            .buttonStyle(.plain)
+                            .buttonStyle(PressableButtonStyle())
                         }
                         Divider().background(DS.C.border).padding(.leading, 36)
                     }
@@ -271,8 +271,7 @@ struct SettingsTabView: View {
             VStack(spacing: 0) {
                 content()
             }
-            .background(DS.C.surface, in: RoundedRectangle(cornerRadius: DS.R.md))
-            .overlay(RoundedRectangle(cornerRadius: DS.R.md).stroke(DS.C.border, lineWidth: 1))
+            .dsCard()
             .padding(.horizontal, DS.Space.lg)
             .padding(.bottom, DS.Space.sm)
         }
@@ -347,27 +346,25 @@ struct SettingsTabView: View {
     ) -> some View {
         HStack(spacing: 2) {
             ForEach(options, id: \.value) { opt in
+                let isSelected = selected.wrappedValue == opt.value
                 Button(action: { selected.wrappedValue = opt.value; onChange() }) {
                     Text(opt.label)
                         .font(.system(size: 9, weight: .semibold))
-                        .padding(.horizontal, 7).padding(.vertical, 4)
+                        .padding(.horizontal, 8).padding(.vertical, 4)
                         .background(
-                            selected.wrappedValue == opt.value
-                                ? DS.C.surfaceHigh
-                                : Color.clear,
-                            in: RoundedRectangle(cornerRadius: 4)
+                            isSelected ? DS.C.surface : Color.clear,
+                            in: RoundedRectangle(cornerRadius: 6, style: .continuous)
                         )
-                        .foregroundStyle(
-                            selected.wrappedValue == opt.value
-                                ? DS.C.text
-                                : DS.C.textMuted
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                                .stroke(isSelected ? DS.C.border : Color.clear, lineWidth: 1)
                         )
+                        .foregroundStyle(isSelected ? DS.C.text : DS.C.textMuted)
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(PressableButtonStyle())
             }
         }
         .padding(2)
-        .background(DS.C.bg, in: RoundedRectangle(cornerRadius: 6))
-        .overlay(RoundedRectangle(cornerRadius: 6).stroke(DS.C.border, lineWidth: 1))
+        .background(DS.C.surfaceHigh, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
     }
 }

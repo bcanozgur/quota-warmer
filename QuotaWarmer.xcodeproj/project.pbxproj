@@ -13,9 +13,11 @@
 		242099BB055E5B570D3E0ED3 /* ToolTabView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A9538D4356A015407DACDA16 /* ToolTabView.swift */; };
 		252FDEFA11D9ECBE5ABAE3C1 /* NotificationManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8AA0B158FEC9459E92677A33 /* NotificationManager.swift */; };
 		2769B7FA38A99171E15AC939 /* MenuContent.swift in Sources */ = {isa = PBXBuildFile; fileRef = 98917F67C6611F34831F684C /* MenuContent.swift */; };
+		2809480C8774C47C52136ECC /* Components.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4DD0A6F158460741008A6DC8 /* Components.swift */; };
 		2AAAD6912C5020B0E6C7C336 /* AppState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 15BE4D2A429BB790E2ACF1BE /* AppState.swift */; };
 		5E1789AD3B2F0CAA3B34784F /* ToolID.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9ECB196FCE1063660355BE22 /* ToolID.swift */; };
 		6EE00E6AD61DD98974168E92 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 761B35D9CA261C8A260FF75B /* Assets.xcassets */; };
+		737C077D9B36EB603128B662 /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2BD69A6F289B09B5A2712134 /* AppDelegate.swift */; };
 		790C57D3B366DA66EB4464E7 /* SettingsTabView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D76B9243E050B459482C242A /* SettingsTabView.swift */; };
 		79B2AB603B32FA480DB5D162 /* Scheduler.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2C0FFA24004A3B12BB624E6F /* Scheduler.swift */; };
 		87AB46923736BB0CD28FC099 /* AppState+Ext.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3739BD62D7E5AAF6EB84DC3C /* AppState+Ext.swift */; };
@@ -35,8 +37,10 @@
 		15BE4D2A429BB790E2ACF1BE /* AppState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppState.swift; sourceTree = "<group>"; };
 		166E35057E1F11E7F1A327F8 /* WakeScheduler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WakeScheduler.swift; sourceTree = "<group>"; };
 		1F346F22AD123AA6C32975A6 /* OnboardingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OnboardingView.swift; sourceTree = "<group>"; };
+		2BD69A6F289B09B5A2712134 /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
 		2C0FFA24004A3B12BB624E6F /* Scheduler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Scheduler.swift; sourceTree = "<group>"; };
 		3739BD62D7E5AAF6EB84DC3C /* AppState+Ext.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "AppState+Ext.swift"; sourceTree = "<group>"; };
+		4DD0A6F158460741008A6DC8 /* Components.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Components.swift; sourceTree = "<group>"; };
 		6F3B64B4293CFBD14217DA2B /* MainTabView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MainTabView.swift; sourceTree = "<group>"; };
 		761B35D9CA261C8A260FF75B /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		8AA0B158FEC9459E92677A33 /* NotificationManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotificationManager.swift; sourceTree = "<group>"; };
@@ -60,6 +64,7 @@
 		291EA9FDE7C214B65154DAD5 /* QuotaWarmer */ = {
 			isa = PBXGroup;
 			children = (
+				2BD69A6F289B09B5A2712134 /* AppDelegate.swift */,
 				15BE4D2A429BB790E2ACF1BE /* AppState.swift */,
 				3739BD62D7E5AAF6EB84DC3C /* AppState+Ext.swift */,
 				761B35D9CA261C8A260FF75B /* Assets.xcassets */,
@@ -100,6 +105,7 @@
 		514A63A579C678739B4678E0 /* Views */ = {
 			isa = PBXGroup;
 			children = (
+				4DD0A6F158460741008A6DC8 /* Components.swift */,
 				EA95269FE22AE9471F2D23BA /* DS.swift */,
 				6F3B64B4293CFBD14217DA2B /* MainTabView.swift */,
 				E94AAC800581DE96B2F6ED29 /* MenuBarLabel.swift */,
@@ -198,8 +204,10 @@
 			buildActionMask = 2147483647;
 			files = (
 				BF2969F3D8D6280430B78E49 /* ActivityScanner.swift in Sources */,
+				737C077D9B36EB603128B662 /* AppDelegate.swift in Sources */,
 				87AB46923736BB0CD28FC099 /* AppState+Ext.swift in Sources */,
 				2AAAD6912C5020B0E6C7C336 /* AppState.swift in Sources */,
+				2809480C8774C47C52136ECC /* Components.swift in Sources */,
 				F3EBF8802D29A1A5F07C66B1 /* CredentialStore.swift in Sources */,
 				AE93A125268295B8FEFE106B /* DS.swift in Sources */,
 				C7A75684B732A7F922EBB865 /* MainTabView.swift in Sources */,

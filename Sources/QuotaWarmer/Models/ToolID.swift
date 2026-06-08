@@ -13,6 +13,14 @@ enum ToolID: String, CaseIterable, Identifiable, Codable {
         }
     }
 
+    /// Short, brand-only name for in-app screen labels.
+    var shortName: String {
+        switch self {
+        case .claude: return "Claude"
+        case .codex:  return "Codex"
+        }
+    }
+
     var icon: String {
         switch self {
         case .claude: return "bolt.circle.fill"
@@ -59,6 +67,10 @@ enum ToolID: String, CaseIterable, Identifiable, Codable {
         let stored = UserDefaults.standard.integer(forKey: "windowDurationSecs")
         return stored > 0 ? TimeInterval(stored) : 5 * 3600
     }
+
+    /// Weekly quota window length (7 days). Used by the in-app pace marker to
+    /// show how much of the weekly window's *time* remains versus quota.
+    var weeklyWindowDuration: TimeInterval { 7 * 24 * 3600 }
 }
 
 /// How QuotaWarmer treats a tool. Monitoring (read-only visibility) is the

@@ -1,26 +1,48 @@
 import SwiftUI
 
+extension Color {
+    /// Hex literal initializer, e.g. `Color(hex: 0xF8FAFC)`.
+    init(hex: UInt32) {
+        self.init(
+            .sRGB,
+            red: Double((hex >> 16) & 0xFF) / 255.0,
+            green: Double((hex >> 8) & 0xFF) / 255.0,
+            blue: Double(hex & 0xFF) / 255.0,
+            opacity: 1.0
+        )
+    }
+}
+
+/// Design tokens. Tuned to the OpenUsage visual language: a white content
+/// surface, a narrow off-white sidebar, hairline borders, navy-near-black
+/// titles, slate body text, muted meta text, and slim near-black usage bars.
 enum DS {
     enum C {
-        static let bg          = Color(red: 0.982, green: 0.984, blue: 0.988)
-        static let sidebar     = Color(red: 0.950, green: 0.956, blue: 0.966)
-        static let track       = Color(red: 0.905, green: 0.912, blue: 0.926)
-        static let surface     = Color(red: 0.996, green: 0.997, blue: 0.999)
-        static let surfaceHigh = Color(red: 0.940, green: 0.946, blue: 0.958)
-        static let ink         = Color(red: 0.055, green: 0.080, blue: 0.130)
+        // Surfaces
+        static let bg          = Color(hex: 0xFFFFFF)   // window + content base (white)
+        static let sidebar     = Color(hex: 0xF8FAFC)   // narrow left rail
+        static let surface     = Color(hex: 0xFFFFFF)   // cards
+        static let surfaceHigh = Color(hex: 0xF1F5F9)   // quiet button / segmented fill (slate-100)
+        static let track       = Color(hex: 0xE9EDF2)   // progress track
+        static let ink         = Color(hex: 0x0F172A)   // near-black navy: bar fill, selected indicator
 
-        static let border      = Color(red: 0.830, green: 0.850, blue: 0.885)
+        // Borders
+        static let border      = Color(hex: 0xE5E7EB)   // hairline card / divider border
+        static let borderSoft  = Color(hex: 0xEEF1F5)   // very subtle inner divider
         static let borderFocus = Color.black.opacity(0.16)
 
-        static let text        = Color(red: 0.040, green: 0.055, blue: 0.090)
-        static let textSub     = Color(red: 0.400, green: 0.440, blue: 0.520)
-        static let textMuted   = Color(red: 0.540, green: 0.580, blue: 0.660)
+        // Text
+        static let text        = Color(hex: 0x0F172A)   // titles (navy near-black)
+        static let textSub     = Color(hex: 0x475569)   // body (slate-600)
+        static let textMuted   = Color(hex: 0x94A3B8)   // meta (slate-400)
 
-        static let green  = Color(red: 0.13, green: 0.69, blue: 0.30)
-        static let yellow = Color(red: 0.82, green: 0.60, blue: 0.05)
-        static let red    = Color(red: 0.86, green: 0.20, blue: 0.20)
-        static let blue   = Color(red: 0.20, green: 0.46, blue: 0.95)
+        // Status
+        static let green  = Color(hex: 0x16A34A)
+        static let yellow = Color(hex: 0xD97706)
+        static let red    = Color(hex: 0xDC2626)
+        static let blue   = Color(hex: 0x2563EB)
 
+        /// Per-tool brand accent. Kept as-is to preserve product identity.
         static func accent(_ tool: ToolID) -> Color {
             tool == .claude
                 ? Color(red: 0.90, green: 0.38, blue: 0.05)   // Anthropic orange
@@ -39,17 +61,18 @@ enum DS {
 
     // MARK: - Radii
     enum R {
-        static let sm: CGFloat = 5
-        static let md: CGFloat = 9
-        static let lg: CGFloat = 12
+        static let sm: CGFloat = 7    // badges / small chips
+        static let md: CGFloat = 10   // buttons / inputs
+        static let lg: CGFloat = 14   // cards
+        static let xl: CGFloat = 18   // outer panel
     }
 
     // MARK: - Layout
     static let panelScale: CGFloat = 0.90
-    static let sidebarWidth: CGFloat = 50
+    static let sidebarWidth: CGFloat = 56
     static let contentWidth: CGFloat = 372
     static let totalWidth:   CGFloat = sidebarWidth + contentWidth
-    static let totalHeight: CGFloat = 490
+    static let totalHeight: CGFloat = 560
 
     // MARK: - Typography
     static func mono(_ size: CGFloat, weight: Font.Weight = .regular) -> Font {
@@ -60,15 +83,18 @@ enum DS {
 // MARK: - View modifiers
 
 extension View {
-    func dsCard() -> some View {
+    /// Standard white card with a hairline border.
+    func dsCard(radius: CGFloat = DS.R.lg) -> some View {
         self
-            .background(DS.C.bg, in: RoundedRectangle(cornerRadius: DS.R.md))
-            .overlay(RoundedRectangle(cornerRadius: DS.R.md).stroke(DS.C.border, lineWidth: 1))
+            .background(DS.C.surface, in: RoundedRectangle(cornerRadius: radius, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: radius, style: .continuous).stroke(DS.C.border, lineWidth: 1))
     }
 
-    func dsLabel() -> some View {
-        self.font(.system(size: 9, weight: .semibold))
+    /// Uppercase, letter-spaced section label (e.g. "WINDOW STATUS").
+    func dsSectionLabel() -> some View {
+        self.font(.system(size: 10, weight: .semibold))
             .foregroundStyle(DS.C.textMuted)
-            .tracking(0)
+            .tracking(0.7)
+            .textCase(.uppercase)
     }
 }

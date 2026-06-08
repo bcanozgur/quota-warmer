@@ -24,7 +24,6 @@ enum AppTab: Hashable {
 
 struct MenuContent: View {
     @EnvironmentObject var appState: AppState
-    @State private var selectedTab: AppTab = .main
     private let ticker = Timer.publish(every: 30, on: .main, in: .common).autoconnect()
     @State private var now = Date()
 
@@ -37,8 +36,13 @@ struct MenuContent: View {
                 height: DS.totalHeight * DS.panelScale,
                 alignment: .topLeading
             )
-            .clipShape(RoundedRectangle(cornerRadius: 13, style: .continuous))
-            .shadow(color: .black.opacity(0.15), radius: 16, x: 0, y: 7)
+            .clipShape(RoundedRectangle(cornerRadius: DS.R.xl, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: DS.R.xl, style: .continuous)
+                    .stroke(DS.C.border, lineWidth: 1)
+            )
+            .shadow(color: .black.opacity(0.16), radius: 18, x: 0, y: 8)
+            .padding(2)
             .background(WindowTransparencyConfigurator())
             .onReceive(ticker) { t in now = t }
     }
@@ -60,27 +64,35 @@ struct MenuContent: View {
     // MARK: - Sidebar
 
     private var sidebar: some View {
-        VStack(spacing: 12) {
-            SidebarMainTab(isSelected: selectedTab == .main) {
-                selectedTab = .main
+        VStack(spacing: 6) {
+            SidebarSlot(isSelected: appState.selectedTab == .main, help: "Overview") {
+                appState.selectedTab = .main
+            } icon: {
+                Image(systemName: appState.selectedTab == .main ? "house.fill" : "house")
+                    .font(.system(size: 16, weight: .regular))
+                    .foregroundStyle(appState.selectedTab == .main ? DS.C.ink : DS.C.textSub)
             }
 
             ForEach(ToolID.allCases) { tool in
-                SidebarTab(
+                SidebarToolItem(
                     tool: tool,
                     toolState: appState.state(for: tool),
-                    isSelected: selectedTab == .tool(tool)
-                ) { selectedTab = .tool(tool) }
+                    isSelected: appState.selectedTab == .tool(tool)
+                ) { appState.selectedTab = .tool(tool) }
             }
 
             Spacer()
 
-            SidebarSettingsTab(isSelected: selectedTab == .settings) {
-                selectedTab = .settings
+            SidebarSlot(isSelected: appState.selectedTab == .settings, help: "Settings") {
+                appState.selectedTab = .settings
+            } icon: {
+                Image(systemName: "gearshape")
+                    .font(.system(size: 16, weight: .regular))
+                    .foregroundStyle(appState.selectedTab == .settings ? DS.C.ink : DS.C.textSub)
             }
         }
-        .padding(.top, 16)
-        .padding(.bottom, 16)
+        .padding(.top, 14)
+        .padding(.bottom, 14)
         .frame(width: DS.sidebarWidth)
         .background(DS.C.sidebar)
     }
@@ -89,7 +101,7 @@ struct MenuContent: View {
 
     @ViewBuilder
     private var mainContent: some View {
-        switch selectedTab {
+        switch appState.selectedTab {
         case .main:
             MainTabView()
                 .frame(width: DS.contentWidth)
@@ -136,12 +148,13 @@ struct MenuContent: View {
                 Button(action: { NSWorkspace.shared.open(update.htmlURL) }) {
                     Text("Restart to update")
                         .font(.system(size: 12, weight: .semibold))
-                        .foregroundStyle(.red)
+                        .foregroundStyle(DS.C.red)
                         .padding(.horizontal, 12)
-                        .frame(height: 28)
-                        .background(Color.red.opacity(0.10), in: RoundedRectangle(cornerRadius: DS.R.md))
+                        .frame(height: 26)
+                        .background(DS.C.red.opacity(0.10), in: Capsule())
+                        .overlay(Capsule().stroke(DS.C.red.opacity(0.22), lineWidth: 1))
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(PressableButtonStyle())
             } else {
                 Text("QuotaWarmer v\(appVersion)")
                     .font(.system(size: 11.5, weight: .medium))
@@ -175,7 +188,7 @@ struct MenuContent: View {
     }
 
     private var footerStatus: String {
-        if case .tool(let tool) = selectedTab {
+        if case .tool(let tool) = appState.selectedTab {
             let state = appState.state(for: tool)
             if state.isFetchingQuota { return "Updating..." }
             if let next = state.nextRefreshAt { return "Next update in \(compactCountdown(next))" }
@@ -184,19 +197,19 @@ struct MenuContent: View {
     }
 
     private var isFooterRefreshing: Bool {
-        if case .tool(let tool) = selectedTab {
+        if case .tool(let tool) = appState.selectedTab {
             return appState.state(for: tool).isFetchingQuota
         }
         return appState.isRefreshing
     }
 
     private var canRefreshFromFooter: Bool {
-        if case .tool = selectedTab { return true }
+        if case .tool = appState.selectedTab { return true }
         return false
     }
 
     private func footerAction() {
-        guard case .tool(let tool) = selectedTab else { return }
+        guard case .tool(let tool) = appState.selectedTab else { return }
         Task { await appState.refreshQuota(for: tool) }
     }
 
@@ -208,90 +221,63 @@ struct MenuContent: View {
     }
 }
 
-// MARK: - SidebarTab
+// MARK: - Sidebar items
 
-struct SidebarTab: View {
+/// One icon slot in the narrow left rail. Selected state is shown with a soft
+/// rounded highlight (OpenUsage-style) rather than a colored bar; hover gives a
+/// faint highlight. Holds any icon (SF Symbol or template provider glyph).
+struct SidebarSlot<Icon: View>: View {
+    let isSelected: Bool
+    let help: String
+    let action: () -> Void
+    @ViewBuilder var icon: () -> Icon
+
+    @State private var hovering = false
+
+    var body: some View {
+        Button(action: action) {
+            icon()
+                .frame(width: 38, height: 32)
+                .background(
+                    RoundedRectangle(cornerRadius: 9, style: .continuous)
+                        .fill(highlight)
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 9, style: .continuous)
+                        .stroke(isSelected ? DS.C.border : Color.clear, lineWidth: 1)
+                )
+                .frame(width: DS.sidebarWidth, height: 36)
+        }
+        .buttonStyle(PressableButtonStyle())
+        .onHover { hovering = $0 }
+        .help(help)
+        .accessibilityLabel(Text(help))
+    }
+
+    private var highlight: Color {
+        if isSelected { return DS.C.surface }
+        if hovering { return DS.C.surfaceHigh }
+        return .clear
+    }
+}
+
+/// Provider glyph slot in the sidebar. Observes the tool so the icon dims when
+/// the tool isn't being monitored. Keeps the Claude/Codex glyphs untouched.
+struct SidebarToolItem: View {
     let tool: ToolID
     @ObservedObject var toolState: ToolState
     let isSelected: Bool
     let action: () -> Void
 
     var body: some View {
-        Button(action: action) {
-            ZStack(alignment: .leading) {
-                if isSelected {
-                    RoundedRectangle(cornerRadius: 2)
-                        .fill(DS.C.ink)
-                        .frame(width: 3, height: 36)
-                        .offset(x: -1)
-                }
-                Image(tool == .claude ? "ClaudeCode" : "Codex")
-                    .resizable()
-                    .renderingMode(.template)
-                    .scaledToFit()
-                    .frame(width: 19, height: 19)
-                    .foregroundStyle(DS.C.text)
-                    .opacity(toolState.isMonitored || toolState.isWarming || isSelected ? 1.0 : 0.72)
-                    .frame(maxWidth: .infinity)
-            }
-            .frame(width: DS.sidebarWidth, height: 38)
+        SidebarSlot(isSelected: isSelected, help: tool.shortName, action: action) {
+            Image(tool == .claude ? "ClaudeCode" : "Codex")
+                .resizable()
+                .renderingMode(.template)
+                .scaledToFit()
+                .frame(width: 19, height: 19)
+                .foregroundStyle(isSelected ? DS.C.ink : DS.C.text)
+                .opacity(toolState.isMonitored || toolState.isWarming || isSelected ? 1.0 : 0.55)
         }
-        .buttonStyle(.plain)
-    }
-}
-
-// MARK: - SidebarMainTab
-
-struct SidebarMainTab: View {
-    let isSelected: Bool
-    let action: () -> Void
-
-    var body: some View {
-        Button(action: action) {
-            sidebarIcon(systemName: "house", selected: isSelected)
-        }
-        .buttonStyle(.plain)
-    }
-
-    private func sidebarIcon(systemName: String, selected: Bool) -> some View {
-        ZStack(alignment: .leading) {
-            if selected {
-                RoundedRectangle(cornerRadius: 2)
-                    .fill(DS.C.ink)
-                    .frame(width: 3, height: 36)
-                    .offset(x: -1)
-            }
-            Image(systemName: systemName)
-                .font(.system(size: 18, weight: .regular))
-                .foregroundStyle(selected ? DS.C.ink : DS.C.textSub)
-                .frame(maxWidth: .infinity)
-        }
-        .frame(width: DS.sidebarWidth, height: 38)
-    }
-}
-
-// MARK: - SidebarSettingsTab
-
-struct SidebarSettingsTab: View {
-    let isSelected: Bool
-    let action: () -> Void
-
-    var body: some View {
-        Button(action: action) {
-            ZStack(alignment: .leading) {
-                if isSelected {
-                    RoundedRectangle(cornerRadius: 2)
-                        .fill(DS.C.ink)
-                        .frame(width: 3, height: 36)
-                        .offset(x: -1)
-                }
-                Image(systemName: "gearshape")
-                    .font(.system(size: 18, weight: .regular))
-                    .foregroundStyle(isSelected ? DS.C.ink : DS.C.textSub)
-                    .frame(maxWidth: .infinity)
-            }
-            .frame(width: DS.sidebarWidth, height: 40)
-        }
-        .buttonStyle(.plain)
     }
 }

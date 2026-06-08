@@ -10,29 +10,30 @@ struct ToolTabView: View {
     @State private var now = Date()
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 17) {
+        VStack(alignment: .leading, spacing: 16) {
             header
             quotaList
             actions
             Spacer(minLength: 0)
         }
-        .padding(.horizontal, 17)
-        .padding(.top, 17)
+        .padding(.horizontal, 18)
+        .padding(.top, 18)
+        .padding(.bottom, 16)
         .background(DS.C.bg)
         .onReceive(ticker) { t in now = t }
     }
 
     private var header: some View {
         HStack(alignment: .center) {
-            HStack(spacing: 8) {
+            HStack(spacing: 9) {
                 Image(toolState.tool == .claude ? "ClaudeCode" : "Codex")
                     .resizable()
                     .renderingMode(.template)
                     .scaledToFit()
-                    .frame(width: 22, height: 22)
+                    .frame(width: 24, height: 24)
                     .foregroundStyle(DS.C.text)
-                Text(toolState.tool.shortDisplayName)
-                    .font(.system(size: 19, weight: .bold))
+                Text(toolState.tool.shortName)
+                    .font(.system(size: 22, weight: .bold))
                     .foregroundStyle(DS.C.text)
             }
             Spacer()
@@ -46,17 +47,19 @@ struct ToolTabView: View {
     }
 
     private var quotaList: some View {
-        VStack(alignment: .leading, spacing: 19) {
-            ForEach(rows) { row in
-                QuotaRowView(row: row, refreshing: toolState.isFetchingQuota)
-            }
-            if let weeklyResetText {
-                Label(weeklyResetText, systemImage: "calendar")
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(DS.C.textMuted)
-                    .lineLimit(1)
-                    .help(weeklyResetHelp ?? weeklyResetText)
-            }
+        VStack(alignment: .leading, spacing: 22) {
+            windowRow(
+                title: "Session",
+                metric: toolState.primaryMetric,
+                resetAt: toolState.resetAt,
+                windowDuration: toolState.tool.windowDuration
+            )
+            windowRow(
+                title: "Weekly",
+                metric: toolState.weeklyMetric,
+                resetAt: toolState.weeklyMetric?.resetAt,
+                windowDuration: toolState.tool.weeklyWindowDuration
+            )
             if let error = toolState.errorMessage {
                 Text(error)
                     .font(.system(size: 11.5))
@@ -64,83 +67,38 @@ struct ToolTabView: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.top, 4)
     }
 
-    private var weeklyResetText: String? {
-        guard let resetAt = toolState.weeklyMetric?.resetAt else { return nil }
-        let seconds = max(0, Int(resetAt.timeIntervalSince(now)))
-        return "Weekly resets in \(durationText(seconds)) · \(Self.weekdayDateFormatter.string(from: resetAt))"
-    }
-
-    private static let weekdayDateFormatter: DateFormatter = {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "EEE, MMM d"
-        return formatter
-    }()
-
-    private var weeklyResetHelp: String? {
-        guard let resetAt = toolState.weeklyMetric?.resetAt else { return nil }
-        let formatter = DateFormatter()
-        formatter.dateStyle = .medium
-        formatter.timeStyle = .short
-        return "Weekly window resets on \(formatter.string(from: resetAt))"
-    }
-
-    private var rows: [QuotaDisplayRow] {
-        [
-            displayRow(title: "5h Window", metric: toolState.primaryMetric),
-            displayRow(title: "Weekly", metric: toolState.weeklyMetric)
-        ]
-    }
-
-    private func displayRow(title: String, metric: QuotaMetric?) -> QuotaDisplayRow {
-        let percent = metric?.remainingFraction ?? 0
-        let leading: String
-        if metric == nil {
-            leading = "-- left"
-        } else {
-            leading = "\(Int(percent * 100))% left"
-        }
-
-        return QuotaDisplayRow(
+    private func windowRow(title: String, metric: QuotaMetric?, resetAt: Date?, windowDuration: TimeInterval) -> some View {
+        let quotaLeft = metric?.remainingFraction ?? 0
+        let leftText = metric == nil ? "-- left" : "\(Int(quotaLeft * 100))% left"
+        let pace = QuotaPace.compute(
+            quotaLeft: quotaLeft,
+            resetAt: resetAt,
+            windowDuration: windowDuration,
+            now: now,
+            fallbackResetText: fallbackResetText(metric: metric)
+        )
+        return QuotaWindowRow(
             title: title,
-            progressFraction: percent,
-            leadingValue: leading,
-            resetText: resetText(
-                for: metric,
-                resetAt: title == "5h Window" ? toolState.resetAt : metric?.resetAt,
-                includeRemaining: title == "5h Window"
-            ),
-            metricID: metric?.id
+            hasMetric: metric != nil,
+            quotaLeft: quotaLeft,
+            leftText: leftText,
+            pace: pace,
+            refreshing: toolState.isFetchingQuota
         )
     }
 
-    private func resetText(for metric: QuotaMetric?, resetAt: Date?, includeRemaining: Bool) -> String {
-        guard let resetAt else {
-            guard metric != nil else {
-                return toolState.isFetchingQuota ? "Updating..." : "No live quota"
-            }
-            if let metric, metric.isIdleFiveHourWindow {
-                return "\(Int(metric.remainingFraction * 100))% left"
-            }
-            return freshnessFallback
+    private func fallbackResetText(metric: QuotaMetric?) -> String {
+        guard metric != nil else {
+            return toolState.isFetchingQuota ? "Updating..." : "No live quota"
         }
-        let seconds = max(0, Int(resetAt.timeIntervalSince(now)))
-        let timeText = durationText(seconds)
-        guard includeRemaining, let metric else { return "Resets in \(timeText)" }
-        return "Resets in \(timeText) - \(Int(metric.remainingFraction * 100))% left"
-    }
-
-    private func durationText(_ seconds: Int) -> String {
-        if seconds < 60 {
-            return "\(seconds)s"
-        } else if seconds < 3600 {
-            return "\(seconds / 60)m"
-        } else if seconds < 86_400 {
-            return "\(seconds / 3600)h \((seconds % 3600) / 60)m"
-        } else {
-            return "\(seconds / 86_400)d \((seconds % 86_400) / 3600)h"
+        if let metric, metric.isIdleFiveHourWindow {
+            return "\(Int(metric.remainingFraction * 100))% left"
         }
+        return freshnessFallback
     }
 
     private var freshnessFallback: String {
@@ -162,72 +120,26 @@ struct ToolTabView: View {
                 Label("Warm", systemImage: "bolt.fill")
                     .font(.system(size: 12, weight: .semibold))
                     .frame(height: 32)
-                    .padding(.horizontal, 12)
+                    .padding(.horizontal, 14)
                     .foregroundStyle(.white)
-                    .background(DS.C.accent(toolState.tool), in: RoundedRectangle(cornerRadius: 6))
+                    .background(DS.C.accent(toolState.tool), in: Capsule())
             }
-            .buttonStyle(.plain)
+            .buttonStyle(PressableButtonStyle())
             .disabled(toolState.isWarming)
+            .accessibilityLabel(Text("Warm \(toolState.tool.shortName) now"))
 
             Button(action: onRefresh) {
                 Label("Refresh", systemImage: toolState.isFetchingQuota ? "hourglass" : toolState.quotaBackoffActive ? "clock.arrow.circlepath" : "arrow.clockwise")
                     .font(.system(size: 12, weight: .semibold))
                     .frame(height: 32)
-                    .padding(.horizontal, 12)
-                    .foregroundStyle(DS.C.text)
-                    .background(DS.C.surfaceHigh, in: RoundedRectangle(cornerRadius: 6))
+                    .padding(.horizontal, 14)
+                    .foregroundStyle(DS.C.textSub)
+                    .background(DS.C.surfaceHigh, in: Capsule())
+                    .overlay(Capsule().stroke(DS.C.border, lineWidth: 1))
             }
-            .buttonStyle(.plain)
+            .buttonStyle(PressableButtonStyle())
             .disabled(toolState.isFetchingQuota || toolState.quotaBackoffActive)
-        }
-    }
-}
-
-private struct QuotaDisplayRow: Identifiable {
-    let id = UUID()
-    let title: String
-    let progressFraction: Double
-    let leadingValue: String
-    let resetText: String
-    let metricID: UUID?
-}
-
-private struct QuotaRowView: View {
-    let row: QuotaDisplayRow
-    let refreshing: Bool
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text(row.title)
-                .font(.system(size: 14, weight: .bold))
-                .foregroundStyle(DS.C.text)
-
-            GeometryReader { geometry in
-                ZStack(alignment: .leading) {
-                    Capsule()
-                        .fill(DS.C.track)
-                    Capsule()
-                        .fill(DS.C.ink)
-                        .frame(width: max(geometry.size.width * CGFloat(row.progressFraction), 0))
-                    if refreshing {
-                        Capsule()
-                            .fill(.white.opacity(0.22))
-                            .frame(width: geometry.size.width * 0.28)
-                            .offset(x: geometry.size.width * 0.18)
-                    }
-                }
-            }
-            .frame(height: 10)
-
-            HStack {
-                Text(row.leadingValue)
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(DS.C.textSub)
-                Spacer()
-                Text(row.resetText)
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(DS.C.textSub)
-            }
+            .accessibilityLabel(Text("Refresh \(toolState.tool.shortName) quota now"))
         }
     }
 }
@@ -267,15 +179,6 @@ struct LogEntryView: View {
     }
 }
 
-private extension ToolID {
-    var shortDisplayName: String {
-        switch self {
-        case .claude: return "Claude"
-        case .codex: return "Codex"
-        }
-    }
-}
-
 /// Off / Monitor / Auto-warm selector used in the tool tab and the main
 /// provider rows. Rendered as a plain, always-visible button (a colored dot +
 /// the mode label) that cycles through the three modes on click — deliberately
@@ -288,23 +191,21 @@ struct ToolModeMenu: View {
     var body: some View {
         Button(action: { onSelect(mode.next) }) {
             HStack(spacing: 5) {
-                Circle()
-                    .fill(ToolModeMenu.color(mode))
-                    .frame(width: 7, height: 7)
+                StatusDot(color: ToolModeMenu.color(mode), size: 7)
                 Text(mode.label)
                     .font(.system(size: compact ? 10 : 12, weight: .semibold))
                     .foregroundStyle(DS.C.text)
                     .lineLimit(1)
                     .minimumScaleFactor(0.75)
             }
-            .padding(.horizontal, compact ? 7 : 11)
-            .frame(maxWidth: compact ? .infinity : nil)
-            .frame(height: compact ? 25 : 28)
-            .background(DS.C.bg, in: RoundedRectangle(cornerRadius: DS.R.sm))
-            .overlay(RoundedRectangle(cornerRadius: DS.R.sm).stroke(ToolModeMenu.color(mode).opacity(0.5), lineWidth: 1))
+            .padding(.horizontal, compact ? 9 : 12)
+            .frame(height: compact ? 26 : 28)
+            .background(DS.C.surface, in: Capsule())
+            .overlay(Capsule().stroke(ToolModeMenu.color(mode).opacity(0.5), lineWidth: 1))
         }
-        .buttonStyle(.plain)
+        .buttonStyle(PressableButtonStyle())
         .help("Mode: \(mode.label). Click to cycle Off → Monitor → Auto-warm.")
+        .accessibilityLabel(Text("Mode: \(mode.label). Activate to change."))
     }
 
     static func color(_ mode: ToolMode) -> Color {
