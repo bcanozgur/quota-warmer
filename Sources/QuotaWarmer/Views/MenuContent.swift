@@ -102,7 +102,7 @@ struct MenuContent: View {
                 }
                 ToolTabView(
                     toolState: appState.state(for: id),
-                    onSetActive: { appState.setActive($0, for: id) },
+                    onSetMode: { appState.setMode($0, for: id) },
                     onActivate: { appState.activate(id) },
                     onRefresh: { Task { await appState.refreshQuota(for: id) } }
                 )
@@ -123,7 +123,16 @@ struct MenuContent: View {
 
     private var footerStrip: some View {
         HStack(spacing: 12) {
-            if let update = appState.updateInfo {
+            if let warning = appState.watcherStatusText {
+                HStack(spacing: 5) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .font(.system(size: 10, weight: .semibold))
+                    Text(warning)
+                        .font(.system(size: 11.5, weight: .semibold))
+                }
+                .foregroundStyle(DS.C.yellow)
+                .help("QuotaWarmer hasn't completed a quota check recently — it may be offline or blocked.")
+            } else if let update = appState.updateInfo {
                 Button(action: { NSWorkspace.shared.open(update.htmlURL) }) {
                     Text("Restart to update")
                         .font(.system(size: 12, weight: .semibold))
@@ -222,7 +231,7 @@ struct SidebarTab: View {
                     .scaledToFit()
                     .frame(width: 19, height: 19)
                     .foregroundStyle(DS.C.text)
-                    .opacity(toolState.isActive || toolState.isWarming || isSelected ? 1.0 : 0.72)
+                    .opacity(toolState.isMonitored || toolState.isWarming || isSelected ? 1.0 : 0.72)
                     .frame(maxWidth: .infinity)
             }
             .frame(width: DS.sidebarWidth, height: 38)

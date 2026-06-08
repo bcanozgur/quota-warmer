@@ -2,7 +2,7 @@ import SwiftUI
 
 struct ToolTabView: View {
     @ObservedObject var toolState: ToolState
-    let onSetActive: (Bool) -> Void
+    let onSetMode: (ToolMode) -> Void
     let onActivate: () -> Void
     let onRefresh: () -> Void
 
@@ -50,13 +50,12 @@ struct ToolTabView: View {
             ForEach(rows) { row in
                 QuotaRowView(row: row, refreshing: toolState.isFetchingQuota)
             }
-            if let sourceText = credentialSourceText {
-                Label(sourceText, systemImage: toolState.authRetryScheduledAt == nil ? "key.fill" : "clock.arrow.circlepath")
+            if let weeklyResetText {
+                Label(weeklyResetText, systemImage: "calendar")
                     .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(toolState.sourceHealth == .authFailure ? DS.C.red : DS.C.textMuted)
-                    .lineLimit(2)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .help(sourceText)
+                    .foregroundStyle(DS.C.textMuted)
+                    .lineLimit(1)
+                    .help(weeklyResetHelp ?? weeklyResetText)
             }
             if let error = toolState.errorMessage {
                 Text(error)
@@ -67,17 +66,24 @@ struct ToolTabView: View {
         }
     }
 
-    private var credentialSourceText: String? {
-        if let retryAt = toolState.authRetryScheduledAt, retryAt > now {
-            return "Auth recheck scheduled at \(shortClock(retryAt))"
-        }
-        if let source = toolState.credentialSource, !source.isEmpty {
-            return "Credential source: \(source)"
-        }
-        if toolState.sourceHealth == .authFailure {
-            return "Credential source unavailable"
-        }
-        return nil
+    private var weeklyResetText: String? {
+        guard let resetAt = toolState.weeklyMetric?.resetAt else { return nil }
+        let seconds = max(0, Int(resetAt.timeIntervalSince(now)))
+        return "Weekly resets in \(durationText(seconds)) · \(Self.weekdayDateFormatter.string(from: resetAt))"
+    }
+
+    private static let weekdayDateFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "EEE, MMM d"
+        return formatter
+    }()
+
+    private var weeklyResetHelp: String? {
+        guard let resetAt = toolState.weeklyMetric?.resetAt else { return nil }
+        let formatter = DateFormatter()
+        formatter.dateStyle = .medium
+        formatter.timeStyle = .short
+        return "Weekly window resets on \(formatter.string(from: resetAt))"
     }
 
     private var rows: [QuotaDisplayRow] {
@@ -120,18 +126,21 @@ struct ToolTabView: View {
             return freshnessFallback
         }
         let seconds = max(0, Int(resetAt.timeIntervalSince(now)))
-        let timeText: String
-        if seconds < 60 {
-            timeText = "\(seconds)s"
-        } else if seconds < 3600 {
-            timeText = "\(seconds / 60)m"
-        } else if seconds < 86_400 {
-            timeText = "\(seconds / 3600)h \((seconds % 3600) / 60)m"
-        } else {
-            timeText = "\(seconds / 86_400)d \((seconds % 86_400) / 3600)h"
-        }
+        let timeText = durationText(seconds)
         guard includeRemaining, let metric else { return "Resets in \(timeText)" }
         return "Resets in \(timeText) - \(Int(metric.remainingFraction * 100))% left"
+    }
+
+    private func durationText(_ seconds: Int) -> String {
+        if seconds < 60 {
+            return "\(seconds)s"
+        } else if seconds < 3600 {
+            return "\(seconds / 60)m"
+        } else if seconds < 86_400 {
+            return "\(seconds / 3600)h \((seconds % 3600) / 60)m"
+        } else {
+            return "\(seconds / 86_400)d \((seconds % 86_400) / 3600)h"
+        }
     }
 
     private var freshnessFallback: String {
@@ -143,29 +152,8 @@ struct ToolTabView: View {
         }
     }
 
-    private func shortClock(_ date: Date) -> String {
-        let formatter = DateFormatter()
-        formatter.dateStyle = .none
-        formatter.timeStyle = .short
-        return formatter.string(from: date)
-    }
-
     private var activeControl: some View {
-        Button(action: { onSetActive(!toolState.isActive) }) {
-            HStack(spacing: 6) {
-                Circle()
-                    .fill(toolState.isActive ? DS.C.green : DS.C.red)
-                    .frame(width: 6, height: 6)
-                Text(toolState.isActive ? "Active" : "Passive")
-                    .font(.system(size: 12, weight: .semibold))
-            }
-            .foregroundStyle(DS.C.text)
-            .padding(.horizontal, 10)
-            .frame(height: 28)
-            .background(DS.C.bg, in: RoundedRectangle(cornerRadius: DS.R.sm))
-            .overlay(RoundedRectangle(cornerRadius: DS.R.sm).stroke(DS.C.border))
-        }
-        .buttonStyle(.plain)
+        ToolModeMenu(mode: toolState.mode) { onSetMode($0) }
     }
 
     private var actions: some View {
@@ -284,6 +272,46 @@ private extension ToolID {
         switch self {
         case .claude: return "Claude"
         case .codex: return "Codex"
+        }
+    }
+}
+
+/// Off / Monitor / Auto-warm selector used in the tool tab and the main
+/// provider rows. Rendered as a plain, always-visible button (a colored dot +
+/// the mode label) that cycles through the three modes on click — deliberately
+/// not a `Menu`, which renders unreliably inside the menu-bar popover.
+struct ToolModeMenu: View {
+    let mode: ToolMode
+    var compact: Bool = false
+    let onSelect: (ToolMode) -> Void
+
+    var body: some View {
+        Button(action: { onSelect(mode.next) }) {
+            HStack(spacing: 5) {
+                Circle()
+                    .fill(ToolModeMenu.color(mode))
+                    .frame(width: 7, height: 7)
+                Text(mode.label)
+                    .font(.system(size: compact ? 10 : 12, weight: .semibold))
+                    .foregroundStyle(DS.C.text)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.75)
+            }
+            .padding(.horizontal, compact ? 7 : 11)
+            .frame(maxWidth: compact ? .infinity : nil)
+            .frame(height: compact ? 25 : 28)
+            .background(DS.C.bg, in: RoundedRectangle(cornerRadius: DS.R.sm))
+            .overlay(RoundedRectangle(cornerRadius: DS.R.sm).stroke(ToolModeMenu.color(mode).opacity(0.5), lineWidth: 1))
+        }
+        .buttonStyle(.plain)
+        .help("Mode: \(mode.label). Click to cycle Off → Monitor → Auto-warm.")
+    }
+
+    static func color(_ mode: ToolMode) -> Color {
+        switch mode {
+        case .off:      return DS.C.textMuted
+        case .monitor:  return DS.C.blue
+        case .autoWarm: return DS.C.green
         }
     }
 }

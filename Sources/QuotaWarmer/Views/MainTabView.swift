@@ -8,6 +8,7 @@ struct MainTabView: View {
         ScrollView(.vertical, showsIndicators: false) {
             VStack(alignment: .leading, spacing: 13) {
                 header
+                if !outcomeTools.isEmpty { statusCard }
                 providerList
                 historySection
             }
@@ -106,7 +107,7 @@ struct MainTabView: View {
                         .font(.system(size: 13.5, weight: .bold))
                         .foregroundStyle(DS.C.text)
                     Circle()
-                        .fill(state.isActive ? DS.C.green : DS.C.red)
+                        .fill(ToolModeMenu.color(state.mode))
                         .frame(width: 5.5, height: 5.5)
                     Text(providerStatus(state))
                         .font(.system(size: 11, weight: .medium))
@@ -118,41 +119,35 @@ struct MainTabView: View {
 
                 quotaLine("5h", metric: state.primaryMetric, refreshing: state.isFetchingQuota)
                 quotaLine("Week", metric: state.weeklyMetric, refreshing: state.isFetchingQuota)
-                if let credentialText = credentialSourceText(state) {
+                if let weeklyText = weeklyResetText(state) {
                     HStack(spacing: 4) {
-                        Image(systemName: state.authRetryScheduledAt == nil ? "key.fill" : "clock.arrow.circlepath")
+                        Image(systemName: "calendar")
                             .font(.system(size: 8.5, weight: .semibold))
-                        Text(credentialText)
+                        Text(weeklyText)
                             .font(.system(size: 9.5, weight: .medium))
                             .lineLimit(1)
-                            .truncationMode(.middle)
                     }
-                    .foregroundStyle(state.sourceHealth == .authFailure ? DS.C.red : DS.C.textMuted)
-                    .help(credentialText)
+                    .foregroundStyle(DS.C.textMuted)
+                    .help(weeklyResetHelp(state) ?? weeklyText)
                 }
             }
 
-            VStack(spacing: 8) {
-                Toggle("", isOn: Binding(
-                    get: { state.isActive },
-                    set: { appState.setActive($0, for: tool) }
-                ))
-                .toggleStyle(.switch)
-                .scaleEffect(0.68)
-                .tint(DS.C.accent(tool))
+            VStack(spacing: 7) {
+                ToolModeMenu(mode: state.mode, compact: true) { appState.setMode($0, for: tool) }
 
                 Button(action: { Task { await appState.refreshQuota(for: tool) } }) {
                     Image(systemName: state.isFetchingQuota ? "hourglass" : state.quotaBackoffActive ? "clock.arrow.circlepath" : "arrow.clockwise")
                         .font(.system(size: 11.5, weight: .semibold))
                         .foregroundStyle(DS.C.textSub)
-                        .frame(width: 29, height: 27)
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 26)
                         .background(DS.C.bg, in: RoundedRectangle(cornerRadius: 6))
                         .overlay(RoundedRectangle(cornerRadius: DS.R.sm).stroke(DS.C.border))
                 }
                 .buttonStyle(.plain)
                 .disabled(state.isFetchingQuota || state.quotaBackoffActive)
             }
-            .frame(width: 44)
+            .frame(width: 84)
         }
         .padding(.horizontal, 13)
         .padding(.vertical, 12)
@@ -208,6 +203,89 @@ struct MainTabView: View {
         .overlay(RoundedRectangle(cornerRadius: DS.R.md).stroke(DS.C.border))
     }
 
+    // MARK: - Last warm-up status card ("did it actually work?")
+
+    private var outcomeTools: [ToolID] {
+        ToolID.allCases.filter { tool in
+            let state = appState.state(for: tool)
+            // Show a row once a warm-up has happened, or proactively for any
+            // tool set to Auto-warm so the mode's effect is visible immediately.
+            if case .none = state.lastWarmupOutcome { return state.mode == .autoWarm }
+            return true
+        }
+    }
+
+    private var statusCard: some View {
+        VStack(alignment: .leading, spacing: 9) {
+            Text("WINDOW STATUS")
+                .font(.system(size: 9, weight: .bold))
+                .foregroundStyle(DS.C.textMuted)
+            ForEach(outcomeTools) { tool in
+                outcomeRow(tool)
+            }
+        }
+        .padding(13)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(DS.C.surface, in: RoundedRectangle(cornerRadius: DS.R.md))
+        .overlay(RoundedRectangle(cornerRadius: DS.R.md).stroke(DS.C.border))
+    }
+
+    private func outcomeRow(_ tool: ToolID) -> some View {
+        let state = appState.state(for: tool)
+        let info = outcomeInfo(state.lastWarmupOutcome, mode: state.mode)
+        return HStack(alignment: .top, spacing: 8) {
+            Circle()
+                .fill(info.color)
+                .frame(width: 7, height: 7)
+                .padding(.top, 3)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(tool.displayName)
+                    .font(.system(size: 11.5, weight: .bold))
+                    .foregroundStyle(DS.C.text)
+                Text(info.message)
+                    .font(.system(size: 10.5, weight: .medium))
+                    .foregroundStyle(DS.C.textSub)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 6)
+            if info.showWarm {
+                Button(action: { appState.activate(tool) }) {
+                    Text("Warm")
+                        .font(.system(size: 10.5, weight: .semibold))
+                        .padding(.horizontal, 10)
+                        .frame(height: 24)
+                        .background(DS.C.accent(tool), in: RoundedRectangle(cornerRadius: DS.R.sm))
+                        .foregroundStyle(.white)
+                }
+                .buttonStyle(.plain)
+                .disabled(state.isWarming)
+            }
+        }
+    }
+
+    private func outcomeInfo(_ outcome: WarmupOutcome, mode: ToolMode) -> (color: Color, message: String, showWarm: Bool) {
+        switch outcome {
+        case .none:
+            if mode == .autoWarm {
+                return (DS.C.green, "Auto-warm on — the next fresh window will be claimed automatically.", false)
+            }
+            return (DS.C.textMuted, "No warm-up yet.", false)
+        case .pending:
+            return (DS.C.yellow, "Warm-up sent — verifying the window opened…", false)
+        case .confirmed(let at, let resetAt):
+            var message = "Window claimed at \(shortClock(at))"
+            if let resetAt, resetAt > Date() {
+                let seconds = Int(resetAt.timeIntervalSinceNow)
+                message += " · resets in \(seconds / 3600)h \((seconds % 3600) / 60)m"
+            }
+            return (DS.C.green, message, false)
+        case .unverified:
+            return (DS.C.yellow, "Sent, but the window hasn't shown up in quota yet. Try warming again.", true)
+        case .failed(_, let reason):
+            return (DS.C.red, "Warm-up failed: \(reason)", true)
+        }
+    }
+
     private func quotaLine(_ label: String, metric: QuotaMetric?, refreshing: Bool) -> some View {
         let remaining = metric?.remainingFraction ?? 0
         return HStack(spacing: 8) {
@@ -246,20 +324,37 @@ struct MainTabView: View {
         }
         if let error = state.errorMessage, !error.isEmpty { return error }
         if let last = state.lastSuccessfulFetch { return "checked \(relativeTime(last))" }
-        return state.isActive ? "active" : "passive"
+        return state.mode.label.lowercased()
     }
 
-    private func credentialSourceText(_ state: ToolState) -> String? {
-        if let retryAt = state.authRetryScheduledAt, retryAt > Date() {
-            return "Auth recheck at \(shortClock(retryAt))"
+    private func weeklyResetText(_ state: ToolState) -> String? {
+        guard let resetAt = state.weeklyMetric?.resetAt else { return nil }
+        let seconds = max(0, Int(resetAt.timeIntervalSinceNow))
+        let timeText: String
+        if seconds < 60 {
+            timeText = "\(seconds)s"
+        } else if seconds < 3600 {
+            timeText = "\(seconds / 60)m"
+        } else if seconds < 86_400 {
+            timeText = "\(seconds / 3600)h \((seconds % 3600) / 60)m"
+        } else {
+            timeText = "\(seconds / 86_400)d \((seconds % 86_400) / 3600)h"
         }
-        if let source = state.credentialSource, !source.isEmpty {
-            return "Credential: \(source)"
-        }
-        if state.sourceHealth == .authFailure {
-            return "Credential not available"
-        }
-        return nil
+        return "Weekly resets in \(timeText) · \(Self.weekdayDateFormatter.string(from: resetAt))"
+    }
+
+    private static let weekdayDateFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "EEE, MMM d"
+        return formatter
+    }()
+
+    private func weeklyResetHelp(_ state: ToolState) -> String? {
+        guard let resetAt = state.weeklyMetric?.resetAt else { return nil }
+        let formatter = DateFormatter()
+        formatter.dateStyle = .medium
+        formatter.timeStyle = .short
+        return "Weekly window resets on \(formatter.string(from: resetAt))"
     }
 
     private func relativeTime(_ date: Date) -> String {

@@ -43,7 +43,7 @@ struct SettingsTabView: View {
                     Divider().background(DS.C.border).padding(.leading, 36)
 
                     row(icon: "arrow.clockwise", title: "Manual Refresh",
-                        subtitle: "Active tools only") {
+                        subtitle: "Monitored tools only") {
                         Button(action: { appState.refreshAllActivity() }) {
                             Text("Refresh")
                                 .font(.system(size: 11, weight: .semibold))
@@ -129,10 +129,27 @@ struct SettingsTabView: View {
                     }
                 }
 
+                group("HOW IT WORKS") {
+                    transparencyRow(
+                        "What QuotaWarmer does",
+                        "It watches your own Claude Code and Codex quota windows. Only for tools you switch to Auto-warm, it sends a single minimal \"hi\" through the CLI you're already logged into, the moment a fresh window opens."
+                    )
+                    Divider().background(DS.C.border).padding(.leading, 36)
+                    transparencyRow(
+                        "What it never does",
+                        "It never bypasses or raises your limits, never shares or uploads your credentials, and never sends anything for tools left on Monitor or Off."
+                    )
+                    Divider().background(DS.C.border).padding(.leading, 36)
+                    transparencyRow(
+                        "Is this allowed?",
+                        "You're using capacity you already pay for, through the official CLI you already use. Providers may change their APIs at any time; if automated warm-up is ever disallowed, switch any tool to Monitor and QuotaWarmer keeps tracking your quota."
+                    )
+                }
+
                 group("PRIVACY") {
                     infoRow(
                         title: "Credential access",
-                        detail: "Active tools only. Claude reads Keychain Claude Code-credentials, env CLAUDE_CODE_OAUTH_TOKEN, or ~/.claude/.credentials.json. Codex reads auth.json or Keychain Codex Auth."
+                        detail: "Monitored tools only. Claude reads Keychain Claude Code-credentials, env CLAUDE_CODE_OAUTH_TOKEN, or ~/.claude/.credentials.json. Codex reads auth.json or Keychain Codex Auth."
                     )
                     Divider().background(DS.C.border).padding(.leading, 36)
                     infoRow(
@@ -297,6 +314,14 @@ struct SettingsTabView: View {
                 .foregroundStyle(DS.C.textMuted)
                 .fixedSize(horizontal: false, vertical: true)
         }
+    }
+
+    /// Full-width, always-visible explanatory row for the HOW IT WORKS group.
+    private func transparencyRow(_ title: String, _ detail: String) -> some View {
+        privacyLine(title, detail)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, DS.Space.md)
+            .padding(.vertical, DS.Space.sm + 2)
     }
 
     private func infoRow(title: String, detail: String) -> some View {

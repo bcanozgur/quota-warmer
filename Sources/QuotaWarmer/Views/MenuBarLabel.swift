@@ -5,8 +5,9 @@ struct MenuBarLabel: View {
     @EnvironmentObject var appState: AppState
 
     private var isHealthy: Bool {
-        !appState.globalPassive && appState.toolStates.values.allSatisfy { state in
-            if !state.isActive { return true }
+        guard !appState.globalPassive, !appState.watcherStale else { return false }
+        return appState.toolStates.values.allSatisfy { state in
+            if !state.isMonitored { return true }
             return state.sourceHealth == .healthy && state.freshness == .fresh
         }
     }
@@ -51,7 +52,7 @@ struct MenuBarLabel: View {
     private func composeItems() -> [MenuBarComposer.Item] {
         visibleTools.map { tool in
             let st = appState.state(for: tool)
-            let prominent = st.isWarming || (st.isActive && st.sourceHealth == .healthy && st.freshness == .fresh)
+            let prominent = st.isWarming || (st.isMonitored && st.sourceHealth == .healthy && st.freshness == .fresh)
 
             let text: String
             if st.authStatus == .failed || st.authStatus == .missing {
@@ -93,9 +94,9 @@ struct MenuBarLabel: View {
     }
 
     private func nsStatusColor(for state: ToolState) -> NSColor {
-        // Passive / globally-paused tools get a neutral gray dot so "passive"
-        // no longer looks like an error (which is red).
-        if appState.globalPassive || !state.isActive { return .systemGray }
+        // Off / globally-paused tools get a neutral gray dot so they no longer
+        // look like an error (which is red).
+        if appState.globalPassive || !state.isMonitored { return .systemGray }
         if state.sourceHealth == .healthy && state.freshness == .fresh { return .systemGreen }
         if state.sourceHealth == .authFailure || state.sourceHealth == .unavailable { return .systemRed }
         return .systemYellow

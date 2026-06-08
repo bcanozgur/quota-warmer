@@ -1,27 +1,33 @@
 # QuotaWarmer
 
-QuotaWarmer is a compact macOS menu bar app for keeping Claude Code and Codex CLI quota windows ready when you need them.
+QuotaWarmer is a compact macOS menu bar app that manages your Claude Code and Codex CLI capacity — it keeps your own rolling quota windows in view and, when you ask it to, ready to use the moment they reset.
 
-It watches live quota snapshots, shows the active provider directly in the menu bar, and can send a minimal warm-up command when a fresh 5-hour window becomes available.
+By default it only **monitors**: it watches live quota snapshots and shows each provider's window directly in the menu bar. Switch a tool to **Auto-warm** and it will also send a single minimal warm-up command through your own logged-in CLI the instant a fresh 5-hour window opens — then verify the window actually started.
 
 ![QuotaWarmer menu bar popover](docs/images/quota-warmer-menu.png)
 
 ## Highlights
 
-- **Menu bar status at a glance**: provider glyph, active-state dot, 5-hour countdown, and remaining quota percentage.
-- **Claude Code and Codex CLI support**: each provider can be enabled, refreshed, and warmed independently.
+- **Three modes per tool**: **Off**, **Monitor only** (watch quota, never send anything — the default), or **Auto-warm** (claim fresh windows automatically).
+- **Menu bar status at a glance**: provider glyph, mode/health dot, 5-hour countdown, and remaining quota percentage.
+- **Claude Code and Codex CLI support**: each provider is monitored, refreshed, and warmed independently.
 - **Live quota tracking**: reset decisions use fresh server quota snapshots; local logs are used only as display context.
-- **Automatic warm-up**: sends a minimal `hi` command after a safe reset signal, using low-cost settings.
+- **Window claim receipt**: after a warm-up, QuotaWarmer re-checks quota to confirm the window actually opened — so "sent" never quietly means "missed."
+- **Liveness watchdog**: if the app ever stops checking quota, the menu bar and popover say so instead of looking healthy.
 - **Manual controls**: refresh quota or warm a provider directly from the popover.
-- **Lightweight history**: recent quota checks, warm-ups, update checks, and failures are visible without leaving the menu.
+- **Lightweight history**: recent quota checks, warm-ups, claim confirmations, update checks, and failures are visible without leaving the menu.
 - **Notifications and update checks**: optional quota-window reminders plus in-app release availability.
 - **Launch at login**: runs quietly as a menu bar utility.
+
+## Is this allowed?
+
+QuotaWarmer uses capacity you already pay for, through the official CLI you're already signed into. It never bypasses or raises your limits, never shares or uploads your credentials, and sends nothing at all for tools left on Monitor or Off. Providers may change their APIs at any time; if automated warm-up is ever disallowed, set a tool to Monitor and QuotaWarmer keeps tracking your quota.
 
 ## How It Works
 
 Claude Code and Codex CLI use rolling quota windows. If a window starts only when you remember to open the CLI, part of the available time can be wasted.
 
-QuotaWarmer keeps the app running in the menu bar and periodically checks quota state for active providers. When a fresh reset is detected, it runs a minimal warm-up command from an isolated temporary working directory:
+QuotaWarmer keeps the app running in the menu bar and periodically checks quota state for monitored providers. For a tool set to Auto-warm, when a fresh reset is detected it runs a minimal warm-up command from an isolated temporary working directory:
 
 ```bash
 claude --model haiku --effort low --no-session-persistence -p 'hi'

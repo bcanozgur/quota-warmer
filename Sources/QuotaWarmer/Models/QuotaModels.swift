@@ -139,6 +139,27 @@ struct MorningWarmupPolicy {
     }
 }
 
+/// Decides whether the auto path should claim (warm) a fresh window, given the
+/// dedup state from the last successful warm. Two independent guards:
+///
+///  1. Never warm the exact same window key twice.
+///  2. Never warm again while a window we already warmed hasn't reset yet — this
+///     survives providers whose reported reset time drifts between polls (e.g.
+///     Codex `reset_after_seconds`, where `rawWindowKey` changes every poll and
+///     would otherwise defeat guard 1).
+enum AutoWarmDedup {
+    static func shouldWarm(
+        currentWindowKey: String,
+        lastWarmedWindowKey: String?,
+        lastWarmedWindowEndsAt: Date?,
+        now: Date = Date()
+    ) -> Bool {
+        if let lastWarmedWindowKey, lastWarmedWindowKey == currentWindowKey { return false }
+        if let endsAt = lastWarmedWindowEndsAt, endsAt > now { return false }
+        return true
+    }
+}
+
 struct HistoryEvent: Identifiable {
     let id = UUID()
     let timestamp: Date
@@ -146,6 +167,20 @@ struct HistoryEvent: Identifiable {
     let kind: HistoryKind
     let title: String
     let detail: String
+}
+
+/// Result of the most recent warm-up, used to *prove* a window was actually
+/// claimed rather than just that a command was sent.
+enum WarmupOutcome: Equatable {
+    case none
+    /// Command sent; verifying the window opened (grace re-check in flight).
+    case pending(sentAt: Date)
+    /// Verified: the live quota shows an active window.
+    case confirmed(at: Date, resetAt: Date?)
+    /// Command sent but the new window never appeared in quota after the grace period.
+    case unverified(sentAt: Date)
+    /// The warm-up command itself failed.
+    case failed(at: Date, reason: String)
 }
 
 struct QuotaMetric: Identifiable {
@@ -229,6 +264,17 @@ struct QuotaSnapshot {
         guard freshness(now: now) == .fresh else { return false }
         guard let previousFetchedAt else { return true }
         return fetchedAt > previousFetchedAt
+    }
+
+    /// True when this (fresh) post-warm snapshot shows an active 5-hour window:
+    /// a live reset in the future, or — when the API omits `resetAt` (e.g. the
+    /// Codex `wham/usage` payload) — a window that isn't depleted. This is the
+    /// signal that a warm-up actually *claimed* the window, not just that the
+    /// command exited zero.
+    func showsActiveWindow(now: Date = Date()) -> Bool {
+        guard freshness(now: now) == .fresh, let metric = fiveHour else { return false }
+        if let resetAt = metric.resetAt { return resetAt > now }
+        return metric.remainingFraction >= 0.5
     }
 }
 
