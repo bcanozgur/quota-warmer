@@ -74,11 +74,15 @@ enum QuotaPace {
         now: Date,
         fallbackResetText: String
     ) -> Result {
-        guard let resetAt else {
+        // No reset, or one that has already passed (an expired window whose
+        // snapshot hasn't refreshed to the new window yet). Showing "Resets in 0s"
+        // for a window that already ended is misleading, so fall back to the
+        // neutral freshness text just like the no-reset case.
+        guard let resetAt, resetAt > now else {
             return Result(timeLeftFraction: nil, resetText: fallbackResetText,
                           shortPercent: nil, runsOutText: nil)
         }
-        let timeRemaining = max(0, resetAt.timeIntervalSince(now))
+        let timeRemaining = resetAt.timeIntervalSince(now)
         let timeLeftFraction = min(max(timeRemaining / windowDuration, 0), 1)
         let resetText = "Resets in \(quotaDurationText(Int(timeRemaining)))"
 

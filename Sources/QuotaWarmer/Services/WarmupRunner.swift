@@ -112,12 +112,20 @@ class WarmupRunner {
             let errPipe = Pipe()
             process.standardOutput = outPipe
             process.standardError  = errPipe
-
+            // Drain output incrementally rather than reading to EOF on exit:
+            // `codex exec` can leave a lingering child that inherits the pipe's
+            // write end, so EOF never arrives and `readDataToEndOfFile()` would
+            // block the continuation forever — orphaning it, sticking `isWarming`
+            // on (a permanent "warming" in the menu bar), and defeating the
+            // timeout below. The collector lets termination/timeout resume
+            // immediately with whatever was buffered.
+            let collector = ProcessOutputCollector(out: outPipe, err: errPipe)
             let gate = WarmupContinuationGate()
 
             let timeoutWork = DispatchWorkItem {
                 process.terminate()
                 if gate.tryResume() {
+                    collector.stop()
                     continuation.resume(throwing: WarmupError.timeout)
                 }
             }
@@ -128,12 +136,7 @@ class WarmupRunner {
                 timeoutWork.cancel()
                 guard gate.tryResume() else { return }
 
-                let outData = outPipe.fileHandleForReading.readDataToEndOfFile()
-                let errData = errPipe.fileHandleForReading.readDataToEndOfFile()
-                let combined = [outData, errData]
-                    .compactMap { String(data: $0, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) }
-                    .filter { !$0.isEmpty }
-                    .joined(separator: "\n")
+                let combined = collector.stop()
 
                 if p.terminationStatus == 0 {
                     continuation.resume(returning: WarmupResult(date: Date(), command: command, output: combined.isEmpty ? "(no output)" : combined))
@@ -149,6 +152,7 @@ class WarmupRunner {
             } catch {
                 timeoutWork.cancel()
                 if gate.tryResume() {
+                    collector.stop()
                     continuation.resume(throwing: WarmupError.cliNotFound(cliName))
                 }
             }
@@ -215,11 +219,15 @@ class WarmupRunner {
             let errPipe = Pipe()
             process.standardOutput = outPipe
             process.standardError = errPipe
+            // Same incremental drain as runWarmupCommand: never block on EOF, so a
+            // child that holds the pipe open can't orphan the continuation.
+            let collector = ProcessOutputCollector(out: outPipe, err: errPipe)
 
             let gate = WarmupContinuationGate()
             let timeoutWork = DispatchWorkItem {
                 process.terminate()
                 if gate.tryResume() {
+                    collector.stop()
                     continuation.resume(returning: ShellCommandResult(exitCode: -1, output: "timeout"))
                 }
             }
@@ -229,12 +237,7 @@ class WarmupRunner {
             process.terminationHandler = { p in
                 timeoutWork.cancel()
                 guard gate.tryResume() else { return }
-                let outData = outPipe.fileHandleForReading.readDataToEndOfFile()
-                let errData = errPipe.fileHandleForReading.readDataToEndOfFile()
-                let combined = [outData, errData]
-                    .compactMap { String(data: $0, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) }
-                    .filter { !$0.isEmpty }
-                    .joined(separator: "\n")
+                let combined = collector.stop()
                 continuation.resume(returning: ShellCommandResult(exitCode: p.terminationStatus, output: combined))
             }
 
@@ -243,6 +246,7 @@ class WarmupRunner {
             } catch {
                 timeoutWork.cancel()
                 if gate.tryResume() {
+                    collector.stop()
                     continuation.resume(returning: ShellCommandResult(exitCode: -1, output: error.localizedDescription))
                 }
             }
@@ -391,5 +395,91 @@ private final class WarmupContinuationGate: @unchecked Sendable {
         guard !resumed else { return false }
         resumed = true
         return true
+    }
+}
+
+/// Accumulates a process's stdout+stderr incrementally via readability handlers
+/// so the termination/timeout path never calls the *blocking*
+/// `readDataToEndOfFile()`. Without this, a warm-up CLI that leaves a lingering
+/// child holding the pipe's write end (observed with `codex exec`) never reaches
+/// EOF, the read hangs, the `withCheckedContinuation` is orphaned, and the
+/// owning state (`isWarming`) sticks forever. `stop()` detaches the handlers,
+/// does a final *non-blocking* drain so the last chunk a CLI prints right before
+/// exiting (e.g. an auth-failure line) isn't lost to a race with termination,
+/// and returns the captured text. It is idempotent and safe to call from either
+/// the termination or the timeout thread (the caller gates it).
+private final class ProcessOutputCollector: @unchecked Sendable {
+    private let lock = NSLock()
+    private var buffer = Data()
+    private var stopped = false
+    private let outHandle: FileHandle
+    private let errHandle: FileHandle
+
+    init(out: Pipe, err: Pipe) {
+        outHandle = out.fileHandleForReading
+        errHandle = err.fileHandleForReading
+        let sink: (FileHandle) -> Void = { [weak self] handle in
+            guard let self else { handle.readabilityHandler = nil; return }
+            // Hold the lock across the *read and the append* so a concurrent
+            // stop() drain can't interleave reads on the same descriptor and
+            // split/reorder the output (which would corrupt the auth-failure
+            // tail this collector exists to capture). Once stopped, stop() owns
+            // the final drain — this handler must not touch the fd again.
+            self.lock.lock()
+            defer { self.lock.unlock() }
+            if self.stopped { handle.readabilityHandler = nil; return }
+            let data = handle.availableData
+            if data.isEmpty {
+                handle.readabilityHandler = nil   // EOF
+            } else {
+                self.buffer.append(data)
+            }
+        }
+        outHandle.readabilityHandler = sink
+        errHandle.readabilityHandler = sink
+    }
+
+    @discardableResult
+    func stop() -> String {
+        // Whole operation is under the lock: detaching the handlers, the final
+        // non-blocking drain, and reading the buffer. This serialises against any
+        // in-flight readability callback (which reads + appends under the same
+        // lock), so the two never read the fd concurrently.
+        lock.lock()
+        defer { lock.unlock() }
+        if !stopped {
+            stopped = true
+            outHandle.readabilityHandler = nil
+            errHandle.readabilityHandler = nil
+            // Capture bytes that landed between the last readability callback and
+            // process exit. Non-blocking, so a child still holding the write end
+            // can't make this hang.
+            let tail = Self.drainNonBlocking(outHandle) + Self.drainNonBlocking(errHandle)
+            if !tail.isEmpty { buffer.append(tail) }
+        }
+        return (String(data: buffer, encoding: .utf8) ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// Reads everything currently buffered on `handle` without blocking: flips the
+    /// descriptor to non-blocking and reads until `EAGAIN`/EOF. A lingering child
+    /// holding the write end yields `EAGAIN` (no data) rather than hanging.
+    private static func drainNonBlocking(_ handle: FileHandle) -> Data {
+        let fd = handle.fileDescriptor
+        guard fd >= 0 else { return Data() }
+        let flags = fcntl(fd, F_GETFL)
+        if flags != -1 { _ = fcntl(fd, F_SETFL, flags | O_NONBLOCK) }
+        var collected = Data()
+        let size = 65_536
+        var buf = [UInt8](repeating: 0, count: size)
+        while true {
+            let n = buf.withUnsafeMutableBytes { read(fd, $0.baseAddress, size) }
+            if n > 0 {
+                collected.append(contentsOf: buf[0..<n])
+            } else {
+                break   // 0 = EOF, -1 = EAGAIN/error → nothing more available now
+            }
+        }
+        return collected
     }
 }

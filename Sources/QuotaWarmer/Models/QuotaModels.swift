@@ -152,9 +152,18 @@ enum AutoWarmDedup {
         currentWindowKey: String,
         lastWarmedWindowKey: String?,
         lastWarmedWindowEndsAt: Date?,
+        currentWindowIsIdle: Bool = false,
         now: Date = Date()
     ) -> Bool {
-        if let lastWarmedWindowKey, lastWarmedWindowKey == currentWindowKey { return false }
+        // An idle (not-yet-started) window carries a *stable*, recurring key (e.g.
+        // "…|idle"): every successive idle period shares it, so key equality can't
+        // distinguish "already warmed this idle window" from "a brand-new idle
+        // window after the last one expired". For idle windows, rely solely on
+        // `lastWarmedWindowEndsAt` (the temporal guard) — which blocks re-warming
+        // for the just-claimed window's duration and then lets the next idle window
+        // through. This also self-heals a stale stored "idle" key from older builds.
+        if !currentWindowIsIdle,
+           let lastWarmedWindowKey, lastWarmedWindowKey == currentWindowKey { return false }
         if let endsAt = lastWarmedWindowEndsAt, endsAt > now { return false }
         return true
     }
@@ -175,10 +184,9 @@ enum WarmupOutcome: Equatable {
     case none
     /// Command sent; verifying the window opened (grace re-check in flight).
     case pending(sentAt: Date)
-    /// Verified: the live quota shows an active window.
+    /// Verified: the live quota shows an active window (or, once the grace period
+    /// is exhausted, the completed command's expected window is trusted).
     case confirmed(at: Date, resetAt: Date?)
-    /// Command sent but the new window never appeared in quota after the grace period.
-    case unverified(sentAt: Date)
     /// The warm-up command itself failed.
     case failed(at: Date, reason: String)
 }
@@ -191,6 +199,11 @@ struct QuotaMetric: Identifiable {
     let resetAt: Date?
     let detail: String?
     let context: String
+    /// The window has not actually started: its quota is full and any `resetAt`
+    /// is a sliding "if you started now" projection (Codex's idle 5h window) or
+    /// simply unknown (Claude's null `five_hour` slot). Shown for context, but it
+    /// must never count as a freshly-opened window to auto-warm or claim.
+    let isIdle: Bool
 
     init(
         name: String,
@@ -198,7 +211,8 @@ struct QuotaMetric: Identifiable {
         remainingPercent: Double?,
         resetAt: Date?,
         detail: String?,
-        context: String = ""
+        context: String = "",
+        isIdle: Bool = false
     ) {
         self.name = name
         self.usedPercent = usedPercent
@@ -206,6 +220,7 @@ struct QuotaMetric: Identifiable {
         self.resetAt = resetAt
         self.detail = detail
         self.context = context
+        self.isIdle = isIdle
     }
 
     var clampedUsed: Double {
@@ -220,7 +235,7 @@ struct QuotaMetric: Identifiable {
     }
 
     var isIdleFiveHourWindow: Bool {
-        resetAt == nil && context.contains("idle") && name.lowercased().contains("5h")
+        isIdle && name.lowercased().contains("5h")
     }
 }
 
@@ -254,6 +269,11 @@ struct QuotaSnapshot {
               metric.remainingFraction >= remainingThreshold else {
             return false
         }
+        // Codex's idle window is a genuine, not-yet-started 5h window — claiming it
+        // (sending `hi` so the window actually opens) is exactly the point, so allow
+        // it. Claude's idle window is a *synthesized* projection over a null
+        // `five_hour` slot — there is no real window to claim, so never warm it.
+        if metric.isIdle && tool != .codex { return false }
 
         let inferredWindowStart = resetAt.addingTimeInterval(-windowDuration)
         let windowAge = now.timeIntervalSince(inferredWindowStart)
@@ -273,8 +293,35 @@ struct QuotaSnapshot {
     /// command exited zero.
     func showsActiveWindow(now: Date = Date()) -> Bool {
         guard freshness(now: now) == .fresh, let metric = fiveHour else { return false }
+        // A synthesized *idle* window (no reset, 100% left — Claude's `five_hour`
+        // came back null) is the absence of a claimed window, not proof one
+        // opened. It must never confirm a warm-up.
+        if metric.isIdleFiveHourWindow { return false }
         if let resetAt = metric.resetAt { return resetAt > now }
         return metric.remainingFraction >= 0.5
+    }
+
+    /// True when the 5-hour window's reset says it only *just* opened (almost the
+    /// whole window still remains) yet the reported quota is implausibly low.
+    /// Right at a window rollover Claude's OAuth usage API briefly returns the
+    /// just-ended window's high utilization paired with the *new* window's reset
+    /// time — and a full 5h budget can't be spent in the first few minutes. Treat
+    /// such a reading as a not-yet-settled artifact (the UI shows "settling" and
+    /// we re-poll soon) rather than alarming the user with "0% left / runs out
+    /// in 0s". `idleSettleWindow` is the post-open grace; `depletionFloor` is the
+    /// largest fraction that could legitimately be burned that quickly.
+    func isUnsettledRolloverReading(
+        windowDuration: TimeInterval,
+        now: Date = Date(),
+        idleSettleWindow: TimeInterval = 5 * 60,
+        depletionFloor: Double = 0.5
+    ) -> Bool {
+        guard freshness(now: now) == .fresh,
+              let metric = fiveHour,
+              !metric.isIdleFiveHourWindow,
+              let resetAt = metric.resetAt else { return false }
+        let elapsed = windowDuration - resetAt.timeIntervalSince(now)
+        return elapsed >= 0 && elapsed <= idleSettleWindow && metric.remainingFraction <= depletionFloor
     }
 }
 

@@ -197,8 +197,16 @@ final class QuotaProvider: QuotaProviding {
     /// (correctly) drops — but for a tool whose whole job is the 5h window, a
     /// missing 5h metric renders as a broken-looking "--" and a blank menu-bar
     /// readout. Detect that explicit-null case and surface it as an idle, fully
-    /// available window (0% used, no reset) so the UI reads "100%" instead of
-    /// empty. A populated `five_hour` still parses through the generic path.
+    /// available window so the UI reads "100%" instead of empty.
+    ///
+    /// The idle window carries a *projected* reset of `now + windowDuration`
+    /// (mirroring Codex's sliding "if you started now" projection) so the menu
+    /// bar and panel show a countdown rather than a bare percentage. It is
+    /// flagged `isIdle`, so `canAutoWarm`/`showsActiveWindow` still treat it as
+    /// "no active window" and never warm or claim it. Because that projection
+    /// slides every poll, the dedup `rawWindowKey` is keyed on a stable "idle"
+    /// marker instead of the moving timestamp. A populated `five_hour` still
+    /// parses through the generic path.
     func claudeSnapshot(payload: Any, source: String, corroboratingSource: String?, message: String?) -> QuotaSnapshot {
         let base = snapshot(
             tool: .claude,
@@ -207,15 +215,30 @@ final class QuotaProvider: QuotaProviding {
             payload: payload,
             message: message
         )
-        guard base.fiveHour == nil, claudeReportsFiveHourSlot(payload) else { return base }
+        // No usable 5h window when either the slot is an explicit `null`, or the
+        // API returns a *populated* `five_hour` with no `resets_at` (e.g. right
+        // after a window expires, or before the first request of a window: it
+        // comes back `{ utilization: 0, resets_at: null }`). The latter parses as
+        // a real, reset-less metric at ~100% left, which leaves the UI with a 5h
+        // percentage but no countdown and makes the menu bar fall back to the
+        // weekly window. Treat both as the idle case so a projected 5h reset is
+        // shown instead. A real active window always carries a `resets_at`, so a
+        // reset-less reading is only ever "no window" — guard on ~full remaining
+        // to be safe (a reset-less reading with real usage is left untouched).
+        let hasResetlessFullWindow = base.fiveHour.map {
+            $0.resetAt == nil && $0.remainingFraction >= 0.95
+        } ?? false
+        guard base.fiveHour == nil || hasResetlessFullWindow,
+              claudeReportsFiveHourSlot(payload) else { return base }
 
         let idleWindow = QuotaMetric(
             name: "5h",
             usedPercent: 0,
             remainingPercent: 1,
-            resetAt: nil,
+            resetAt: Date().addingTimeInterval(ToolID.claude.windowDuration),
             detail: nil,
-            context: "5h idle window"
+            context: "5h idle window",
+            isIdle: true
         )
         return QuotaSnapshot(
             tool: .claude,
@@ -225,7 +248,7 @@ final class QuotaProvider: QuotaProviding {
             fiveHour: idleWindow,
             weekly: base.weekly,
             extras: base.extras,
-            rawWindowKey: base.rawWindowKey,
+            rawWindowKey: [base.primarySource, "idle"].joined(separator: "|"),
             message: base.message
         )
     }
@@ -254,10 +277,12 @@ final class QuotaProvider: QuotaProviding {
            rateLimit["primary_window"] != nil || rateLimit["secondary_window"] != nil {
             let fiveHour = codexWindowMetric(rateLimit["primary_window"], defaultName: "5h")
             let weekly = codexWindowMetric(rateLimit["secondary_window"], defaultName: "Weekly")
-            let keyParts = [
-                source,
-                fiveHour?.resetAt.map { ISO8601DateFormatter().string(from: $0) } ?? "no-reset"
-            ]
+            // An idle 5h window's projected reset slides every poll, so key it on a
+            // stable marker instead of the moving timestamp.
+            let fiveHourKey = (fiveHour?.isIdle == true)
+                ? "idle"
+                : (fiveHour?.resetAt.map { ISO8601DateFormatter().string(from: $0) } ?? "no-reset")
+            let keyParts = [source, fiveHourKey]
             return QuotaSnapshot(
                 tool: .codex,
                 fetchedAt: Date(),
@@ -285,16 +310,26 @@ final class QuotaProvider: QuotaProviding {
               let usedRaw = codexDouble(window["used_percent"]) else { return nil }
         let usedPercent = min(max(usedRaw / 100, 0), 1)
 
+        let windowSeconds = codexDouble(window["limit_window_seconds"]) ?? 0
+        let after = codexDouble(window["reset_after_seconds"])
+
+        // An *idle* (not-yet-started) Codex window reports the full window length
+        // as `reset_after_seconds` and a `reset_at` of now + the full window — a
+        // "if you started now" projection that slides forward on every poll, not
+        // a real boundary. We still surface that projected reset (the web shows it
+        // too), but flag the metric idle so `canAutoWarm`/`showsActiveWindow` never
+        // treat it as a freshly-opened window to warm or "claim".
+        let isIdleWindow = windowSeconds > 0 && (after ?? 0) >= windowSeconds
+
         let resetAt: Date?
         if let epoch = codexDouble(window["reset_at"]), epoch > 0 {
             resetAt = Date(timeIntervalSince1970: epoch > 10_000_000_000 ? epoch / 1000 : epoch)
-        } else if let after = codexDouble(window["reset_after_seconds"]), after > 0 {
+        } else if let after, after > 0 {
             resetAt = Date().addingTimeInterval(after)
         } else {
             resetAt = nil
         }
 
-        let windowSeconds = codexDouble(window["limit_window_seconds"]) ?? 0
         let name: String
         if windowSeconds >= 6 * 24 * 3600 {
             name = "Weekly"
@@ -310,7 +345,8 @@ final class QuotaProvider: QuotaProviding {
             remainingPercent: 1 - usedPercent,
             resetAt: resetAt,
             detail: nil,
-            context: name.lowercased()
+            context: isIdleWindow ? "\(name.lowercased()) idle" : name.lowercased(),
+            isIdle: isIdleWindow
         )
     }
 
@@ -436,8 +472,13 @@ struct MetricExtractor {
         let context = contextText(path: path, fields: fields)
         let usedPercentCandidate = firstNumber(fields, keys: [
             "usedpercent", "usedpercentage", "usagepercent", "usagepercentage",
-            "consumedpercent", "percentused", "utilization"
+            "consumedpercent", "percentused"
         ])
+        // `utilization` (Anthropic's Claude OAuth usage field) is on a 0–100 scale
+        // where 1 means 1% used — NOT a 0–1 fraction. It must be divided by 100
+        // unconditionally; routing it through the ambiguous percent normalizer
+        // misreads a freshly-warmed window (utilization ~1) as 100% used / 0% left.
+        let utilizationCandidate = firstNumber(fields, keys: ["utilization"])
         let remainingPercentCandidate = firstNumber(fields, keys: [
             "remainingpercent", "remainingpercentage", "percentremaining",
             "availablepercent", "availablepercentage", "leftpercent", "percentleft"
@@ -455,6 +496,9 @@ struct MetricExtractor {
         } else if let usedPercentCandidate {
             remainingPercent = nil
             usedPercent = normalizePercent(usedPercentCandidate)
+        } else if let utilizationCandidate {
+            remainingPercent = nil
+            usedPercent = min(max(utilizationCandidate / 100, 0), 1)
         } else if let genericPercent, contextContainsRemaining(context) {
             remainingPercent = normalizePercent(genericPercent)
             usedPercent = 1 - remainingPercent!

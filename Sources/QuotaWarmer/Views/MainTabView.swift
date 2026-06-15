@@ -96,17 +96,27 @@ struct MainTabView: View {
             }
 
             windowRow(state, title: "Session", metric: state.primaryMetric,
-                      resetAt: state.resetAt, windowDuration: tool.windowDuration)
+                      resetAt: state.resetAt, windowDuration: tool.windowDuration,
+                      settling: state.sessionSettling)
             windowRow(state, title: "Weekly", metric: state.weeklyMetric,
                       resetAt: state.weeklyMetric?.resetAt, windowDuration: tool.weeklyWindowDuration)
         }
     }
 
-    private func windowRow(_ state: ToolState, title: String, metric: QuotaMetric?, resetAt: Date?, windowDuration: TimeInterval) -> some View {
+    private func windowRow(_ state: ToolState, title: String, metric: QuotaMetric?, resetAt: Date?, windowDuration: TimeInterval, settling: Bool = false) -> some View {
         let quotaLeft = metric?.remainingFraction ?? 0
-        let leftText = metric == nil ? "-- left" : "\(Int(quotaLeft * 100))% left"
+        // A just-opened window the provider transiently reports as near-empty:
+        // show the reset countdown but neither the bogus "0% left" nor the
+        // "behind pace / runs out" alarm until the real number settles.
+        let settlingActive = settling && metric != nil
+        let leftText: String
+        if settlingActive {
+            leftText = "Updating…"
+        } else {
+            leftText = metric == nil ? "-- left" : "\(Int(quotaLeft * 100))% left"
+        }
         let pace = QuotaPace.compute(
-            quotaLeft: quotaLeft,
+            quotaLeft: settlingActive ? 1 : quotaLeft,
             resetAt: resetAt,
             windowDuration: windowDuration,
             now: Date(),
@@ -115,10 +125,10 @@ struct MainTabView: View {
         return QuotaWindowRow(
             title: title,
             hasMetric: metric != nil,
-            quotaLeft: quotaLeft,
+            quotaLeft: settlingActive ? (pace.timeLeftFraction ?? quotaLeft) : quotaLeft,
             leftText: leftText,
             pace: pace,
-            refreshing: state.isFetchingQuota
+            refreshing: state.isFetchingQuota || settlingActive
         )
     }
 
@@ -143,6 +153,16 @@ struct MainTabView: View {
         }
         if let retryAt = state.authRetryScheduledAt, retryAt > Date() {
             return "Re-checking auth at \(shortClock(retryAt))"
+        }
+        // Rate-limited: backoff is active and the menu bar shows yellow — surface
+        // the retry time so the in-app view matches the menu bar's degraded state.
+        if state.quotaBackoffActive, let until = state.quotaBackoffUntil {
+            return "Rate limited · retrying at \(shortClock(until))"
+        }
+        // Expired data: the menu bar shows yellow + dimmed; show why here too.
+        if state.freshness == .expired {
+            if let msg = state.errorMessage, !msg.isEmpty { return msg }
+            return "Quota data is outdated — refreshing"
         }
         return nil
     }
@@ -274,8 +294,6 @@ struct MainTabView: View {
                 message += " · resets in \(seconds / 3600)h \((seconds % 3600) / 60)m"
             }
             return (DS.C.green, message, false)
-        case .unverified:
-            return (DS.C.yellow, "Sent, but the window hasn't shown up in quota yet. Try warming again.", true)
         case .failed(_, let reason):
             return (DS.C.red, "Warm-up failed: \(reason)", true)
         }

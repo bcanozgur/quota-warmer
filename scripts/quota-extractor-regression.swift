@@ -118,6 +118,76 @@ struct QuotaExtractorRegression {
             "Already-active window should not allow auto warmup just because remaining is high"
         )
 
+        // An idle (not-yet-started) Codex 5h window reports the full window length
+        // as `reset_after_seconds` and a `reset_at` of now + the full window — a
+        // sliding "if you started now" projection. It is a genuine, claimable
+        // window: warming it (sending `hi`) is exactly the point, so auto-warm IS
+        // allowed. The stable "idle" key plus `lastAutoWarmWindowEndsAt` prevent the
+        // re-warm-every-poll storm, not a blanket exclusion from auto-warm.
+        let idleWindowPayload: [String: Any] = [
+            "rate_limit": [
+                "primary_window": [
+                    "used_percent": 1,
+                    "limit_window_seconds": 18000,
+                    "reset_after_seconds": 18000,
+                    "reset_at": Int(now.addingTimeInterval(5 * 3600).timeIntervalSince1970)
+                ]
+            ]
+        ]
+        let idleWindow = provider.codexSnapshot(payload: idleWindowPayload, source: "test", message: nil)
+        // The projected reset is still surfaced for display (the web shows it too)…
+        require(idleWindow.fiveHour?.resetAt != nil, "Idle Codex 5h window should still surface its projected reset for display")
+        require(idleWindow.fiveHour?.isIdle == true, "Idle Codex 5h window must be flagged idle")
+        require(idleWindow.fiveHour?.isIdleFiveHourWindow == true, "Idle Codex 5h window must read as an idle 5h window")
+        // It IS claimable, so auto-warm is allowed (this is the whole point for
+        // Codex — open the not-yet-started window)…
+        require(
+            idleWindow.canAutoWarm(now: now, windowDuration: 5 * 3600),
+            "Idle (not-yet-started) Codex window must allow auto warmup"
+        )
+        // …but until the window actually opens, it must not *confirm* a claim.
+        require(
+            !idleWindow.showsActiveWindow(now: now),
+            "Idle (sliding-reset) Codex window must not confirm a phantom warm-up claim"
+        )
+        require(idleWindow.rawWindowKey == "test|idle", "Idle Codex window key must be stable (not the sliding reset)")
+
+        // Auto-warm dedup for idle windows must ignore the stable "idle" key and
+        // gate purely on the just-warmed window's end time. Otherwise a stored
+        // "…|idle" key (e.g. left by an older build, or the previous idle period)
+        // would permanently block claiming every later idle window.
+        require(
+            AutoWarmDedup.shouldWarm(
+                currentWindowKey: "test|idle",
+                lastWarmedWindowKey: "test|idle",
+                lastWarmedWindowEndsAt: nil,
+                currentWindowIsIdle: true,
+                now: now
+            ),
+            "Idle window with a stale matching key but no live warmed-window end must be claimable"
+        )
+        require(
+            !AutoWarmDedup.shouldWarm(
+                currentWindowKey: "test|idle",
+                lastWarmedWindowKey: "test|idle",
+                lastWarmedWindowEndsAt: now.addingTimeInterval(3600),
+                currentWindowIsIdle: true,
+                now: now
+            ),
+            "Idle window must not re-warm while the just-claimed window is still open"
+        )
+        // A non-idle window keeps the strict key dedup (same active window key blocks).
+        require(
+            !AutoWarmDedup.shouldWarm(
+                currentWindowKey: "test|2026-01-01T00:00:00Z",
+                lastWarmedWindowKey: "test|2026-01-01T00:00:00Z",
+                lastWarmedWindowEndsAt: nil,
+                currentWindowIsIdle: false,
+                now: now
+            ),
+            "Active window with a matching key must remain deduped"
+        )
+
         let scheduledAt = Date(timeIntervalSince1970: 1_780_560_000)
         let scheduledDayKey = "2026-6-4"
         let catchUpNow = scheduledAt.addingTimeInterval(3 * 3600)
@@ -321,6 +391,36 @@ struct QuotaExtractorRegression {
         )
         requireClose(claudeZeroUtilization.weekly?.remainingFraction, 0.73, "Claude zero-utilization weekly remaining")
 
+        // After a 5h window expires (and before the next request opens one), the
+        // OAuth API returns a *populated* five_hour with no `resets_at`:
+        // `{ utilization: 0, resets_at: null }`. That parses as a real, reset-less
+        // metric at 100% left — leaving the UI with a 5h percentage but no
+        // countdown, which made the menu bar fall back to the weekly window. It
+        // must be surfaced as the idle 5h window (projected reset) instead.
+        let claudeResetlessPayload: [String: Any] = [
+            "five_hour": [
+                "utilization": 0,
+                "resets_at": NSNull()
+            ],
+            "seven_day": [
+                "utilization": 27,
+                "resets_at": "2026-06-09T20:00:01.015888+00:00"
+            ]
+        ]
+        let claudeResetless = provider.claudeSnapshot(
+            payload: claudeResetlessPayload,
+            source: "Claude OAuth usage",
+            corroboratingSource: nil,
+            message: nil
+        )
+        require(claudeResetless.fiveHour?.isIdle == true,
+                "Reset-less full Claude 5h window must be surfaced as idle")
+        require(claudeResetless.fiveHour?.resetAt != nil,
+                "Reset-less Claude 5h window must surface a projected reset so the menu bar shows a 5h countdown, not the weekly window")
+        require(claudeResetless.rawWindowKey == "Claude OAuth usage|idle",
+                "Reset-less Claude 5h window must use the stable idle key")
+        requireClose(claudeResetless.fiveHour?.remainingFraction, 1.0, "Reset-less Claude 5h window reads fully available")
+
         let claudeRateLimitsPayload: [String: Any] = [
             "rate_limits": [
                 "five_hour": [
@@ -361,8 +461,90 @@ struct QuotaExtractorRegression {
         )
         require(claudeIdle.fiveHour != nil, "Claude idle 5h window must surface a metric, not nil")
         requireClose(claudeIdle.fiveHour?.remainingFraction, 1.0, "Claude idle 5h window reads fully available")
-        require(claudeIdle.fiveHour?.resetAt == nil, "Claude idle 5h window has no reset")
+        require(claudeIdle.fiveHour?.isIdle == true, "Claude idle 5h window must be flagged idle")
+        require(claudeIdle.fiveHour?.isIdleFiveHourWindow == true, "Claude idle 5h window must read as an idle 5h window")
+        // The idle window now carries a *projected* (sliding "if you started now")
+        // reset of now + windowDuration so the menu bar/panel show a countdown
+        // instead of a bare "100%". It must be in the future and ~5h out.
+        require(claudeIdle.fiveHour?.resetAt != nil, "Claude idle 5h window must surface a projected reset for display")
+        if let idleReset = claudeIdle.fiveHour?.resetAt {
+            let projected = idleReset.timeIntervalSinceNow
+            require(projected > 4.5 * 3600 && projected <= 5 * 3600 + 5,
+                    "Claude idle 5h projected reset must be ~5h out, was \(projected)s")
+        }
+        // The projection slides every poll, so the dedup key must be the stable
+        // "idle" marker, never the moving timestamp.
+        require(claudeIdle.rawWindowKey == "Claude OAuth usage|idle",
+                "Claude idle window key must be stable (not the sliding reset)")
         requireClose(claudeIdle.weekly?.remainingFraction, 0.74, "Claude idle weekly still parses")
+        // The idle fallback is the *absence* of a claimed window — it must never
+        // confirm a warm-up or auto-warm, otherwise a warm that didn't actually
+        // open a window would read as "Window claimed", and the sliding projection
+        // would make the app warm a phantom window on every poll.
+        require(!claudeIdle.showsActiveWindow(), "Claude idle 5h fallback must not count as an active claimed window")
+        require(!claudeIdle.canAutoWarm(windowDuration: ToolID.claude.windowDuration),
+                "Claude idle 5h window (sliding projection) must not allow auto warmup")
+
+        // A freshly-warmed window carries a live reset in the future and *must*
+        // confirm the warm-up claim.
+        let claudeActiveWindowPayload: [String: Any] = [
+            "five_hour": [
+                "utilization": 1.0,
+                "resets_at": formatter.string(from: sessionReset)
+            ],
+            "seven_day": [
+                "utilization": 20.0,
+                "resets_at": formatter.string(from: weeklyReset)
+            ]
+        ]
+        let claudeActiveWindow = provider.claudeSnapshot(
+            payload: claudeActiveWindowPayload,
+            source: "Claude OAuth usage",
+            corroboratingSource: nil,
+            message: nil
+        )
+        require(claudeActiveWindow.showsActiveWindow(), "A live future-reset 5h window must confirm a warm-up claim")
+        // The regression that motivated this: utilization is a 0–100 scale, so a
+        // freshly-warmed window at 1% used must read as 99% left — not 0% (which
+        // happened when `utilization: 1.0` was misread as a 0–1 fraction).
+        requireClose(claudeActiveWindow.fiveHour?.remainingFraction, 0.99, "utilization 1.0 means 1% used (99% left), not 100% used")
+
+        // Right at a window rollover the API can pair the *new* window's reset
+        // (just opened, ~5h left) with the just-ended window's high utilization
+        // (reads as ~0% left). That's physically impossible in the first minutes,
+        // so it must be flagged as an unsettled artifact (UI shows "settling").
+        let claudeRolloverArtifactPayload: [String: Any] = [
+            "five_hour": [
+                "utilization": 99.0,
+                "resets_at": formatter.string(from: sessionReset)
+            ],
+            "seven_day": [
+                "utilization": 9.0,
+                "resets_at": formatter.string(from: weeklyReset)
+            ]
+        ]
+        let claudeRollover = provider.claudeSnapshot(
+            payload: claudeRolloverArtifactPayload,
+            source: "Claude OAuth usage",
+            corroboratingSource: nil,
+            message: nil
+        )
+        require(
+            claudeRollover.isUnsettledRolloverReading(windowDuration: ToolID.claude.windowDuration),
+            "A just-opened 5h window reading ~0% left must be flagged as an unsettled rollover artifact"
+        )
+        // A genuinely active window (settled, plenty left) must NOT be flagged.
+        require(
+            !claudeActiveWindow.isUnsettledRolloverReading(windowDuration: ToolID.claude.windowDuration),
+            "A settled active window with quota left must not be treated as a rollover artifact"
+        )
+        // The idle (null five_hour) fallback is a separate state and must not be
+        // flagged as a rollover artifact either (its reset is an idle projection,
+        // not a freshly-opened window).
+        require(
+            !claudeIdle.isUnsettledRolloverReading(windowDuration: ToolID.claude.windowDuration),
+            "Idle 5h fallback must not be treated as a rollover artifact"
+        )
 
         // A populated five_hour must still parse normally through claudeSnapshot.
         let claudeActive = provider.claudeSnapshot(
@@ -415,9 +597,9 @@ struct QuotaExtractorRegression {
 
         let appStateSource = readSource("Sources/QuotaWarmer/AppState.swift")
         require(
-            appStateSource.contains("if state.primaryMetric?.resetAt == nil")
+            appStateSource.contains("liveMetric?.resetAt == nil || liveMetric?.isIdle == true")
                 && appStateSource.contains("state.rememberConfirmedWarmup(startedAt: result.date, duration: tool.windowDuration)"),
-            "Successful warmup must persist a confirmed reset fallback when live quota has no reset"
+            "Successful warmup must persist a confirmed reset fallback when live quota has no real (non-idle) reset"
         )
 
         print("quota extractor regression tests passed")

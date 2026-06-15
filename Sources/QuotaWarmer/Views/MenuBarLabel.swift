@@ -31,16 +31,28 @@ enum MenuBarStatus {
     private static func composeItems(_ appState: AppState) -> [MenuBarComposer.Item] {
         visibleTools(appState).map { tool in
             let st = appState.state(for: tool)
-            let prominent = st.isWarming || (st.isMonitored && st.sourceHealth == .healthy && st.freshness == .fresh)
+            // Dim only when data is expired or unhealthy — stale (5–30min) is
+            // recent enough with a 5-minute refresh interval and should not dim.
+            let prominent = st.isWarming || (st.isMonitored && st.sourceHealth == .healthy
+                && st.freshness != .expired && st.freshness != .unknown)
 
             let text: String
             if st.authStatus == .failed || st.authStatus == .missing {
                 text = "login"
             } else if st.isWarming {
                 text = "warming"
+            } else if st.sessionSettling, let r = st.timeUntilReset {
+                // Window just opened; the percentage is a not-yet-settled rollover
+                // artifact, so show only the countdown (no misleading "0%").
+                text = compactTime(r)
             } else if let r = st.timeUntilReset {
                 text = compactQuotaText(time: r, metric: st.primaryMetric)
             } else if let metric = st.primaryMetric {
+                // No live 5h countdown (window depleted/expired/rate-limited): show
+                // the 5h remaining percent only. The menu-bar label represents the
+                // 5-hour window — never fall back to the weekly window's countdown
+                // here, which spans days and misrepresents the 5h slot as lasting
+                // more than five hours.
                 text = "\(Int(metric.remainingFraction * 100))%"
             } else {
                 text = ""
@@ -76,7 +88,9 @@ enum MenuBarStatus {
         // Off / globally-paused tools get a neutral gray dot so they no longer
         // look like an error (which is red).
         if appState.globalPassive || !state.isMonitored { return .systemGray }
-        if state.sourceHealth == .healthy && state.freshness == .fresh { return .systemGreen }
+        if state.sourceHealth == .healthy && state.freshness == .fresh {
+            return state.mode == .monitor ? .systemBlue : .systemGreen
+        }
         if state.sourceHealth == .authFailure || state.sourceHealth == .unavailable { return .systemRed }
         return .systemYellow
     }

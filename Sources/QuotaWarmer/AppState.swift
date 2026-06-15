@@ -57,6 +57,7 @@ final class ToolState: ObservableObject {
     var authRetryAttempts = 0
     var authRetryTask: Task<Void, Never>?
     var claimVerifyTask: Task<Void, Never>?
+    var settleRepollTask: Task<Void, Never>?
 
     init(tool: ToolID) {
         self.tool = tool
@@ -119,7 +120,29 @@ final class ToolState: ObservableObject {
     }
 
     var resetAt: Date? {
-        if let liveReset = primaryMetric?.resetAt {
+        // A real (non-idle) live reset is authoritative.
+        if let metric = primaryMetric, !metric.isIdle, let liveReset = metric.resetAt {
+            return liveReset
+        }
+        // Otherwise a just-confirmed warm-up's known boundary beats an idle
+        // "if you started now" projection (which slides on every poll).
+        if let confirmedWarmupResetAt, confirmedWarmupResetAt > Date() {
+            return confirmedWarmupResetAt
+        }
+        // Fall back to the idle projection (or nil) so the UI still shows a
+        // countdown when no window has been claimed.
+        return primaryMetric?.resetAt
+    }
+
+    /// The reset of a *real* (live or just-claimed) window, excluding the idle
+    /// "if you started now" projection. `resetAt` deliberately falls back to that
+    /// sliding projection so the UI shows a countdown for idle windows — but a
+    /// projection is not a window that will actually expire, so anything that
+    /// schedules a real-world action off the reset (e.g. the "window expiring
+    /// soon" notification) must use this instead to avoid alarming the user about
+    /// an idle window that never opened.
+    var realWindowResetAt: Date? {
+        if let metric = primaryMetric, !metric.isIdle, let liveReset = metric.resetAt {
             return liveReset
         }
         if let confirmedWarmupResetAt, confirmedWarmupResetAt > Date() {
@@ -140,6 +163,14 @@ final class ToolState: ObservableObject {
 
     var canAutoWarmFromSnapshot: Bool {
         quotaSnapshot?.canAutoWarm(windowDuration: tool.windowDuration) ?? false
+    }
+
+    /// The live 5h reading is a not-yet-settled rollover artifact (window just
+    /// opened but reports near-empty quota). Views show a neutral "settling"
+    /// state instead of an alarming 0% until a follow-up poll lands the real
+    /// number; `scheduleSettleRepoll` drives that poll.
+    var sessionSettling: Bool {
+        quotaSnapshot?.isUnsettledRolloverReading(windowDuration: tool.windowDuration) ?? false
     }
 
     var quotaBackoffActive: Bool {
@@ -167,7 +198,11 @@ final class ToolState: ObservableObject {
     }
 
     func clearConfirmedWarmupIfLiveResetExistsOrExpired(now: Date = Date()) {
-        if primaryMetric?.resetAt != nil || (confirmedWarmupResetAt.map { $0 <= now } ?? false) {
+        // Only a *real* (non-idle) live reset supersedes the recorded warm-up
+        // reset — an idle projection (sliding "if you started now") is not proof
+        // a window opened, so it must not clear the confirmed boundary.
+        let hasRealLiveReset = primaryMetric?.resetAt != nil && primaryMetric?.isIdle != true
+        if hasRealLiveReset || (confirmedWarmupResetAt.map { $0 <= now } ?? false) {
             confirmedWarmupResetAt = nil
             UserDefaults.standard.removeObject(forKey: "confirmedWarmupResetAt.\(tool.rawValue)")
         }
@@ -325,7 +360,7 @@ final class AppState: ObservableObject {
         }
     }
 
-    func refreshQuota(for tool: ToolID, allowAutomaticWarmup: Bool = false) async {
+    func refreshQuota(for tool: ToolID, allowAutomaticWarmup: Bool = false, reconcileStuckOutcome: Bool = true) async {
         let state = state(for: tool)
         if let backoffUntil = state.quotaBackoffUntil, backoffUntil > Date() {
             state.nextRefreshAt = backoffUntil
@@ -349,6 +384,10 @@ final class AppState: ObservableObject {
             state.healthMessage = snapshot.message ?? snapshot.primarySource
             state.nextRefreshAt = Date().addingTimeInterval(refreshInterval)
             state.clearConfirmedWarmupIfLiveResetExistsOrExpired()
+            // Background self-heal of a stuck warm-up status. Skipped while a
+            // warm-up is in flight, and skipped on the recheck path (which calls
+            // evaluateWarmupClaim right after) so the two never both confirm.
+            if reconcileStuckOutcome, !state.isWarming { reconcileWarmupOutcome(for: state) }
             let cliReady = await applyCLIAuthenticationStatusIfNeeded(for: tool, to: state)
             addHistory(
                 tool: tool,
@@ -589,7 +628,8 @@ final class AppState: ObservableObject {
         guard AutoWarmDedup.shouldWarm(
             currentWindowKey: snapshot.rawWindowKey,
             lastWarmedWindowKey: state.lastAutoWindowKey,
-            lastWarmedWindowEndsAt: state.lastAutoWarmWindowEndsAt
+            lastWarmedWindowEndsAt: state.lastAutoWarmWindowEndsAt,
+            currentWindowIsIdle: snapshot.fiveHour?.isIdle == true
         ) else {
             if let endsAt = state.lastAutoWarmWindowEndsAt, endsAt > Date() {
                 DiagnosticLogger.append("auto_warm_skipped_active_window tool=\(tool.rawValue) windowEndsAt=\(ISO8601DateFormatter().string(from: endsAt))")
@@ -598,12 +638,18 @@ final class AppState: ObservableObject {
         }
 
         addHistory(tool: tool, kind: .resetDetected, title: "Fresh reset detected", detail: reason)
+        let previousFetchedAt = snapshot.fetchedAt
         let succeeded = await triggerWarmup(tool: tool, mode: "auto")
         // Only claim the window once a warm-up actually succeeded. Marking it on
         // failure would burn the dedup slot and leave a fresh window unwarmed
         // until the next reset; instead, let the next refresh retry (under backoff).
+        //
+        // Claim the *post-warm* window key, not the pre-warm one: warming an idle
+        // Codex window opens it, so the pre-warm snapshot's stable "idle" key would
+        // wrongly match — and block — the next idle period's claim. Keying on the
+        // freshly-opened (now active) window lets each later idle window re-claim.
         if succeeded {
-            state.rememberAutoWindow(snapshot.rawWindowKey)
+            claimAutoWindowFromPostWarmQuota(for: tool, previousFetchedAt: previousFetchedAt)
         }
     }
 
@@ -622,6 +668,11 @@ final class AppState: ObservableObject {
     private func claimAutoWindowFromPostWarmQuota(for tool: ToolID, previousFetchedAt: Date?) {
         let state = state(for: tool)
         guard let snapshot = state.quotaSnapshot,
+              // If the post-warm quota still reads idle (e.g. the API hasn't caught
+              // up to the just-sent command), don't store the stable "idle" key — it
+              // would block the next idle period's claim. Leave the prior key in
+              // place; `lastAutoWarmWindowEndsAt` already guards against re-warming.
+              snapshot.fiveHour?.isIdle != true,
               snapshot.isClaimableAutoWindow(previousFetchedAt: previousFetchedAt) else {
             return
         }
@@ -642,6 +693,7 @@ final class AppState: ObservableObject {
         state.isWarming = true
         state.errorMessage = nil
         state.claimVerifyTask?.cancel(); state.claimVerifyTask = nil
+        state.settleRepollTask?.cancel(); state.settleRepollTask = nil
         notifications.cancelAll(for: tool)
 
         var succeeded = false
@@ -660,7 +712,13 @@ final class AppState: ObservableObject {
             notifications.notifyWarmupCommandSent(tool: tool)
             state.lastWarmupOutcome = .pending(sentAt: result.date)
             await refreshQuota(for: tool, allowAutomaticWarmup: false)
-            if state.primaryMetric?.resetAt == nil {
+            // No *real* live window yet: either no reset at all, or only an idle
+            // "if you started now" projection (Claude's null `five_hour` is now
+            // surfaced as an idle window with a sliding reset). Record the
+            // command's expected reset so the confirm path (evaluateWarmupClaim)
+            // has a stable boundary to trust instead of the sliding projection.
+            let liveMetric = state.primaryMetric
+            if liveMetric?.resetAt == nil || liveMetric?.isIdle == true {
                 state.rememberConfirmedWarmup(startedAt: result.date, duration: tool.windowDuration)
             }
             // Remember when this freshly-claimed window resets so the auto path
@@ -691,12 +749,12 @@ final class AppState: ObservableObject {
     }
 
     /// Grace delays for re-checking that a warm-up actually opened the window,
-    /// to tolerate provider lag before declaring it unverified. Bounded.
+    /// to tolerate provider lag before falling back to the assumed window. Bounded.
     private let claimVerifyDelays: [TimeInterval] = [30, 90]
 
     /// Evaluates the live (post-warm) snapshot: marks the window confirmed, or
     /// schedules a bounded grace re-check, or — once attempts are exhausted —
-    /// records it as sent-but-unverified.
+    /// confirms against the completed command's expected (assumed) window.
     private func evaluateWarmupClaim(for tool: ToolID, sentAt: Date, attempt: Int) {
         let state = state(for: tool)
         if state.quotaSnapshot?.showsActiveWindow() == true {
@@ -707,18 +765,27 @@ final class AppState: ObservableObject {
             if state.sourceHealth == .healthy {
                 notifications.notifyActivated(tool: tool)
             }
+            // The window's reset time is right, but right at rollover the provider
+            // can pair it with the just-ended window's high utilization (reads as
+            // "0% left"). Re-poll a few times so the settled percentage lands in
+            // seconds instead of waiting for the next 5-minute refresh.
+            scheduleSettleRepoll(for: tool)
             return
         }
 
         guard attempt < claimVerifyDelays.count else {
-            state.lastWarmupOutcome = .unverified(sentAt: sentAt)
-            addHistory(
-                tool: tool,
-                kind: .pollingError,
-                title: "Window claim unconfirmed",
-                detail: "Warm-up was sent but the new window hasn't appeared in quota yet."
-            )
-            DiagnosticLogger.append("warmup_claim_unverified tool=\(tool.rawValue)")
+            // Grace exhausted without the live API surfacing the window. The
+            // warm-up command itself completed (we're on the success path) and
+            // triggerWarmup always recorded the window's expected reset
+            // (`confirmedWarmupResetAt`) when the live quota lacked one, so trust
+            // that rather than alarming the user — Claude's OAuth usage API
+            // frequently reports the active 5h window as idle/null for minutes
+            // after it opens, and the verification timer can be suspended across
+            // system sleep. A later poll that surfaces the live window keeps the
+            // reset accurate via reconcileWarmupOutcome().
+            state.lastWarmupOutcome = .confirmed(at: Date(), resetAt: state.confirmedWarmupResetAt ?? state.resetAt)
+            addHistory(tool: tool, kind: .resetDetected, title: "Warm-up sent", detail: claimConfirmedDetail(state))
+            DiagnosticLogger.append("warmup_claim_assumed tool=\(tool.rawValue)")
             return
         }
 
@@ -733,12 +800,59 @@ final class AppState: ObservableObject {
         }
     }
 
+    /// Heals a stuck warm-up status on regular polls (outside the bounded in-warm
+    /// verification): a `.pending` outcome whose recheck task was lost (e.g.
+    /// cancelled without resolving) is upgraded to `.confirmed` once a later
+    /// snapshot actually shows the window open — this covers Claude's laggy
+    /// `five_hour` reporting and verification suspended across system sleep. A
+    /// `.pending` whose warmed window has fully elapsed without ever confirming
+    /// is cleared so the status card doesn't linger for hours.
+    private func reconcileWarmupOutcome(for state: ToolState) {
+        switch state.lastWarmupOutcome {
+        case .pending(let sentAt):
+            if state.quotaSnapshot?.showsActiveWindow() == true {
+                state.claimVerifyTask?.cancel(); state.claimVerifyTask = nil
+                state.lastWarmupOutcome = .confirmed(at: Date(), resetAt: state.resetAt)
+                addHistory(tool: state.tool, kind: .resetDetected, title: "Window claim confirmed", detail: claimConfirmedDetail(state))
+                DiagnosticLogger.append("warmup_claim_healed tool=\(state.tool.rawValue)")
+            } else if Date().timeIntervalSince(sentAt) > state.tool.windowDuration {
+                state.lastWarmupOutcome = .none
+            }
+        default:
+            break
+        }
+    }
+
     private func runClaimVerification(tool: ToolID, sentAt: Date, attempt: Int) async {
         let state = state(for: tool)
         guard state.claimVerifyTask != nil else { return }
         state.claimVerifyTask = nil
-        await refreshQuota(for: tool, allowAutomaticWarmup: false)
+        await refreshQuota(for: tool, allowAutomaticWarmup: false, reconcileStuckOutcome: false)
         evaluateWarmupClaim(for: tool, sentAt: sentAt, attempt: attempt)
+    }
+
+    /// Short, bounded follow-up polls that run only while the live 5h reading is
+    /// an unsettled rollover artifact (`sessionSettling`). Stops as soon as the
+    /// provider returns the real percentage, or after the last delay. Distinct
+    /// from `claimVerifyTask` (which proves the *window* opened, and stops on
+    /// confirmation) — this exists purely to settle the displayed *quota*.
+    private let settleRepollDelays: [TimeInterval] = [20, 45, 90]
+
+    private func scheduleSettleRepoll(for tool: ToolID, attempt: Int = 0) {
+        let state = state(for: tool)
+        guard state.sessionSettling, attempt < settleRepollDelays.count else {
+            state.settleRepollTask?.cancel(); state.settleRepollTask = nil
+            return
+        }
+        let delay = settleRepollDelays[attempt]
+        state.settleRepollTask?.cancel()
+        DiagnosticLogger.append("quota_settle_repoll tool=\(tool.rawValue) attempt=\(attempt + 1) delay=\(Int(delay))s")
+        state.settleRepollTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+            guard !Task.isCancelled else { return }
+            await self?.refreshQuota(for: tool, allowAutomaticWarmup: false, reconcileStuckOutcome: false)
+            self?.scheduleSettleRepoll(for: tool, attempt: attempt + 1)
+        }
     }
 
     private func claimConfirmedDetail(_ state: ToolState) -> String {
@@ -813,7 +927,13 @@ final class AppState: ObservableObject {
                 state.errorMessage = nil
             }
             state.backoffUntil = nil
-            clearAuthRetry(for: state)
+            // Cancel any pending retry task but preserve authRetryAttempts so that
+            // if the subsequent refreshQuota call also fails, scheduleClaudeAuthRecheckIfNeeded
+            // continues from the current attempt index instead of restarting from 0.
+            // authRetryAttempts is only reset to 0 by the refreshQuota success path.
+            state.authRetryTask?.cancel()
+            state.authRetryTask = nil
+            state.authRetryScheduledAt = nil
             return true
         case .notAuthenticated(let message):
             let wasAlreadyBlocked = state.authStatus == .failed && state.errorMessage == message
@@ -956,7 +1076,11 @@ final class AppState: ObservableObject {
         let nextDate = Date().addingTimeInterval(refreshInterval)
         scheduler.schedule(tool: tool, at: nextDate)
         state.nextRefreshAt = nextDate
-        if let resetAt = state.resetAt, resetAt > Date() {
+        // Use the *real* window reset, not the idle "if you started now"
+        // projection that `resetAt` falls back to — otherwise an idle window
+        // (e.g. Claude's null `five_hour`) would schedule a misleading
+        // "window expiring soon" notification for a window that never opened.
+        if let resetAt = state.realWindowResetAt, resetAt > Date() {
             notifications.scheduleWindowWarning(for: tool, expiresAt: resetAt)
         }
     }
