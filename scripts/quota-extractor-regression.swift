@@ -584,6 +584,10 @@ struct QuotaExtractorRegression {
         require(empty.fiveHour == nil, "Missing quota fields should not fabricate a 5h metric")
         require(empty.weekly == nil, "Missing quota fields should not fabricate a weekly metric")
 
+        testLocalClaudeTokenUsage()
+        testLocalClaudeOpenUsageCostCompatibility()
+        testLocalCodexTokenUsage()
+
         let visibleReadySources = [
             "Sources/QuotaWarmer/Views/MenuBarLabel.swift",
             "Sources/QuotaWarmer/Views/ToolTabView.swift",
@@ -614,6 +618,108 @@ struct QuotaExtractorRegression {
     private static func requireClose(_ actual: Double?, _ expected: Double, _ message: String) {
         guard let actual, abs(actual - expected) < 0.0001 else {
             fatalError("\(message): expected \(expected), got \(String(describing: actual))")
+        }
+    }
+
+    private static func testLocalClaudeTokenUsage() {
+        let provider = LocalUsageProvider(calendar: utcCalendar)
+        let now = isoDate("2026-06-15T12:00:00Z")
+        let root = temporaryDirectory("claude-local-usage")
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let project = root.appendingPathComponent("project-a")
+        createDirectory(project)
+        writeJSONL([
+            #"{"timestamp":"2026-06-15T10:00:00Z","message":{"id":"msg_today","model":"claude-sonnet-4-20250514","usage":{"input_tokens":1000,"cache_creation_input_tokens":2000,"cache_read_input_tokens":3000,"output_tokens":4000}}}"#,
+            #"{"timestamp":"2026-06-15T10:00:01Z","message":{"id":"msg_today","model":"claude-sonnet-4-20250514","usage":{"input_tokens":1000,"cache_creation_input_tokens":2000,"cache_read_input_tokens":3000,"output_tokens":4000}}}"#,
+            #"{"timestamp":"2026-06-14T09:00:00Z","message":{"id":"msg_yesterday","model":"claude-haiku-4-5-20251001","usage":{"input_tokens":500,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"output_tokens":500}}}"#
+        ], to: project.appendingPathComponent("session.jsonl"))
+
+        let summary = provider.usage(for: .claude, baseURL: root, now: now)
+        require(summary.today.totalTokens == 10_000, "Claude local usage should dedupe repeated message ids")
+        require(summary.yesterday.totalTokens == 1_000, "Claude local usage should bucket yesterday")
+        require(summary.last30Days.totalTokens == 11_000, "Claude local usage should aggregate the last 30 days")
+        requireClose(summary.today.costUSD, 0.0714, "Claude local usage should price Sonnet input/cache/output tokens")
+        requireClose(summary.yesterday.costUSD, 0.0030, "Claude local usage should price Haiku tokens")
+        requireClose(summary.last30Days.costUSD, 0.0744, "Claude local usage should aggregate token cost")
+    }
+
+    private static func testLocalClaudeOpenUsageCostCompatibility() {
+        let provider = LocalUsageProvider(calendar: utcCalendar)
+        let now = isoDate("2026-06-15T12:00:00Z")
+        let root = temporaryDirectory("claude-openusage-cost")
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let project = root.appendingPathComponent("project-a")
+        createDirectory(project)
+        writeJSONL([
+            #"{"type":"assistant","data":{"message":{"timestamp":"2026-06-15T08:00:00Z","costUSD":0.42,"message":{"id":"nested_explicit","model":"claude-opus-4-5-20251101","usage":{"input_tokens":1,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"output_tokens":1}}}}}"#,
+            #"{"timestamp":"2026-06-15T09:00:00Z","message":{"id":"modern_opus","model":"claude-opus-4-5-20251101","usage":{"input_tokens":1000,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"output_tokens":1000}}}"#,
+            #"{"timestamp":"2026-06-15T10:00:00Z","message":{"id":"cache_breakdown","model":"claude-sonnet-4-20250514","usage":{"input_tokens":0,"cache_creation_input_tokens":300,"cache_creation":{"ephemeral_5m_input_tokens":100,"ephemeral_1h_input_tokens":200},"cache_read_input_tokens":0,"output_tokens":0}}}"#,
+            #"{"timestamp":"2026-06-15T11:00:00Z","message":{"id":"fable","model":"claude-fable-5","usage":{"input_tokens":100,"cache_creation_input_tokens":100,"cache_read_input_tokens":100,"output_tokens":100}}}"#
+        ], to: project.appendingPathComponent("session.jsonl"))
+
+        let summary = provider.usage(for: .claude, baseURL: root, now: now)
+        require(summary.today.totalTokens == 2_702, "Claude local usage should parse OpenUsage-compatible nested records")
+        requireClose(summary.today.costUSD, 0.458475, "Claude local usage should match ccusage cost compatibility rules")
+    }
+
+    private static func testLocalCodexTokenUsage() {
+        let provider = LocalUsageProvider(calendar: utcCalendar)
+        let now = isoDate("2026-06-15T12:00:00Z")
+        let root = temporaryDirectory("codex-local-usage")
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        createDirectory(root)
+        writeJSONL([
+            #"{"timestamp":"2026-06-15T08:00:00Z","payload":{"type":"session_meta","model":"gpt-5.5"}}"#,
+            #"{"timestamp":"2026-06-15T10:00:00Z","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":1000,"cached_input_tokens":200,"output_tokens":300,"total_tokens":1300},"total_token_usage":{"input_tokens":100000,"cached_input_tokens":20000,"output_tokens":30000,"total_tokens":130000}}}}"#,
+            #"{"timestamp":"2026-06-14T09:00:00Z","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":500,"cached_input_tokens":100,"output_tokens":50,"total_tokens":550},"total_token_usage":{"input_tokens":110000,"cached_input_tokens":21000,"output_tokens":31000,"total_tokens":141000}}}}"#,
+            #"{"timestamp":"2026-06-15T11:00:00Z","payload":{"type":"session_meta","model":"codex-auto-review"}}"#,
+            #"{"timestamp":"2026-06-15T11:05:00Z","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":100,"cached_input_tokens":50,"output_tokens":10,"total_tokens":110}}}}"#
+        ], to: root.appendingPathComponent("session.jsonl"))
+
+        let summary = provider.usage(for: .codex, baseURL: root, now: now)
+        require(summary.today.totalTokens == 1_410, "Codex local usage should use per-turn token deltas")
+        require(summary.yesterday.totalTokens == 550, "Codex local usage should bucket yesterday")
+        require(summary.last30Days.totalTokens == 1_960, "Codex local usage should not aggregate cumulative token totals")
+        requireClose(summary.today.costUSD, 0.01310, "Codex local usage should price cached input like ccusage model pricing")
+        requireClose(summary.yesterday.costUSD, 0.00355, "Codex local usage should price yesterday's turn")
+        requireClose(summary.last30Days.costUSD, 0.01665, "Codex local usage should aggregate token cost")
+    }
+
+    private static var utcCalendar: Calendar {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        return calendar
+    }
+
+    private static func isoDate(_ text: String) -> Date {
+        let formatter = ISO8601DateFormatter()
+        guard let date = formatter.date(from: text) else {
+            fatalError("Invalid fixture date \(text)")
+        }
+        return date
+    }
+
+    private static func temporaryDirectory(_ prefix: String) -> URL {
+        URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("quotawarmer-\(prefix)-\(UUID().uuidString)", isDirectory: true)
+    }
+
+    private static func createDirectory(_ url: URL) {
+        do {
+            try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+        } catch {
+            fatalError("Could not create fixture directory \(url.path): \(error)")
+        }
+    }
+
+    private static func writeJSONL(_ lines: [String], to url: URL) {
+        do {
+            try lines.joined(separator: "\n").write(to: url, atomically: true, encoding: .utf8)
+        } catch {
+            fatalError("Could not write fixture \(url.path): \(error)")
         }
     }
 

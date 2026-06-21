@@ -37,6 +37,8 @@ final class ToolState: ObservableObject {
     @Published var lastLogActivity: Date?
     @Published var weeklyActivity: [DayActivity] = []
     @Published var quotaSnapshot: QuotaSnapshot?
+    @Published var tokenUsageSummary: TokenUsageSummary?
+    @Published var isFetchingTokenUsage = false
     @Published var sourceHealth: SourceHealth = .unknown
     @Published var authStatus: AuthStatus = .unknown
     @Published var healthMessage: String = "not checked"
@@ -362,6 +364,7 @@ final class AppState: ObservableObject {
 
     func refreshQuota(for tool: ToolID, allowAutomaticWarmup: Bool = false, reconcileStuckOutcome: Bool = true) async {
         let state = state(for: tool)
+        refreshTokenUsage(for: tool)
         if let backoffUntil = state.quotaBackoffUntil, backoffUntil > Date() {
             state.nextRefreshAt = backoffUntil
             state.errorMessage = rateLimitMessage(until: backoffUntil)
@@ -405,6 +408,25 @@ final class AppState: ObservableObject {
         }
 
         state.isFetchingQuota = false
+    }
+
+    private func refreshTokenUsage(for tool: ToolID) {
+        let state = state(for: tool)
+        // Skip if a scan is already in flight for this tool — otherwise rapid
+        // refresh cycles can pile up overlapping disk scans.
+        guard !state.isFetchingTokenUsage else { return }
+        state.isFetchingTokenUsage = true
+        // The scan walks thousands of CLI JSONL log files synchronously; keep it
+        // off the main actor so the menu-bar panel never freezes (which also kept
+        // it from dismissing on outside clicks). A fresh provider per call avoids
+        // sharing the non-thread-safe date formatters across concurrent scans.
+        Task.detached(priority: .utility) {
+            let summary = LocalUsageProvider().usage(for: tool)
+            await MainActor.run {
+                state.tokenUsageSummary = summary
+                state.isFetchingTokenUsage = false
+            }
+        }
     }
 
     func applyRefreshInterval() {
@@ -816,6 +838,15 @@ final class AppState: ObservableObject {
                 addHistory(tool: state.tool, kind: .resetDetected, title: "Window claim confirmed", detail: claimConfirmedDetail(state))
                 DiagnosticLogger.append("warmup_claim_healed tool=\(state.tool.rawValue)")
             } else if Date().timeIntervalSince(sentAt) > state.tool.windowDuration {
+                state.lastWarmupOutcome = .none
+            }
+        case .confirmed(_, let resetAt):
+            // The claimed window has fully reset (its boundary is in the past) and
+            // the live snapshot no longer shows an active window — clear the
+            // "Window claimed at …" card so it doesn't keep implying an active
+            // window hours after that window expired.
+            if let resetAt, resetAt <= Date(),
+               state.quotaSnapshot?.showsActiveWindow() != true {
                 state.lastWarmupOutcome = .none
             }
         default:

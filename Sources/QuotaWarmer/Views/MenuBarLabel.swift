@@ -37,14 +37,17 @@ enum MenuBarStatus {
                 && st.freshness != .expired && st.freshness != .unknown)
 
             let text: String
-            if st.authStatus == .failed || st.authStatus == .missing {
-                text = "login"
-            } else if st.isWarming {
+            if st.isWarming {
                 text = "warming"
             } else if st.sessionSettling, let r = st.timeUntilReset {
                 // Window just opened; the percentage is a not-yet-settled rollover
                 // artifact, so show only the countdown (no misleading "0%").
                 text = compactTime(r)
+            } else if st.primaryMetric?.isIdleFiveHourWindow == true {
+                // No active window yet: the only "reset" is a sliding projection,
+                // so show the full remaining percent without a fake countdown that
+                // would make a not-yet-started window look active.
+                text = "\(Int((st.primaryMetric?.remainingFraction ?? 1) * 100))%"
             } else if let r = st.timeUntilReset {
                 text = compactQuotaText(time: r, metric: st.primaryMetric)
             } else if let metric = st.primaryMetric {
@@ -55,6 +58,9 @@ enum MenuBarStatus {
                 // more than five hours.
                 text = "\(Int(metric.remainingFraction * 100))%"
             } else {
+                // Auth/setup problems are conveyed by the status dot and the
+                // popover. A raw "login" label in the system menu bar looks like
+                // an app defect, especially when another tool still has live data.
                 text = ""
             }
 

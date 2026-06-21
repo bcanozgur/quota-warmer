@@ -15,6 +15,7 @@
 		2769B7FA38A99171E15AC939 /* MenuContent.swift in Sources */ = {isa = PBXBuildFile; fileRef = 98917F67C6611F34831F684C /* MenuContent.swift */; };
 		2809480C8774C47C52136ECC /* Components.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4DD0A6F158460741008A6DC8 /* Components.swift */; };
 		2AAAD6912C5020B0E6C7C336 /* AppState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 15BE4D2A429BB790E2ACF1BE /* AppState.swift */; };
+		3809EB9EFF69E2B86CC7E07F /* LocalUsageProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7D771338667A53F8FD96D244 /* LocalUsageProvider.swift */; };
 		5E1789AD3B2F0CAA3B34784F /* ToolID.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9ECB196FCE1063660355BE22 /* ToolID.swift */; };
 		6EE00E6AD61DD98974168E92 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 761B35D9CA261C8A260FF75B /* Assets.xcassets */; };
 		737C077D9B36EB603128B662 /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2BD69A6F289B09B5A2712134 /* AppDelegate.swift */; };
@@ -43,6 +44,7 @@
 		4DD0A6F158460741008A6DC8 /* Components.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Components.swift; sourceTree = "<group>"; };
 		6F3B64B4293CFBD14217DA2B /* MainTabView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MainTabView.swift; sourceTree = "<group>"; };
 		761B35D9CA261C8A260FF75B /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		7D771338667A53F8FD96D244 /* LocalUsageProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalUsageProvider.swift; sourceTree = "<group>"; };
 		8AA0B158FEC9459E92677A33 /* NotificationManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotificationManager.swift; sourceTree = "<group>"; };
 		8B55E7AA18695B4771A49FD2 /* CredentialStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CredentialStore.swift; sourceTree = "<group>"; };
 		983850953D9EC6CDFC1DE171 /* QuotaWarmerApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuotaWarmerApp.swift; sourceTree = "<group>"; };
@@ -92,6 +94,7 @@
 			children = (
 				07B66503B904C611B3B942A6 /* ActivityScanner.swift */,
 				8B55E7AA18695B4771A49FD2 /* CredentialStore.swift */,
+				7D771338667A53F8FD96D244 /* LocalUsageProvider.swift */,
 				8AA0B158FEC9459E92677A33 /* NotificationManager.swift */,
 				F0ECCEAAAD4F2D01A85698B2 /* QuotaProvider.swift */,
 				2C0FFA24004A3B12BB624E6F /* Scheduler.swift */,
@@ -210,6 +213,7 @@
 				2809480C8774C47C52136ECC /* Components.swift in Sources */,
 				F3EBF8802D29A1A5F07C66B1 /* CredentialStore.swift in Sources */,
 				AE93A125268295B8FEFE106B /* DS.swift in Sources */,
+				3809EB9EFF69E2B86CC7E07F /* LocalUsageProvider.swift in Sources */,
 				C7A75684B732A7F922EBB865 /* MainTabView.swift in Sources */,
 				E806388933B9087D09ED9144 /* MenuBarLabel.swift in Sources */,
 				2769B7FA38A99171E15AC939 /* MenuContent.swift in Sources */,

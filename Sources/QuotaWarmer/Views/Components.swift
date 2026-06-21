@@ -107,6 +107,98 @@ enum QuotaPace {
     }
 }
 
+@MainActor
+enum ToolStatusCopy {
+    static func quotaLeftText(for state: ToolState, metric: QuotaMetric?, settling: Bool = false) -> String {
+        if settling { return "Updating..." }
+        guard let metric else { return "-- left" }
+        let percent = Int(metric.remainingFraction * 100)
+        return isLive(state) ? "\(percent)% left" : "\(percent)% last known"
+    }
+
+    static func resetFallback(for state: ToolState, metric: QuotaMetric?) -> String {
+        guard let metric else {
+            if state.isFetchingQuota { return "Updating..." }
+            return authBlocked(state) ? "Connect to update" : "No live quota"
+        }
+        if metric.isIdleFiveHourWindow {
+            // The window hasn't opened yet — its quota is full and the only reset
+            // is a sliding projection. Say so plainly instead of faking a countdown.
+            return "Not started yet"
+        }
+        if authBlocked(state) {
+            return state.lastSuccessfulFetch == nil ? "Connect to update" : "Reconnect to update"
+        }
+        switch state.freshness {
+        case .fresh:
+            return "Fresh"
+        case .stale, .expired:
+            if let fetched = state.lastSuccessfulFetch {
+                return "Last checked \(shortClock(fetched))"
+            }
+            return "Last known"
+        case .unknown:
+            return "No live quota"
+        }
+    }
+
+    static func providerIssue(for state: ToolState) -> String? {
+        if authBlocked(state) {
+            var message = authActionText(for: state)
+            if let retryAt = state.authRetryScheduledAt, retryAt > Date() {
+                message += " Auto-check at \(shortClock(retryAt))."
+            }
+            if state.lastSuccessfulFetch != nil {
+                message += " Last quota is shown for context."
+            }
+            return message
+        }
+        if state.quotaBackoffActive, let until = state.quotaBackoffUntil {
+            return "Quota source is rate-limited. Retrying at \(shortClock(until))."
+        }
+        if state.freshness == .expired, let fetched = state.lastSuccessfulFetch {
+            return "Live quota has not updated since \(shortClock(fetched)). Showing the last known reading."
+        }
+        if state.sourceHealth == .unavailable {
+            if state.lastSuccessfulFetch != nil {
+                return "Quota source is temporarily unavailable. Showing the last known reading."
+            }
+            return "Quota source is temporarily unavailable."
+        }
+        return nil
+    }
+
+    static func rowStatusColor(for state: ToolState, hasMetric: Bool) -> Color? {
+        guard hasMetric else { return nil }
+        if isLive(state) { return nil }
+        return DS.C.yellow
+    }
+
+    private static func isLive(_ state: ToolState) -> Bool {
+        state.isMonitored && state.sourceHealth == .healthy && state.freshness == .fresh
+    }
+
+    private static func authBlocked(_ state: ToolState) -> Bool {
+        state.sourceHealth == .authFailure || state.authStatus == .failed || state.authStatus == .missing
+    }
+
+    private static func authActionText(for state: ToolState) -> String {
+        switch state.tool {
+        case .claude:
+            return "Claude needs reconnecting. Run claude auth login in Terminal, then Refresh."
+        case .codex:
+            return "Codex needs reconnecting. Sign in again, then Refresh."
+        }
+    }
+
+    private static func shortClock(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.dateStyle = .none
+        formatter.timeStyle = .short
+        return formatter.string(from: date)
+    }
+}
+
 /// One quota window block: a "Session"/"Weekly" title with a pace status dot, a
 /// wide usage bar with the time-pace knob, and one or two meta lines
 /// (`X% left` / `Resets in …`, plus `N% short` / `Runs out in …` when behind).
@@ -117,6 +209,7 @@ struct QuotaWindowRow: View {
     let leftText: String
     let pace: QuotaPace.Result
     var refreshing: Bool = false
+    var statusColor: Color? = nil
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -124,7 +217,7 @@ struct QuotaWindowRow: View {
                 Text(title)
                     .font(.system(size: 15, weight: .bold))
                     .foregroundStyle(DS.C.text)
-                StatusDot(color: dotColor, size: 8)
+                StatusDot(color: statusColor ?? dotColor, size: 8)
             }
 
             UsageBar(fraction: quotaLeft, refreshing: refreshing, height: 12,

@@ -239,6 +239,26 @@ struct QuotaMetric: Identifiable {
     }
 }
 
+struct TokenUsageDay: Identifiable, Equatable {
+    let date: Date
+    let totalTokens: Int
+    let costUSD: Double?
+
+    var id: Date { date }
+}
+
+struct TokenUsageSummary: Equatable {
+    let fetchedAt: Date
+    let source: String
+    let today: TokenUsageDay
+    let yesterday: TokenUsageDay
+    let last30Days: TokenUsageDay
+
+    var hasUsage: Bool {
+        today.totalTokens > 0 || yesterday.totalTokens > 0 || last30Days.totalTokens > 0
+    }
+}
+
 struct QuotaSnapshot {
     let tool: ToolID
     let fetchedAt: Date

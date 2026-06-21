@@ -109,15 +109,15 @@ struct MainTabView: View {
         // show the reset countdown but neither the bogus "0% left" nor the
         // "behind pace / runs out" alarm until the real number settles.
         let settlingActive = settling && metric != nil
-        let leftText: String
-        if settlingActive {
-            leftText = "Updating…"
-        } else {
-            leftText = metric == nil ? "-- left" : "\(Int(quotaLeft * 100))% left"
-        }
+        // An idle (not-yet-started) 5h window only carries a sliding "if you
+        // started now" projection, not a real boundary — rendering it as
+        // "Resets in 4h 56m" makes a window that hasn't opened look active. Drop
+        // the projected reset so the row falls back to "Not started yet".
+        let effectiveReset = metric?.isIdleFiveHourWindow == true ? nil : resetAt
+        let leftText = ToolStatusCopy.quotaLeftText(for: state, metric: metric, settling: settlingActive)
         let pace = QuotaPace.compute(
             quotaLeft: settlingActive ? 1 : quotaLeft,
-            resetAt: resetAt,
+            resetAt: effectiveReset,
             windowDuration: windowDuration,
             now: Date(),
             fallbackResetText: fallbackResetText(state, metric: metric)
@@ -128,43 +128,17 @@ struct MainTabView: View {
             quotaLeft: settlingActive ? (pace.timeLeftFraction ?? quotaLeft) : quotaLeft,
             leftText: leftText,
             pace: pace,
-            refreshing: state.isFetchingQuota || settlingActive
+            refreshing: state.isFetchingQuota || settlingActive,
+            statusColor: ToolStatusCopy.rowStatusColor(for: state, hasMetric: metric != nil)
         )
     }
 
     private func fallbackResetText(_ state: ToolState, metric: QuotaMetric?) -> String {
-        guard metric != nil else {
-            return state.isFetchingQuota ? "Updating..." : "No live quota"
-        }
-        if let metric, metric.isIdleFiveHourWindow {
-            return "\(Int(metric.remainingFraction * 100))% left"
-        }
-        switch state.freshness {
-        case .fresh: return "Fresh"
-        case .stale: return "Stale"
-        case .expired: return "Expired data"
-        case .unknown: return "No live quota"
-        }
+        ToolStatusCopy.resetFallback(for: state, metric: metric)
     }
 
     private func providerIssue(_ state: ToolState) -> String? {
-        if state.sourceHealth == .authFailure, let msg = state.errorMessage, !msg.isEmpty {
-            return msg
-        }
-        if let retryAt = state.authRetryScheduledAt, retryAt > Date() {
-            return "Re-checking auth at \(shortClock(retryAt))"
-        }
-        // Rate-limited: backoff is active and the menu bar shows yellow — surface
-        // the retry time so the in-app view matches the menu bar's degraded state.
-        if state.quotaBackoffActive, let until = state.quotaBackoffUntil {
-            return "Rate limited · retrying at \(shortClock(until))"
-        }
-        // Expired data: the menu bar shows yellow + dimmed; show why here too.
-        if state.freshness == .expired {
-            if let msg = state.errorMessage, !msg.isEmpty { return msg }
-            return "Quota data is outdated — refreshing"
-        }
-        return nil
+        ToolStatusCopy.providerIssue(for: state)
     }
 
     /// Minimal pin toggle: shows/hides this tool's quota in the menu bar,

@@ -60,8 +60,9 @@ struct ToolTabView: View {
                 resetAt: toolState.weeklyMetric?.resetAt,
                 windowDuration: toolState.tool.weeklyWindowDuration
             )
-            if let error = toolState.errorMessage {
-                Text(error)
+            tokenUsageSection
+            if let issue = ToolStatusCopy.providerIssue(for: toolState) {
+                Text(issue)
                     .font(.system(size: 11.5))
                     .foregroundStyle(DS.C.red)
                     .fixedSize(horizontal: false, vertical: true)
@@ -73,7 +74,7 @@ struct ToolTabView: View {
 
     private func windowRow(title: String, metric: QuotaMetric?, resetAt: Date?, windowDuration: TimeInterval) -> some View {
         let quotaLeft = metric?.remainingFraction ?? 0
-        let leftText = metric == nil ? "-- left" : "\(Int(quotaLeft * 100))% left"
+        let leftText = ToolStatusCopy.quotaLeftText(for: toolState, metric: metric)
         let pace = QuotaPace.compute(
             quotaLeft: quotaLeft,
             resetAt: resetAt,
@@ -87,32 +88,99 @@ struct ToolTabView: View {
             quotaLeft: quotaLeft,
             leftText: leftText,
             pace: pace,
-            refreshing: toolState.isFetchingQuota
+            refreshing: toolState.isFetchingQuota,
+            statusColor: ToolStatusCopy.rowStatusColor(for: toolState, hasMetric: metric != nil)
         )
     }
 
-    private func fallbackResetText(metric: QuotaMetric?) -> String {
-        guard metric != nil else {
-            return toolState.isFetchingQuota ? "Updating..." : "No live quota"
+    private var tokenUsageSection: some View {
+        VStack(alignment: .leading, spacing: 9) {
+            Divider()
+                .overlay(DS.C.borderSoft)
+            HStack(spacing: 6) {
+                Text("Token Spend")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(DS.C.textMuted)
+                Spacer(minLength: 8)
+                if toolState.isFetchingTokenUsage {
+                    Image(systemName: "hourglass")
+                        .font(.system(size: 9, weight: .medium))
+                        .foregroundStyle(DS.C.textMuted)
+                }
+            }
+            VStack(alignment: .leading, spacing: 6) {
+                tokenUsageRow("Today", usage: toolState.tokenUsageSummary?.today)
+                tokenUsageRow("Yesterday", usage: toolState.tokenUsageSummary?.yesterday)
+                tokenUsageRow("Last 30 Days", usage: toolState.tokenUsageSummary?.last30Days)
+            }
         }
-        if let metric, metric.isIdleFiveHourWindow {
-            return "\(Int(metric.remainingFraction * 100))% left"
-        }
-        return freshnessFallback
     }
 
-    private var freshnessFallback: String {
-        switch toolState.freshness {
-        case .fresh: return "Fresh"
-        case .stale: return "Stale"
-        case .expired: return "Expired data"
-        case .unknown: return "No live quota"
+    private func tokenUsageRow(_ title: String, usage: TokenUsageDay?) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 10) {
+            Text(title)
+                .font(.system(size: 11.5, weight: .medium))
+                .foregroundStyle(DS.C.textSub)
+                .lineLimit(1)
+            Spacer(minLength: 8)
+            Text(tokenUsageValue(usage))
+                .font(DS.mono(11, weight: .semibold))
+                .foregroundStyle(usage == nil ? DS.C.textMuted : DS.C.text)
+                .lineLimit(1)
+                .minimumScaleFactor(0.74)
         }
+    }
+
+    private func tokenUsageValue(_ usage: TokenUsageDay?) -> String {
+        guard let usage else { return "--" }
+        return "\(formatCost(usage.costUSD)) · \(formatTokenCount(usage.totalTokens))"
+    }
+
+    private func formatCost(_ value: Double?) -> String {
+        guard let value else { return "$--" }
+        return String(format: "$%.2f", value)
+    }
+
+    private func formatTokenCount(_ count: Int) -> String {
+        if count >= 1_000_000_000 {
+            return "\(compactCount(count, divisor: 1_000_000_000))B tokens"
+        }
+        if count >= 1_000_000 {
+            return "\(compactCount(count, divisor: 1_000_000))M tokens"
+        }
+        if count >= 1_000 {
+            return "\(compactCount(count, divisor: 1_000))K tokens"
+        }
+        return "\(Self.integerFormatter.string(from: NSNumber(value: count)) ?? "\(count)") tokens"
+    }
+
+    private func compactCount(_ count: Int, divisor: Double) -> String {
+        let scaled = Double(count) / divisor
+        if scaled >= 10 {
+            return "\(Int(scaled.rounded()))"
+        }
+        return trimmed(scaled)
+    }
+
+    private func trimmed(_ value: Double) -> String {
+        let formatted = String(format: "%.1f", value)
+        return formatted.hasSuffix(".0") ? String(formatted.dropLast(2)) : formatted
+    }
+
+    private func fallbackResetText(metric: QuotaMetric?) -> String {
+        ToolStatusCopy.resetFallback(for: toolState, metric: metric)
     }
 
     private var activeControl: some View {
         ToolModeMenu(mode: toolState.mode) { onSetMode($0) }
     }
+
+    private static let integerFormatter: NumberFormatter = {
+        let formatter = NumberFormatter()
+        formatter.numberStyle = .decimal
+        formatter.maximumFractionDigits = 0
+        return formatter
+    }()
 
     private var actions: some View {
         HStack(spacing: 8) {
