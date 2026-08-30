@@ -14,7 +14,7 @@ jobs:
     name: Mark Inactive Threads
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/stale@v10
+      - uses: actions/stale@v11
         with:
           days-before-issue-stale: 30
           days-before-issue-close: -1
