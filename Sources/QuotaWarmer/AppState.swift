@@ -291,6 +291,7 @@ final class AppState: ObservableObject {
         startUIRefreshTimer()
         if morningPrewarmEnabled {
             scheduleMorningTimer()
+            refreshMorningHardwareStatus()
             Task { await runScheduledMorningWarmupIfNeeded(source: .launch) }
         }
         Task { await checkOnboarding() }
@@ -397,7 +398,6 @@ final class AppState: ObservableObject {
         allowAutomaticWarmup: Bool = false,
         reconcileStuckOutcome: Bool = true,
         allowsCredentialInteraction: Bool = false,
-        allowsClaudeCLIRecovery: Bool = true,
         force: Bool = false
     ) async {
         let state = state(for: tool)
@@ -464,18 +464,6 @@ final class AppState: ObservableObject {
             }
         } catch {
             applyQuotaError(error, to: state)
-            if tool == .claude,
-               allowsClaudeCLIRecovery,
-               state.isAutoWarmEnabled,
-               !globalPassive,
-               let providerError = error as? QuotaProviderError,
-               case .cliRefreshRequired = providerError {
-                // The Claude CLI, not QuotaWarmer, owns its rotating OAuth
-                // credential. Its normal warm command refreshes that chain,
-                // then this command's regular post-warm fetch reads it again.
-                state.isFetchingQuota = false
-                _ = await triggerWarmup(tool: .claude, mode: "auto")
-            }
         }
 
         state.isFetchingQuota = false
@@ -577,6 +565,20 @@ final class AppState: ObservableObject {
         return result.success
     }
 
+    private func refreshMorningHardwareStatus() {
+        let days: WakeScheduler.WakeDays = morningWeekdaysOnly ? .weekdays : .everyday
+        guard wakeScheduler.scheduleMatches(hour: morningHour, minute: morningMinute, days: days) else {
+            let expectedTime = String(format: "%02d:%02d", morningHour, morningMinute)
+            morningStatus = "Morning wake is not installed or was replaced. Toggle Wake & Warm off and on to repair it."
+            DiagnosticLogger.append("morning_wake_schedule_mismatch expected=\(expectedTime) days=\(days.humanLabel)")
+            return
+        }
+        let timeText = String(format: "%02d:%02d", morningHour, morningMinute)
+        morningStatus = WakeScheduler.isOnACPower()
+            ? "Mac will wake at \(timeText) and start your window."
+            : "Scheduled for \(timeText); battery and a closed lid can prevent the wake."
+    }
+
     private func scheduleMorningTimer() {
         morningTimer?.invalidate()
         guard morningPrewarmEnabled, let fireDate = nextMorningFireDate() else { return }
@@ -609,24 +611,53 @@ final class AppState: ObservableObject {
             scheduleMorningTimer(); return
         }
 
+        guard now >= scheduledAt else {
+            scheduleMorningTimer(); return
+        }
+
+        // A pmset wake may be a short DarkWake. Keep the Mac awake only while
+        // the scheduled quota check and bounded warm-up command are running so
+        // the system cannot return to sleep halfway through the claim.
+        let scheduledActivity = ProcessInfo.processInfo.beginActivity(
+            options: [.userInitiated, .latencyCritical],
+            reason: "QuotaWarmer scheduled morning warm-up"
+        )
+        defer { ProcessInfo.processInfo.endActivity(scheduledActivity) }
+
         var caughtUpSuccessfully = false
         for tool in ToolID.allCases where state(for: tool).isAutoWarmEnabled {
-            let lastActivity = scanner.lastActivity(for: tool)
-            let activeWindowStartedAt = scanner.windowStartTime(for: tool)
+            let state = state(for: tool)
+            guard canAttemptManagedWarmup(for: tool) else {
+                logMorningSkip(tool: tool, reason: "managedWarmupBlocked", source: source)
+                continue
+            }
+
+            // Scheduled warm-up is still an automatic action: require a fresh,
+            // healthy provider snapshot. Local CLI logs are display context only.
+            await refreshQuota(
+                for: tool,
+                allowAutomaticWarmup: false
+            )
+            let sourceFresh = state.sourceHealth == .healthy && state.freshness == .fresh
+            let liveWindowActive = state.quotaSnapshot?.showsActiveWindow() == true
             let decision = MorningWarmupPolicy.decision(
                 now: now,
                 scheduledAt: scheduledAt,
                 dayKey: todayKey,
                 lastSuccessfulDay: lastMorningWarmDay(for: tool, todayKey: todayKey),
-                lastActivity: lastActivity,
-                activeWindowStartedAt: activeWindowStartedAt,
+                liveWindowActive: liveWindowActive,
+                sourceFresh: sourceFresh,
                 windowDuration: tool.windowDuration
             )
 
-            guard case .run(let caughtUp) = decision else { continue }
-            guard canAttemptManagedWarmup(for: tool) else { continue }
+            guard case .run(let caughtUp) = decision else {
+                if case .skip(let reason) = decision {
+                    logMorningSkip(tool: tool, reason: reason.rawValue, source: source)
+                }
+                continue
+            }
 
-            let previousQuotaFetchedAt = state(for: tool).quotaSnapshot?.fetchedAt
+            let previousQuotaFetchedAt = state.quotaSnapshot?.fetchedAt
             let succeeded = await triggerWarmup(
                 tool: tool,
                 mode: caughtUp ? "scheduled-catchup" : "scheduled"
@@ -642,6 +673,12 @@ final class AppState: ObservableObject {
             NotificationManager.shared.notifyMorningCatchUp(onBattery: !WakeScheduler.isOnACPower())
         }
         scheduleMorningTimer()
+    }
+
+    private func logMorningSkip(tool: ToolID, reason: String, source: ScheduledMorningSource) {
+        DiagnosticLogger.append(
+            "morning_warm_skipped tool=\(tool.rawValue) reason=\(reason) source=\(String(describing: source))"
+        )
     }
 
     private func handleSystemWake() {
@@ -674,6 +711,13 @@ final class AppState: ObservableObject {
         comps.minute = morningMinute
         comps.second = 0
         return Calendar.current.date(from: comps)
+    }
+
+    private func upcomingReservedMorningDate(now: Date = Date()) -> Date? {
+        guard morningPrewarmEnabled, !globalPassive else { return nil }
+        if morningWeekdaysOnly, Calendar.current.isDateInWeekend(now) { return nil }
+        guard let scheduledAt = todaysMorningDate(now: now), now < scheduledAt else { return nil }
+        return scheduledAt
     }
 
     private var morningHour: Int { UserDefaults.standard.object(forKey: "morningPrewarmHour") as? Int ?? 6 }
@@ -716,6 +760,18 @@ final class AppState: ObservableObject {
         guard state.sourceHealth == .healthy,
               state.canAutoWarmFromSnapshot,
               let snapshot = state.quotaSnapshot else {
+            return
+        }
+        let now = Date()
+        if let scheduledAt = upcomingReservedMorningDate(now: now),
+           MorningWarmupPolicy.reservesAutomaticWarmup(
+               now: now,
+               scheduledAt: scheduledAt,
+               windowDuration: tool.windowDuration
+           ) {
+            DiagnosticLogger.append(
+                "auto_warm_reserved_for_morning tool=\(tool.rawValue) scheduledAt=\(ISO8601DateFormatter().string(from: scheduledAt))"
+            )
             return
         }
         guard AutoWarmDedup.shouldWarm(
@@ -806,8 +862,7 @@ final class AppState: ObservableObject {
             state.lastWarmupOutcome = .pending(sentAt: result.date)
             await refreshQuota(
                 for: tool,
-                allowAutomaticWarmup: false,
-                allowsClaudeCLIRecovery: false
+                allowAutomaticWarmup: false
             )
             // No *real* live window yet: either no reset at all, or only an idle
             // "if you started now" projection (Claude's null `five_hour` is now
@@ -871,18 +926,15 @@ final class AppState: ObservableObject {
         }
 
         guard attempt < claimVerifyDelays.count else {
-            // Grace exhausted without the live API surfacing the window. The
-            // warm-up command itself completed (we're on the success path) and
-            // triggerWarmup always recorded the window's expected reset
-            // (`confirmedWarmupResetAt`) when the live quota lacked one, so trust
-            // that rather than alarming the user — Claude's OAuth usage API
-            // frequently reports the active 5h window as idle/null for minutes
-            // after it opens, and the verification timer can be suspended across
-            // system sleep. A later poll that surfaces the live window keeps the
-            // reset accurate via reconcileWarmupOutcome().
-            state.lastWarmupOutcome = .confirmed(at: Date(), resetAt: state.confirmedWarmupResetAt ?? state.resetAt)
-            addHistory(tool: tool, kind: .resetDetected, title: "Warm-up sent", detail: claimConfirmedDetail(state))
-            DiagnosticLogger.append("warmup_claim_assumed tool=\(tool.rawValue)")
+            let expectedReset = state.confirmedWarmupResetAt ?? state.resetAt
+            state.lastWarmupOutcome = .unverified(sentAt: sentAt, expectedResetAt: expectedReset)
+            addHistory(
+                tool: tool,
+                kind: .pollingError,
+                title: "Window claim unverified",
+                detail: "The command completed, but live quota did not confirm an active window."
+            )
+            DiagnosticLogger.append("warmup_claim_unverified tool=\(tool.rawValue)")
             return
         }
 
@@ -922,6 +974,14 @@ final class AppState: ObservableObject {
             // window hours after that window expired.
             if let resetAt, resetAt <= Date(),
                state.quotaSnapshot?.showsActiveWindow() != true {
+                state.lastWarmupOutcome = .none
+            }
+        case .unverified(_, let expectedResetAt):
+            if state.quotaSnapshot?.showsActiveWindow() == true {
+                state.lastWarmupOutcome = .confirmed(at: Date(), resetAt: state.resetAt)
+                addHistory(tool: state.tool, kind: .resetDetected, title: "Window claim confirmed", detail: claimConfirmedDetail(state))
+                DiagnosticLogger.append("warmup_claim_healed tool=\(state.tool.rawValue)")
+            } else if let expectedResetAt, expectedResetAt <= Date() {
                 state.lastWarmupOutcome = .none
             }
         default:

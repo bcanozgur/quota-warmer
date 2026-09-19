@@ -98,7 +98,7 @@ struct ToolTabView: View {
             Divider()
                 .overlay(DS.C.borderSoft)
             HStack(spacing: 6) {
-                Text("Token Spend")
+                Text("Estimated API-equivalent cost")
                     .font(.system(size: 11, weight: .semibold))
                     .foregroundStyle(DS.C.textMuted)
                 Spacer(minLength: 8)
@@ -137,7 +137,7 @@ struct ToolTabView: View {
     }
 
     private func formatCost(_ value: Double?) -> String {
-        guard let value else { return "$--" }
+        guard let value else { return "Unavailable" }
         return String(format: "$%.2f", value)
     }
 

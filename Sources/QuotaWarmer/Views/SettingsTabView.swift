@@ -7,7 +7,8 @@ struct SettingsTabView: View {
     @AppStorage("refreshInterval")   private var refreshInterval: Int    = 300
     @AppStorage("notifyWarning")     private var notifyWarning: Bool     = true
     @AppStorage("notifyActivated")   private var notifyActivated: Bool   = true
-    @AppStorage("launchAtLogin")     private var launchAtLogin: Bool     = false
+    @State private var launchAtLogin: Bool = SMAppService.mainApp.status == .enabled
+    @State private var launchAtLoginError: String?
     @AppStorage("rateLimitGuard")    private var rateLimitGuard: Bool    = true
 
     @AppStorage("morningPrewarmHour")         private var morningHour: Int         = 6
@@ -124,8 +125,17 @@ struct SettingsTabView: View {
                         Toggle("", isOn: $launchAtLogin)
                             .toggleStyle(.switch).scaleEffect(0.75).tint(DS.C.accent(.claude))
                             .onChange(of: launchAtLogin) { _, v in
-                                try? v ? SMAppService.mainApp.register() : SMAppService.mainApp.unregister()
+                                updateLaunchAtLogin(v)
                             }
+                    }
+                    if let launchAtLoginError {
+                        Divider().background(DS.C.border).padding(.leading, 36)
+                        Text(launchAtLoginError)
+                            .font(.system(size: 9.5))
+                            .foregroundStyle(DS.C.red)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .padding(.horizontal, DS.Space.md)
+                            .padding(.vertical, DS.Space.sm)
                     }
                 }
 
@@ -248,6 +258,25 @@ struct SettingsTabView: View {
                 appState.morningTimeChanged()
             }
         )
+    }
+
+    private func updateLaunchAtLogin(_ enabled: Bool) {
+        do {
+            if enabled, SMAppService.mainApp.status != .enabled {
+                try SMAppService.mainApp.register()
+            } else if !enabled, SMAppService.mainApp.status == .enabled {
+                try SMAppService.mainApp.unregister()
+            }
+            launchAtLoginError = nil
+        } catch {
+            launchAtLoginError = "Launch at Login could not be changed: \(error.localizedDescription)"
+        }
+
+        let actual = SMAppService.mainApp.status == .enabled
+        UserDefaults.standard.set(actual, forKey: "launchAtLogin")
+        if launchAtLogin != actual {
+            launchAtLogin = actual
+        }
     }
 
     private var settingsHeader: some View {

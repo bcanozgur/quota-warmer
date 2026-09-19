@@ -1,6 +1,5 @@
 import CryptoKit
 import Foundation
-import LocalAuthentication
 import Security
 
 final class CredentialStore {
@@ -18,18 +17,28 @@ final class CredentialStore {
     }
 
     private func claudeCredential(allowsUserInteraction: Bool) throws -> Credential {
-        // Claude Code owns its Keychain item, so every read of it can raise the
-        // macOS approval dialog — the grant does not reliably survive the CLI
-        // rewriting the item on each ~8h token rotation. Mirror the still-valid
-        // access token into an item QuotaWarmer itself owns; reading our own item
-        // never prompts, so a relaunch (every login) no longer costs a dialog.
+        // Claude Code owns its Keychain item and rotates the access token inside
+        // it roughly every 8 hours. Mirror the still-valid token into an item
+        // QuotaWarmer itself owns so the common path touches nothing foreign.
         if let cached = cachedClaudeCredential(), !cached.isExpired {
             DiagnosticLogger.append("claude_credential_source=mirror prompt=no")
             return cached
         }
-        DiagnosticLogger.append("claude_credential_source=claude-code-keychain prompt=possible")
 
         let services = claudeKeychainServices()
+
+        // The mirror aged out with the token, so a fresh one has to come from
+        // Claude Code's own item. Read it the way Claude Code wrote it — see
+        // securityToolPassword for why that read is the one that never prompts.
+        for service in services {
+            guard let data = securityToolPassword(service: service),
+                  let credential = parseClaudeCredential(data, source: "Keychain \(service)") else { continue }
+            DiagnosticLogger.append("claude_credential_source=security-tool prompt=no")
+            storeCachedClaudeCredential(credential)
+            return credential
+        }
+
+        DiagnosticLogger.append("claude_credential_source=claude-code-keychain prompt=possible")
         var keychainNeedsApproval = false
         for service in services {
             switch claudeKeychainPassword(service: service, allowsUserInteraction: allowsUserInteraction) {
@@ -65,6 +74,14 @@ final class CredentialStore {
         }
 
         if keychainNeedsApproval {
+            // Reaching here means even `/usr/bin/security` could not read the
+            // item, so approving the dialog would only buy one token rotation.
+            // Record the one-time repair (adds our partition to the item) so the
+            // user is not left guessing why "Always Allow" never sticks.
+            DiagnosticLogger.append(
+                "claude_keychain_blocked remedy=\"security set-generic-password-partition-list "
+                    + "-S apple-tool:,apple:,teamid:55K26JK98Y -s 'Claude Code-credentials' -a $USER\""
+            )
             throw CredentialError.interactionRequired("Claude")
         }
         throw CredentialError.missing("Claude")
@@ -129,7 +146,11 @@ final class CredentialStore {
             kSecMatchLimit as String: kSecMatchLimitOne
         ]
         var item: CFTypeRef?
-        let status = SecItemCopyMatching(query as CFDictionary, &item)
+        // Codex quota polling is always a background task, so this read must
+        // fail rather than raise a dialog if the item belongs to another app.
+        let status = Self.withoutKeychainDialogs {
+            SecItemCopyMatching(query as CFDictionary, &item)
+        }
         guard status == errSecSuccess else { return nil }
         return item as? Data
     }
@@ -155,7 +176,14 @@ final class CredentialStore {
             kSecMatchLimit as String: kSecMatchLimitOne
         ]
         var item: CFTypeRef?
-        guard SecItemCopyMatching(query as CFDictionary, &item) == errSecSuccess,
+        // Owned by this app, so it normally reads straight through — but a
+        // mirror written by an older, differently signed build no longer
+        // matches the ACL. Never let that corner turn into a dialog; an
+        // unreadable mirror simply falls through to the real source.
+        let status = Self.withoutKeychainDialogs {
+            SecItemCopyMatching(query as CFDictionary, &item)
+        }
+        guard status == errSecSuccess,
               let data = item as? Data,
               let cached = try? JSONDecoder().decode(CachedClaudeCredential.self, from: data) else {
             return nil
@@ -218,23 +246,54 @@ final class CredentialStore {
         case interactionRequired
     }
 
+    /// Serializes the process-wide user-interaction flag below.
+    private static let interactionLock = NSLock()
+
+    /// Runs `body` with the login-keychain approval dialog turned off.
+    ///
+    /// The flag is process-wide, so it is held for exactly one call and restored
+    /// through `defer` on every exit path. The SecKeychain family is deprecated
+    /// but is the only API that governs this dialog — `kSecUseAuthenticationContext`
+    /// reaches only the data-protection keychain — so the deprecation warnings
+    /// this raises are expected and must not be "fixed" away.
+    private static func withoutKeychainDialogs<T>(_ body: () -> T) -> T {
+        interactionLock.lock()
+        var previous: DarwinBoolean = true
+        SecKeychainGetUserInteractionAllowed(&previous)
+        SecKeychainSetUserInteractionAllowed(false)
+        defer {
+            SecKeychainSetUserInteractionAllowed(previous.boolValue)
+            interactionLock.unlock()
+        }
+        return body()
+    }
+
     /// Background quota polling must never summon a macOS password dialog.
     /// A user-initiated Refresh is the only path allowed to request access.
     private func claudeKeychainPassword(service: String, allowsUserInteraction: Bool) -> ClaudeKeychainRead {
-        var query: [String: Any] = [
+        let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
             kSecReturnData as String: true,
             kSecMatchLimit as String: kSecMatchLimitOne
         ]
-        if !allowsUserInteraction {
-            let context = LAContext()
-            context.interactionNotAllowed = true
-            query[kSecUseAuthenticationContext as String] = context
-        }
 
         var item: CFTypeRef?
-        let status = SecItemCopyMatching(query as CFDictionary, &item)
+        let status: OSStatus
+        if allowsUserInteraction {
+            status = SecItemCopyMatching(query as CFDictionary, &item)
+        } else {
+            // `kSecUseAuthenticationContext`/LAContext governs only the
+            // data-protection keychain. Claude Code's item lives in the legacy
+            // login keychain, whose ACL dialog it does not suppress at all —
+            // measured 2026-08-20, a background poll still opened the password
+            // window. SecKeychainSetUserInteractionAllowed(false) is the flag
+            // that turns that dialog into an immediate error. It is
+            // process-wide, so hold it for the shortest window and restore it.
+            status = Self.withoutKeychainDialogs {
+                SecItemCopyMatching(query as CFDictionary, &item)
+            }
+        }
         if status == errSecSuccess, let data = item as? Data {
             return .data(data)
         }
@@ -242,6 +301,57 @@ final class CredentialStore {
             return .interactionRequired
         }
         return .notFound
+    }
+
+    /// Reads Claude Code's credential item by running `/usr/bin/security`.
+    ///
+    /// Why a subprocess instead of SecItemCopyMatching: since macOS Sierra a
+    /// keychain item carries a *partition list* on top of its trusted-app list,
+    /// and both must match or macOS demands the login password. Claude Code
+    /// writes its item with the `security` tool, so the item's partition list is
+    /// `apple-tool:` and `/usr/bin/security` sits in its ACL. QuotaWarmer's
+    /// partition is `teamid:…`, which never matches — and clicking "Always
+    /// Allow" only appends another trusted app, it never adds the partition.
+    /// That is why the dialog came back on every token rotation no matter how
+    /// often it was approved (verified against the live item on 2026-08-20).
+    /// Reading through the tool the item already trusts is silent, and grants
+    /// QuotaWarmer nothing the user's own shell could not already read.
+    private func securityToolPassword(service: String) -> Data? {
+        let toolPath = "/usr/bin/security"
+        guard fileManager.isExecutableFile(atPath: toolPath) else { return nil }
+
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: toolPath)
+        process.arguments = ["find-generic-password", "-w", "-s", service]
+        let output = Pipe()
+        process.standardOutput = output
+        process.standardError = FileHandle.nullDevice
+        process.standardInput = FileHandle.nullDevice
+
+        do {
+            try process.run()
+        } catch {
+            return nil
+        }
+
+        // Should the ACL ever stop trusting the tool, `security` would sit on a
+        // password dialog instead of returning. Kill it so a stuck prompt can
+        // never outlive this read; the in-process path then reports the failure.
+        let timeout = DispatchWorkItem {
+            if process.isRunning { process.terminate() }
+        }
+        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 10, execute: timeout)
+        let data = output.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+        timeout.cancel()
+
+        guard process.terminationStatus == 0 else { return nil }
+        // `security -w` appends a newline; never log or return the payload itself.
+        guard let text = String(data: data, encoding: .utf8)?
+            .trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty else {
+            return nil
+        }
+        return Data(text.utf8)
     }
 
     private func parseClaudeCredential(_ data: Data, source: String) -> Credential? {

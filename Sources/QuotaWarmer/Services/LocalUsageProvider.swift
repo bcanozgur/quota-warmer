@@ -17,20 +17,46 @@ final class LocalUsageProvider {
     private struct UsageBucket {
         var tokens = 0
         var costUSD: Double?
+        var hasUnpricedUsage = false
 
         mutating func add(tokens: Int, cost: Double?) {
             self.tokens += tokens
-            guard let cost else { return }
+            guard let cost else {
+                if tokens > 0 { hasUnpricedUsage = true }
+                return
+            }
             self.costUSD = (self.costUSD ?? 0) + cost
+        }
+
+        var estimatedCostUSD: Double? {
+            if tokens == 0 { return 0 }
+            return hasUnpricedUsage ? nil : costUSD
         }
     }
 
     private struct ModelRates {
         let input: Double
-        let cacheWrite: Double
+        let cacheWriteFiveMinute: Double
+        let cacheWriteOneHour: Double
         let cacheRead: Double
         let output: Double
         let cacheReadExplicit: Bool
+
+        init(
+            input: Double,
+            cacheWrite: Double,
+            cacheWriteOneHour: Double? = nil,
+            cacheRead: Double,
+            output: Double,
+            cacheReadExplicit: Bool
+        ) {
+            self.input = input
+            self.cacheWriteFiveMinute = cacheWrite
+            self.cacheWriteOneHour = cacheWriteOneHour ?? cacheWrite
+            self.cacheRead = cacheRead
+            self.output = output
+            self.cacheReadExplicit = cacheReadExplicit
+        }
     }
 
     private let fileManager: FileManager
@@ -76,15 +102,15 @@ final class LocalUsageProvider {
         let last30Bucket = buckets
             .filter { $0.key >= since && $0.key <= today }
             .reduce(into: UsageBucket()) { aggregate, entry in
-                aggregate.add(tokens: entry.value.tokens, cost: entry.value.costUSD)
+                aggregate.add(tokens: entry.value.tokens, cost: entry.value.estimatedCostUSD)
             }
 
         return TokenUsageSummary(
             fetchedAt: now,
             source: tool == .claude ? "Claude local usage" : "Codex local usage",
-            today: TokenUsageDay(date: today, totalTokens: todayBucket.tokens, costUSD: todayBucket.costUSD ?? 0),
-            yesterday: TokenUsageDay(date: yesterday, totalTokens: yesterdayBucket.tokens, costUSD: yesterdayBucket.costUSD ?? 0),
-            last30Days: TokenUsageDay(date: since, totalTokens: last30Bucket.tokens, costUSD: last30Bucket.costUSD ?? 0)
+            today: TokenUsageDay(date: today, totalTokens: todayBucket.tokens, costUSD: todayBucket.estimatedCostUSD),
+            yesterday: TokenUsageDay(date: yesterday, totalTokens: yesterdayBucket.tokens, costUSD: yesterdayBucket.estimatedCostUSD),
+            last30Days: TokenUsageDay(date: since, totalTokens: last30Bucket.tokens, costUSD: last30Bucket.estimatedCostUSD)
         )
     }
 
@@ -191,7 +217,7 @@ final class LocalUsageProvider {
     }
 
     private func claudeCost(_ record: UsageRecord) -> Double? {
-        let rates = claudeRates(for: record.model)
+        guard let rates = claudeRates(for: record.model) else { return nil }
         return cost(
             inputTokens: record.inputTokens,
             cacheCreationFiveMinuteTokens: record.cacheCreationFiveMinuteTokens,
@@ -207,9 +233,12 @@ final class LocalUsageProvider {
         let cached = min(record.cachedInputTokens, record.inputTokens)
         let uncached = max(0, record.inputTokens - cached)
         let cachedRate = rates.cacheReadExplicit ? rates.cacheRead : rates.input
-        return ((Double(uncached) * rates.input)
-            + (Double(cached) * cachedRate)
-            + (Double(record.outputTokens) * rates.output)) / 1_000_000
+        let longContext = record.inputTokens > 272_000
+        let inputMultiplier = longContext ? 2.0 : 1.0
+        let outputMultiplier = longContext ? 1.5 : 1.0
+        return ((Double(uncached) * rates.input * inputMultiplier)
+            + (Double(cached) * cachedRate * inputMultiplier)
+            + (Double(record.outputTokens) * rates.output * outputMultiplier)) / 1_000_000
     }
 
     private func cost(
@@ -221,38 +250,66 @@ final class LocalUsageProvider {
         rates: ModelRates
     ) -> Double {
         ((Double(inputTokens) * rates.input)
-            + (Double(cacheCreationFiveMinuteTokens) * rates.cacheWrite)
-            + (Double(cacheCreationOneHourTokens) * rates.cacheWrite)
+            + (Double(cacheCreationFiveMinuteTokens) * rates.cacheWriteFiveMinute)
+            + (Double(cacheCreationOneHourTokens) * rates.cacheWriteOneHour)
             + (Double(cacheReadTokens) * rates.cacheRead)
             + (Double(outputTokens) * rates.output)) / 1_000_000
     }
 
-    private func claudeRates(for model: String?) -> ModelRates {
-        let text = model?.lowercased() ?? ""
+    private func claudeRates(for model: String?) -> ModelRates? {
+        guard let model, !model.isEmpty else { return nil }
+        let text = model.lowercased()
+        if text.contains("fable-5-1") || text.contains("fable-5.1") {
+            return ModelRates(input: 10.0, cacheWrite: 12.5, cacheWriteOneHour: 20.0, cacheRead: 0.25, output: 50.0, cacheReadExplicit: true)
+        }
         if text.contains("fable-5") {
-            return ModelRates(input: 10.0, cacheWrite: 12.5, cacheRead: 1.0, output: 50.0, cacheReadExplicit: true)
+            return ModelRates(input: 10.0, cacheWrite: 12.5, cacheWriteOneHour: 20.0, cacheRead: 1.0, output: 50.0, cacheReadExplicit: true)
+        }
+        if text.contains("opus-5") {
+            return ModelRates(input: 5.0, cacheWrite: 6.25, cacheWriteOneHour: 10.0, cacheRead: 0.50, output: 25.0, cacheReadExplicit: true)
+        }
+        if text.contains("sonnet-5") {
+            return ModelRates(input: 2.0, cacheWrite: 2.50, cacheWriteOneHour: 4.0, cacheRead: 0.20, output: 10.0, cacheReadExplicit: true)
         }
         if text.contains("opus") {
             if usesModernOpusPricing(text) {
-                return ModelRates(input: 5.0, cacheWrite: 6.25, cacheRead: 0.50, output: 25.0, cacheReadExplicit: true)
+                return ModelRates(input: 5.0, cacheWrite: 6.25, cacheWriteOneHour: 10.0, cacheRead: 0.50, output: 25.0, cacheReadExplicit: true)
             }
-            return ModelRates(input: 15.0, cacheWrite: 18.75, cacheRead: 1.50, output: 75.0, cacheReadExplicit: true)
+            return ModelRates(input: 15.0, cacheWrite: 18.75, cacheWriteOneHour: 30.0, cacheRead: 1.50, output: 75.0, cacheReadExplicit: true)
         }
         if text.contains("haiku") {
             if text.contains("3-5") || text.contains("3.5") {
-                return ModelRates(input: 0.80, cacheWrite: 1.0, cacheRead: 0.08, output: 4.0, cacheReadExplicit: true)
+                return ModelRates(input: 0.80, cacheWrite: 1.0, cacheWriteOneHour: 1.60, cacheRead: 0.08, output: 4.0, cacheReadExplicit: true)
             }
             if text.contains("claude-3-haiku") || text.contains("haiku-3") {
-                return ModelRates(input: 0.25, cacheWrite: 0.30, cacheRead: 0.03, output: 1.25, cacheReadExplicit: true)
+                return ModelRates(input: 0.25, cacheWrite: 0.3125, cacheWriteOneHour: 0.50, cacheRead: 0.03, output: 1.25, cacheReadExplicit: true)
             }
-            return ModelRates(input: 1.0, cacheWrite: 1.25, cacheRead: 0.10, output: 5.0, cacheReadExplicit: true)
+            if text.contains("4-5") || text.contains("4.5") || text == "haiku" {
+                return ModelRates(input: 1.0, cacheWrite: 1.25, cacheWriteOneHour: 2.0, cacheRead: 0.10, output: 5.0, cacheReadExplicit: true)
+            }
+            return nil
         }
-        return ModelRates(input: 3.0, cacheWrite: 3.75, cacheRead: 0.30, output: 15.0, cacheReadExplicit: true)
+        if text.contains("sonnet-4") || text == "sonnet" {
+            return ModelRates(input: 3.0, cacheWrite: 3.75, cacheWriteOneHour: 6.0, cacheRead: 0.30, output: 15.0, cacheReadExplicit: true)
+        }
+        return nil
     }
 
     private func codexRates(for model: String?) -> ModelRates? {
         guard let model, !model.isEmpty else { return nil }
         let text = model.lowercased()
+        if matches(text, "gpt-6-astra") {
+            return ModelRates(input: 10.0, cacheWrite: 10.0, cacheRead: 1.0, output: 50.0, cacheReadExplicit: true)
+        }
+        if matches(text, "gpt-5.6-sol") || text == "gpt-5.6" {
+            return ModelRates(input: 4.0, cacheWrite: 4.0, cacheRead: 0.40, output: 20.0, cacheReadExplicit: true)
+        }
+        if matches(text, "gpt-5.6-luna") {
+            return ModelRates(input: 0.20, cacheWrite: 0.20, cacheRead: 0.020, output: 1.20, cacheReadExplicit: true)
+        }
+        if matches(text, "gpt-5.6-terra") {
+            return ModelRates(input: 2.0, cacheWrite: 2.0, cacheRead: 0.20, output: 12.0, cacheReadExplicit: true)
+        }
         switch text {
         case "gpt-5.5":
             return ModelRates(input: 5.0, cacheWrite: 5.0, cacheRead: 0.50, output: 30.0, cacheReadExplicit: true)
@@ -273,6 +330,10 @@ final class LocalUsageProvider {
         default:
             return nil
         }
+    }
+
+    private func matches(_ model: String, _ base: String) -> Bool {
+        model == base || model.hasPrefix(base + "-")
     }
 
     private func usesModernOpusPricing(_ model: String) -> Bool {

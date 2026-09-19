@@ -3,7 +3,7 @@ import Foundation
 enum WarmupError: LocalizedError {
     case cliNotFound(String)
     case authenticationRequired(String)
-    case exitCode(Int32)
+    case exitCode(Int32, String)
     case timeout
     case workspaceUnavailable
 
@@ -11,7 +11,10 @@ enum WarmupError: LocalizedError {
         switch self {
         case .cliNotFound(let cmd): return "CLI not found: \(cmd)"
         case .authenticationRequired(let message): return message
-        case .exitCode(let code):   return "Process exited with code \(code)"
+        case .exitCode(let code, let detail):
+            return detail.isEmpty
+                ? "Process exited with code \(code)"
+                : "Process exited with code \(code): \(detail)"
         case .timeout:              return "Warmup timed out after 60s"
         case .workspaceUnavailable: return "Could not prepare isolated warmup directory"
         }
@@ -65,16 +68,12 @@ class WarmupRunner {
         let pathPrefix = cliURL.deletingLastPathComponent().path
 
         let workspaceURL = try warmupWorkspaceURL()
-        do {
-            return try await runWarmupCommand(tool.warmupCommand, cliName: cliName, pathPrefix: pathPrefix, workspaceURL: workspaceURL)
-        } catch WarmupError.exitCode where tool.fallbackWarmupCommand != nil {
-            let result = try await runWarmupCommand(tool.fallbackWarmupCommand!, cliName: cliName, pathPrefix: pathPrefix, workspaceURL: workspaceURL)
-            return WarmupResult(
-                date: result.date,
-                command: result.command,
-                output: "Primary warmup command failed; retried with the configured fallback command.\n\(result.output)"
-            )
-        }
+        return try await runWarmupCommand(
+            tool.warmupCommand,
+            cliName: cliName,
+            pathPrefix: pathPrefix,
+            workspaceURL: workspaceURL
+        )
     }
 
     func cliAuthenticationStatus(for tool: ToolID) async -> CLIAuthenticationStatus {
@@ -134,7 +133,10 @@ class WarmupRunner {
                 } else if cliName == "claude", Self.isClaudeAuthenticationFailure(combined) {
                     continuation.resume(throwing: WarmupError.authenticationRequired(Self.claudeLoginRequiredMessage))
                 } else {
-                    continuation.resume(throwing: WarmupError.exitCode(p.terminationStatus))
+                    continuation.resume(throwing: WarmupError.exitCode(
+                        p.terminationStatus,
+                        Self.sanitizedFailureDetail(combined)
+                    ))
                 }
             }
 
@@ -185,6 +187,29 @@ class WarmupRunner {
         return text.contains("not logged in")
             || text.contains("please run /login")
             || text.contains("run claude auth login")
+    }
+
+    static func sanitizedFailureDetail(_ output: String, limit: Int = 600) -> String {
+        var text = output
+        let patterns = [
+            #"(?i)(authorization|proxy-authorization)(:\s*|=)(bearer\s+)?[^\s,;]+"#,
+            #"(?i)\bbearer\s+[^\s,;]+"#,
+            #"(?i)["'](api[_-]?key|access[_-]?token|refresh[_-]?token|id[_-]?token|token)["']\s*:\s*["'][^"']+["']"#,
+            #"(?i)\b(api[_-]?key|access[_-]?token|refresh[_-]?token|id[_-]?token|token)(\s*[:=]\s*)["']?[^"'\s,;}]+"#,
+            #"(?i)\b(sk-[a-z0-9_-]{8,})\b"#
+        ]
+        for pattern in patterns {
+            guard let regex = try? NSRegularExpression(pattern: pattern) else { continue }
+            let range = NSRange(text.startIndex..<text.endIndex, in: text)
+            text = regex.stringByReplacingMatches(in: text, range: range, withTemplate: "[REDACTED]")
+        }
+        text = text
+            .split(whereSeparator: \.isNewline)
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+            .joined(separator: " | ")
+        guard text.count > limit else { return text }
+        return String(text.prefix(limit)) + "…"
     }
 
     private struct ShellCommandResult {

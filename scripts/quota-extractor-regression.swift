@@ -20,10 +20,40 @@ struct QuotaExtractorRegression {
         require(loggedInAuth?.loggedIn == true, "Claude auth status should parse logged-in JSON")
         require(
             ToolID.claude.warmupCommand.contains("--max-turns 1")
-                && ToolID.claude.warmupCommand.contains("--tools ''"),
-            "Claude warmup should be bounded to one no-tool turn"
+                && ToolID.claude.warmupCommand.contains("--tools ''")
+                && ToolID.claude.warmupCommand.contains("--model haiku")
+                && !ToolID.claude.warmupCommand.contains("--effort"),
+            "Claude warmup should pin Haiku to one no-tool turn without an unsupported effort"
         )
-        require(ToolID.claude.fallbackWarmupCommand != nil, "Claude warmup should have a default-model fallback")
+        require(ToolID.claude.fallbackWarmupCommand == nil, "Claude warmup must not fall back to an arbitrary default model")
+        require(
+            ToolID.codex.warmupCommand.contains("--model gpt-5.6-luna")
+                && ToolID.codex.warmupCommand.contains(#"model_reasoning_effort="low""#)
+                && ToolID.codex.warmupCommand.contains("--ignore-user-config"),
+            "Codex warmup should pin Luna with low reasoning and isolate user config"
+        )
+        require(ToolID.codex.fallbackWarmupCommand == nil, "Codex warmup must not fall back to a retired or expensive default model")
+
+        let sanitizedFailure = WarmupRunner.sanitizedFailureDetail(
+            #"""
+            invalid request
+Authorization: Bearer secret-token
+access_token=private-value
+{"refresh_token":"json-private-value"}
+"""#
+        )
+        require(
+            sanitizedFailure.contains("invalid request")
+                && sanitizedFailure.contains("[REDACTED]")
+                && !sanitizedFailure.contains("secret-token")
+                && !sanitizedFailure.contains("private-value")
+                && !sanitizedFailure.contains("json-private-value"),
+            "Warmup failures should preserve actionable bounded detail while redacting credentials"
+        )
+        require(
+            WarmupRunner.sanitizedFailureDetail(String(repeating: "x", count: 1_000), limit: 100).count == 101,
+            "Warmup failure detail should be bounded"
+        )
 
         let cliRefreshError = QuotaProviderError.cliRefreshRequired("Claude needs its CLI refresh")
         require(
@@ -202,8 +232,8 @@ struct QuotaExtractorRegression {
             scheduledAt: scheduledAt,
             dayKey: scheduledDayKey,
             lastSuccessfulDay: nil,
-            lastActivity: scheduledAt.addingTimeInterval(-3600),
-            activeWindowStartedAt: nil,
+            liveWindowActive: false,
+            sourceFresh: true,
             windowDuration: 5 * 3600
         )
         require(missedSchedule.shouldRun && missedSchedule.caughtUp, "Missed schedule should catch up within horizon")
@@ -213,30 +243,30 @@ struct QuotaExtractorRegression {
             scheduledAt: scheduledAt,
             dayKey: scheduledDayKey,
             lastSuccessfulDay: scheduledDayKey,
-            lastActivity: nil,
-            activeWindowStartedAt: nil,
+            liveWindowActive: false,
+            sourceFresh: true,
             windowDuration: 5 * 3600
         )
         require(!alreadySucceededSchedule.shouldRun, "Per-tool successful scheduled warmup should dedupe same day")
 
-        let userStartedAfterSchedule = MorningWarmupPolicy.decision(
+        let unavailableQuotaSource = MorningWarmupPolicy.decision(
             now: catchUpNow,
             scheduledAt: scheduledAt,
             dayKey: scheduledDayKey,
             lastSuccessfulDay: nil,
-            lastActivity: scheduledAt.addingTimeInterval(60),
-            activeWindowStartedAt: nil,
+            liveWindowActive: false,
+            sourceFresh: false,
             windowDuration: 5 * 3600
         )
-        require(!userStartedAfterSchedule.shouldRun, "User activity after scheduled time should skip catch-up")
+        require(!unavailableQuotaSource.shouldRun, "Unavailable live quota must skip catch-up")
 
         let activeWindowOverlap = MorningWarmupPolicy.decision(
             now: catchUpNow,
             scheduledAt: scheduledAt,
             dayKey: scheduledDayKey,
             lastSuccessfulDay: nil,
-            lastActivity: scheduledAt.addingTimeInterval(-30 * 60),
-            activeWindowStartedAt: scheduledAt.addingTimeInterval(-30 * 60),
+            liveWindowActive: true,
+            sourceFresh: true,
             windowDuration: 5 * 3600
         )
         require(!activeWindowOverlap.shouldRun, "Current active local window should skip scheduled catch-up")
@@ -246,11 +276,28 @@ struct QuotaExtractorRegression {
             scheduledAt: scheduledAt,
             dayKey: scheduledDayKey,
             lastSuccessfulDay: nil,
-            lastActivity: nil,
-            activeWindowStartedAt: nil,
+            liveWindowActive: false,
+            sourceFresh: true,
             windowDuration: 5 * 3600
         )
         require(!outsideCatchUpHorizon.shouldRun, "Missed schedule outside the window horizon should not catch up")
+
+        require(
+            MorningWarmupPolicy.reservesAutomaticWarmup(
+                now: scheduledAt.addingTimeInterval(-(4 * 3600)),
+                scheduledAt: scheduledAt,
+                windowDuration: 5 * 3600
+            ),
+            "General auto-warm must preserve the final full quota window before morning warm-up"
+        )
+        require(
+            !MorningWarmupPolicy.reservesAutomaticWarmup(
+                now: scheduledAt.addingTimeInterval(-(5 * 3600) - 1),
+                scheduledAt: scheduledAt,
+                windowDuration: 5 * 3600
+            ),
+            "General auto-warm may run before the reserved morning window"
+        )
 
         require(
             MorningWarmupPolicy.resolvedLastSuccessfulDay(
@@ -612,7 +659,9 @@ struct QuotaExtractorRegression {
 
         testLocalClaudeTokenUsage()
         testLocalClaudeOpenUsageCostCompatibility()
+        testCurrentClaudePricing()
         testLocalCodexTokenUsage()
+        testCurrentCodexPricingAndUnknownModels()
 
         let visibleReadySources = [
             "Sources/QuotaWarmer/Views/MenuBarLabel.swift",
@@ -633,11 +682,51 @@ struct QuotaExtractorRegression {
         )
 
         let credentialStoreSource = readSource("Sources/QuotaWarmer/Services/CredentialStore.swift")
+        // LAContext/kSecUseAuthenticationContext governs only the data-protection
+        // keychain, so it silenced nothing: background polls kept opening the
+        // login-password window (observed 2026-08-20 in the diagnostics log).
         require(
-            credentialStoreSource.contains("interactionNotAllowed = true")
-                && credentialStoreSource.contains("kSecUseAuthenticationContext")
-                && credentialStoreSource.contains("allowsUserInteraction"),
-            "Background Claude Keychain reads must not be allowed to open a password dialog"
+            credentialStoreSource.contains("SecKeychainSetUserInteractionAllowed(false)")
+                && credentialStoreSource.contains("allowsUserInteraction")
+                && !credentialStoreSource.contains("interactionNotAllowed = true"),
+            "Background Claude Keychain reads must be silenced with SecKeychainSetUserInteractionAllowed, not LAContext"
+        )
+        require(
+            credentialStoreSource.contains("SecKeychainSetUserInteractionAllowed(previous.boolValue)"),
+            "The process-wide Keychain interaction flag must be restored after a background read"
+        )
+        // The dialog kept coming back because the item's partition list holds
+        // `apple-tool:` while QuotaWarmer's partition is `teamid:…`; "Always
+        // Allow" adds a trusted app but never the partition. Reading through the
+        // tool the item already trusts is the path that does not prompt, so it
+        // has to be tried before the in-process read that does.
+        let toolReadIndex = credentialStoreSource.range(of: "securityToolPassword(service: service)")?.lowerBound
+        let inProcessReadIndex = credentialStoreSource.range(of: "claudeKeychainPassword(service: service")?.lowerBound
+        require(
+            toolReadIndex != nil && inProcessReadIndex != nil && toolReadIndex! < inProcessReadIndex!,
+            "The prompt-free `security` read must be attempted before the in-process read that can prompt"
+        )
+        require(
+            credentialStoreSource.contains("\"find-generic-password\", \"-w\", \"-s\", service"),
+            "The prompt-free Claude read must stay a read-only `security find-generic-password`"
+        )
+        require(
+            credentialStoreSource.contains("if process.isRunning { process.terminate() }"),
+            "The `security` read must time out so a stuck Keychain dialog cannot outlive it"
+        )
+        // Every read that runs on a background poll has to be silenced, not just
+        // the Claude one: a foreign Codex item, or a mirror left behind by an
+        // older signature, would otherwise open the same password window.
+        let unguardedReads = credentialStoreSource.components(separatedBy: .newlines)
+            .filter { $0.contains("SecItemCopyMatching(query as CFDictionary, &item)") }
+            .filter { !$0.contains("//") }
+        require(
+            unguardedReads.count == 4,
+            "Unexpected number of Keychain reads (\(unguardedReads.count)); each one must be reviewed for dialog suppression"
+        )
+        require(
+            credentialStoreSource.components(separatedBy: "Self.withoutKeychainDialogs {").count - 1 == 3,
+            "The mirror, Codex and background Claude reads must all run inside withoutKeychainDialogs"
         )
         // QuotaWarmer mirrors Claude's *access* token into an item it owns, so a
         // relaunch does not re-trigger the macOS approval dialog. The dangerous
@@ -778,9 +867,14 @@ struct QuotaExtractorRegression {
             "Expired Claude credentials must defer refresh-token rotation to Claude Code and re-read its fresh credential"
         )
         require(
-            appStateSource.contains("allowsClaudeCLIRecovery")
-                && appStateSource.contains("triggerWarmup(tool: .claude, mode: \"auto\")"),
-            "Auto-warm must run Claude Code once to recover its own expired credential before retrying quota"
+            !appStateSource.contains("allowsClaudeCLIRecovery")
+                && !appStateSource.contains("triggerWarmup(tool: .claude, mode: \"auto\")"),
+            "A failed live quota fetch must never spend quota merely to recover Claude credentials"
+        )
+        require(
+            appStateSource.contains("ProcessInfo.processInfo.beginActivity")
+                && appStateSource.contains("ProcessInfo.processInfo.endActivity"),
+            "Scheduled morning warm-up must hold a bounded activity assertion across short DarkWake sessions"
         )
         require(
             !appStateSource.contains("let cliReady = await applyCLIAuthenticationStatusIfNeeded(for: tool, to: state)")
@@ -848,7 +942,29 @@ struct QuotaExtractorRegression {
 
         let summary = provider.usage(for: .claude, baseURL: root, now: now)
         require(summary.today.totalTokens == 2_702, "Claude local usage should parse OpenUsage-compatible nested records")
-        requireClose(summary.today.costUSD, 0.458475, "Claude local usage should match ccusage cost compatibility rules")
+        requireClose(summary.today.costUSD, 0.458925, "Claude local usage should apply distinct 5m/1h writes and current Fable rates")
+    }
+
+    private static func testCurrentClaudePricing() {
+        let provider = LocalUsageProvider(calendar: utcCalendar)
+        let now = isoDate("2026-06-15T12:00:00Z")
+        let cases: [(String, Double)] = [
+            ("claude-fable-5-1", 92.75),
+            ("claude-opus-5", 46.75),
+            ("claude-sonnet-5", 18.70),
+            ("claude-haiku-4-5", 9.35)
+        ]
+
+        for (index, entry) in cases.enumerated() {
+            let root = temporaryDirectory("claude-current-pricing-\(index)")
+            defer { try? FileManager.default.removeItem(at: root) }
+            createDirectory(root)
+            writeJSONL([
+                #"{"timestamp":"2026-06-15T10:00:00Z","message":{"id":"current_\#(index)","model":"\#(entry.0)","usage":{"input_tokens":1000000,"cache_creation":{"ephemeral_5m_input_tokens":1000000,"ephemeral_1h_input_tokens":1000000},"cache_read_input_tokens":1000000,"output_tokens":1000000}}}"#
+            ], to: root.appendingPathComponent("session.jsonl"))
+            let summary = provider.usage(for: .claude, baseURL: root, now: now)
+            requireClose(summary.today.costUSD, entry.1, "Current Claude pricing for \(entry.0)")
+        }
     }
 
     private static func testLocalCodexTokenUsage() {
@@ -870,9 +986,50 @@ struct QuotaExtractorRegression {
         require(summary.today.totalTokens == 1_410, "Codex local usage should use per-turn token deltas")
         require(summary.yesterday.totalTokens == 550, "Codex local usage should bucket yesterday")
         require(summary.last30Days.totalTokens == 1_960, "Codex local usage should not aggregate cumulative token totals")
-        requireClose(summary.today.costUSD, 0.01310, "Codex local usage should price cached input like ccusage model pricing")
+        require(summary.today.costUSD == nil, "Codex local usage with a priced and unpriced model must not report a partial cost")
         requireClose(summary.yesterday.costUSD, 0.00355, "Codex local usage should price yesterday's turn")
-        requireClose(summary.last30Days.costUSD, 0.01665, "Codex local usage should aggregate token cost")
+        require(summary.last30Days.costUSD == nil, "Codex aggregate cost must remain unavailable when any included model is unpriced")
+    }
+
+    private static func testCurrentCodexPricingAndUnknownModels() {
+        let provider = LocalUsageProvider(calendar: utcCalendar)
+        let now = isoDate("2026-06-15T12:00:00Z")
+        let root = temporaryDirectory("codex-current-pricing")
+        defer { try? FileManager.default.removeItem(at: root) }
+        createDirectory(root)
+
+        var lines: [String] = []
+        for (index, model) in ["gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.6"].enumerated() {
+            lines.append(#"{"timestamp":"2026-06-15T0\#(index):00:00Z","payload":{"type":"session_meta","model":"\#(model)"}}"#)
+            lines.append(#"{"timestamp":"2026-06-15T0\#(index):01:00Z","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":100000,"cached_input_tokens":10000,"output_tokens":100000,"total_tokens":200000}}}}"#)
+        }
+        writeJSONL(lines, to: root.appendingPathComponent("priced.jsonl"))
+
+        let summary = provider.usage(for: .codex, baseURL: root, now: now)
+        requireClose(summary.today.costUSD, 12.1582, "Current OpenAI models should use API-equivalent pricing and the gpt-5.6 Sol alias")
+
+        let longContextRoot = temporaryDirectory("codex-long-context")
+        defer { try? FileManager.default.removeItem(at: longContextRoot) }
+        createDirectory(longContextRoot)
+        writeJSONL([
+            #"{"timestamp":"2026-06-15T08:00:00Z","payload":{"type":"session_meta","model":"gpt-5.6-luna"}}"#,
+            #"{"timestamp":"2026-06-15T08:01:00Z","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":300000,"cached_input_tokens":100000,"output_tokens":100000,"total_tokens":400000}}}}"#
+        ], to: longContextRoot.appendingPathComponent("long.jsonl"))
+        let longContext = provider.usage(for: .codex, baseURL: longContextRoot, now: now)
+        requireClose(longContext.today.costUSD, 0.264, "OpenAI inputs over 272K should apply long-context input and output multipliers")
+
+        let mixedRoot = temporaryDirectory("codex-mixed-pricing")
+        defer { try? FileManager.default.removeItem(at: mixedRoot) }
+        createDirectory(mixedRoot)
+        writeJSONL([
+            #"{"timestamp":"2026-06-15T08:00:00Z","payload":{"type":"session_meta","model":"gpt-5.6-luna"}}"#,
+            #"{"timestamp":"2026-06-15T08:01:00Z","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":1000,"cached_input_tokens":0,"output_tokens":1000,"total_tokens":2000}}}}"#,
+            #"{"timestamp":"2026-06-15T09:00:00Z","payload":{"type":"session_meta","model":"future-unpriced-model"}}"#,
+            #"{"timestamp":"2026-06-15T09:01:00Z","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":1000,"cached_input_tokens":0,"output_tokens":1000,"total_tokens":2000}}}}"#
+        ], to: mixedRoot.appendingPathComponent("mixed.jsonl"))
+        let mixed = provider.usage(for: .codex, baseURL: mixedRoot, now: now)
+        require(mixed.today.costUSD == nil, "A mixed priced/unpriced bucket must remain unavailable, not partially priced")
+        require(mixed.last30Days.costUSD == nil, "An aggregate containing unpriced usage must remain unavailable")
     }
 
     private static var utcCalendar: Calendar {

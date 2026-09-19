@@ -298,6 +298,12 @@ struct MainTabView: View {
                 message += " · resets in \(seconds / 3600)h \((seconds % 3600) / 60)m"
             }
             return (DS.C.green, message, false)
+        case .unverified(let sentAt, _):
+            return (
+                DS.C.yellow,
+                "Command sent at \(shortClock(sentAt)), but live quota did not confirm that the window opened.",
+                true
+            )
         case .failed(_, let reason):
             return (DS.C.red, "Warm-up failed: \(reason)", true)
         }

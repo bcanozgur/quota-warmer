@@ -32,11 +32,11 @@ Claude Code and Codex CLI use rolling quota windows. If a window starts only whe
 QuotaWarmer keeps the app running in the menu bar and periodically checks quota state for monitored providers. For a tool set to Auto-warm, when a fresh reset is detected it runs a minimal warm-up command from an isolated temporary working directory:
 
 ```bash
-claude --model haiku --effort low --no-session-persistence -p 'hi'
-codex exec --model gpt-5.4-mini -c model_reasoning_effort="low" --skip-git-repo-check --ephemeral --ignore-rules 'hi'
+claude --model haiku --no-session-persistence --max-turns 1 --tools '' -p 'hi'
+codex exec --model gpt-5.6-luna -c model_reasoning_effort="low" --skip-git-repo-check --ephemeral --ignore-user-config --ignore-rules 'hi'
 ```
 
-If `gpt-5.4-mini` is unavailable for the signed-in Codex account, QuotaWarmer retries once with the configured default Codex model and low reasoning effort.
+Both commands pin a bounded low-cost model and do not fall back to the user's default model. Codex ignores user configuration for this isolated run while continuing to use the existing Codex authentication.
 
 Local activity is scanned from:
 
@@ -46,6 +46,8 @@ Local activity is scanned from:
 ```
 
 These logs help the UI show context, but stale local activity does not trigger automatic warm-ups.
+
+Token costs shown in the popover are estimates using public API-equivalent rates, not actual Claude or ChatGPT subscription charges. A period containing an unknown or unpriced model is marked unavailable instead of being reported as `$0.00`.
 
 ## Requirements
 

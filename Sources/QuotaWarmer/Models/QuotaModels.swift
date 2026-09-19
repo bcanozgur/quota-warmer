@@ -68,7 +68,7 @@ enum ScheduledWarmupSkipReason: String {
     case beforeScheduledTime
     case outsideCatchUpHorizon
     case activeWindowInProgress
-    case userAlreadyActive
+    case quotaSourceUnavailable
 }
 
 enum ScheduledWarmupDecision {
@@ -105,8 +105,8 @@ struct MorningWarmupPolicy {
         scheduledAt: Date,
         dayKey: String,
         lastSuccessfulDay: String?,
-        lastActivity: Date?,
-        activeWindowStartedAt: Date?,
+        liveWindowActive: Bool,
+        sourceFresh: Bool,
         windowDuration: TimeInterval,
         catchUpHorizon: TimeInterval? = nil,
         catchUpLatenessThreshold: TimeInterval = Self.catchUpLatenessThreshold
@@ -125,17 +125,27 @@ struct MorningWarmupPolicy {
             return .skip(.outsideCatchUpHorizon)
         }
 
-        if let activeWindowStartedAt,
-           activeWindowStartedAt <= now,
-           activeWindowStartedAt.addingTimeInterval(windowDuration) > now {
+        guard sourceFresh else {
+            return .skip(.quotaSourceUnavailable)
+        }
+
+        if liveWindowActive {
             return .skip(.activeWindowInProgress)
         }
 
-        if let lastActivity, lastActivity >= scheduledAt {
-            return .skip(.userAlreadyActive)
-        }
-
         return .run(caughtUp: lateness > catchUpLatenessThreshold)
+    }
+
+    /// Reserves the last full quota-window interval before the requested morning
+    /// time. General auto-warm must not claim a window in this interval, or a
+    /// 03:50 reset can consume the window that the user explicitly asked to start
+    /// at 06:00.
+    static func reservesAutomaticWarmup(
+        now: Date,
+        scheduledAt: Date,
+        windowDuration: TimeInterval
+    ) -> Bool {
+        now < scheduledAt && now >= scheduledAt.addingTimeInterval(-windowDuration)
     }
 }
 
@@ -184,9 +194,11 @@ enum WarmupOutcome: Equatable {
     case none
     /// Command sent; verifying the window opened (grace re-check in flight).
     case pending(sentAt: Date)
-    /// Verified: the live quota shows an active window (or, once the grace period
-    /// is exhausted, the completed command's expected window is trusted).
+    /// Verified: the live quota shows an active window.
     case confirmed(at: Date, resetAt: Date?)
+    /// The CLI command completed, but the provider did not expose an active
+    /// window during the bounded verification period.
+    case unverified(sentAt: Date, expectedResetAt: Date?)
     /// The warm-up command itself failed.
     case failed(at: Date, reason: String)
 }

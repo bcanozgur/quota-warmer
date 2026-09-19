@@ -74,6 +74,21 @@ struct WakeScheduler {
             }
     }
 
+    func scheduleMatches(hour: Int, minute: Int, days: WakeDays) -> Bool {
+        guard let line = repeatingScheduleLine()?.lowercased() else { return false }
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "h:mma"
+        var components = DateComponents()
+        components.hour = Self.clampHour(hour)
+        components.minute = Self.clampMinute(minute)
+        guard let date = Calendar(identifier: .gregorian).date(from: components) else { return false }
+        let expectedTime = formatter.string(from: date).lowercased()
+        return (line.contains("wake") || line.contains("poweron"))
+            && line.contains(expectedTime)
+            && line.contains(days.humanLabel)
+    }
+
     // MARK: - Internals
 
     private func runPrivileged(_ shellCommand: String, successMessage: String) async -> ScheduleResult {
