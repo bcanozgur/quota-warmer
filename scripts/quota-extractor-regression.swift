@@ -662,6 +662,7 @@ access_token=private-value
         testCurrentClaudePricing()
         testLocalCodexTokenUsage()
         testCurrentCodexPricingAndUnknownModels()
+        testCodexSessionMetadataModelAndUTCDayBuckets()
 
         let visibleReadySources = [
             "Sources/QuotaWarmer/Views/MenuBarLabel.swift",
@@ -978,7 +979,7 @@ access_token=private-value
             #"{"timestamp":"2026-06-15T08:00:00Z","payload":{"type":"session_meta","model":"gpt-5.5"}}"#,
             #"{"timestamp":"2026-06-15T10:00:00Z","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":1000,"cached_input_tokens":200,"output_tokens":300,"total_tokens":1300},"total_token_usage":{"input_tokens":100000,"cached_input_tokens":20000,"output_tokens":30000,"total_tokens":130000}}}}"#,
             #"{"timestamp":"2026-06-14T09:00:00Z","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":500,"cached_input_tokens":100,"output_tokens":50,"total_tokens":550},"total_token_usage":{"input_tokens":110000,"cached_input_tokens":21000,"output_tokens":31000,"total_tokens":141000}}}}"#,
-            #"{"timestamp":"2026-06-15T11:00:00Z","payload":{"type":"session_meta","model":"codex-auto-review"}}"#,
+            #"{"timestamp":"2026-06-15T11:00:00Z","payload":{"type":"session_meta","model":"future-unpriced-model"}}"#,
             #"{"timestamp":"2026-06-15T11:05:00Z","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":100,"cached_input_tokens":50,"output_tokens":10,"total_tokens":110}}}}"#
         ], to: root.appendingPathComponent("session.jsonl"))
 
@@ -1030,6 +1031,25 @@ access_token=private-value
         let mixed = provider.usage(for: .codex, baseURL: mixedRoot, now: now)
         require(mixed.today.costUSD == nil, "A mixed priced/unpriced bucket must remain unavailable, not partially priced")
         require(mixed.last30Days.costUSD == nil, "An aggregate containing unpriced usage must remain unavailable")
+    }
+
+    private static func testCodexSessionMetadataModelAndUTCDayBuckets() {
+        let now = isoDate("2026-06-15T01:00:00Z")
+        let root = temporaryDirectory("codex-session-metadata")
+        defer { try? FileManager.default.removeItem(at: root) }
+        createDirectory(root)
+        writeJSONL([
+            #"{"timestamp":"2026-06-14T22:59:00Z","type":"event_msg","payload":{"type":"thread_settings_applied","thread_settings":{"model":"codex-auto-review"}}}"#,
+            #"{"timestamp":"2026-06-14T23:00:00Z","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":100000,"cached_input_tokens":10000,"output_tokens":100000,"total_tokens":200000}}}}"#
+        ], to: root.appendingPathComponent("session.jsonl"))
+        writeJSONL([
+            #"{"timestamp":"2026-06-14T23:30:00Z","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":10000,"cached_input_tokens":0,"output_tokens":10000,"total_tokens":20000}}}}"#
+        ], to: root.appendingPathComponent("legacy.jsonl"))
+
+        let summary = LocalUsageProvider().usage(for: .codex, baseURL: root, now: now)
+        require(summary.today.totalTokens == 0, "UTC log usage before midnight must not appear in today's bucket")
+        require(summary.yesterday.totalTokens == 220_000, "Codex session usage should use UTC day buckets")
+        requireClose(summary.yesterday.costUSD, 2.604, "Codex session metadata and legacy missing-model records should be priced")
     }
 
     private static var utcCalendar: Calendar {

@@ -62,6 +62,15 @@ final class LocalUsageProvider {
     private let fileManager: FileManager
     private let calendar: Calendar
 
+    /// Codex and Claude JSONL timestamps are ISO-8601 UTC values. Keep the
+    /// displayed day buckets aligned with the log's calendar rather than the
+    /// Mac's local timezone.
+    private static var logCalendar: Calendar {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        return calendar
+    }
+
     private let iso8601Frac: ISO8601DateFormatter = {
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
@@ -74,9 +83,9 @@ final class LocalUsageProvider {
         return formatter
     }()
 
-    init(fileManager: FileManager = .default, calendar: Calendar = .current) {
+    init(fileManager: FileManager = .default, calendar: Calendar? = nil) {
         self.fileManager = fileManager
-        self.calendar = calendar
+        self.calendar = calendar ?? Self.logCalendar
     }
 
     func usage(for tool: ToolID, baseURL: URL? = nil, now: Date = Date()) -> TokenUsageSummary {
@@ -229,7 +238,15 @@ final class LocalUsageProvider {
     }
 
     private func codexCost(_ record: UsageRecord) -> Double? {
-        guard let rates = codexRates(for: record.model) else { return nil }
+        // Older Codex Desktop/VSCodium session files omit the model entirely.
+        // Their token-count shape is still authoritative, so use the app's
+        // bounded Sol warm-up tier as the explicit estimate baseline. An
+        // unknown model string remains unavailable rather than being silently
+        // priced as a different model.
+        let rates = record.model == nil
+            ? codexRates(for: "gpt-5.6-sol")
+            : codexRates(for: record.model)
+        guard let rates else { return nil }
         let cached = min(record.cachedInputTokens, record.inputTokens)
         let uncached = max(0, record.inputTokens - cached)
         let cachedRate = rates.cacheReadExplicit ? rates.cacheRead : rates.input
@@ -297,7 +314,20 @@ final class LocalUsageProvider {
 
     private func codexRates(for model: String?) -> ModelRates? {
         guard let model, !model.isEmpty else { return nil }
-        let text = model.lowercased()
+        let rawText = model.lowercased()
+        let text = rawText.split(separator: "/").last.map(String.init) ?? rawText
+        if text == "codex-auto-review" || text.hasPrefix("codex-auto-review-") {
+            // Guardian/reviewer sessions use a logical label in their settings
+            // event. Price them at the configured Sol tier instead of making
+            // every bucket containing a review unavailable.
+            return codexRates(for: "gpt-5.6-sol")
+        }
+        if text == "gpt-5-codex" {
+            return codexRates(for: "gpt-5.3-codex")
+        }
+        if text == "gpt-5.1-codex-max" {
+            return codexRates(for: "gpt-5.1-codex")
+        }
         if matches(text, "gpt-6-astra") {
             return ModelRates(input: 10.0, cacheWrite: 10.0, cacheRead: 1.0, output: 50.0, cacheReadExplicit: true)
         }
@@ -382,6 +412,10 @@ final class LocalUsageProvider {
         }
         if let payload = object["payload"] as? [String: Any] {
             if let value = stringValue(payload["model"]) { return value }
+            if let settings = payload["thread_settings"] as? [String: Any],
+               let value = stringValue(settings["model"]) {
+                return value
+            }
             if let info = payload["info"] as? [String: Any] {
                 if let value = stringValue(info["model"]) { return value }
                 if let value = stringValue(info["model_name"]) { return value }
@@ -394,6 +428,10 @@ final class LocalUsageProvider {
                let value = stringValue(nested["model"]) {
                 return value
             }
+        }
+        if let provenance = object["provenance"] as? [String: Any],
+           let value = stringValue(provenance["model"]) {
+            return value
         }
         return nil
     }
