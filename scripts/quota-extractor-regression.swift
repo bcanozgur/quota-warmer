@@ -952,6 +952,7 @@ access_token=private-value
         let cases: [(String, Double)] = [
             ("claude-fable-5-1", 92.75),
             ("claude-opus-5", 46.75),
+            ("claude-opus-5-5", 37.20),
             ("claude-sonnet-5", 18.70),
             ("claude-haiku-4-5", 9.35)
         ]
@@ -1000,14 +1001,14 @@ access_token=private-value
         createDirectory(root)
 
         var lines: [String] = []
-        for (index, model) in ["gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.6"].enumerated() {
+        for (index, model) in ["gpt-6-astra", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.6"].enumerated() {
             lines.append(#"{"timestamp":"2026-06-15T0\#(index):00:00Z","payload":{"type":"session_meta","model":"\#(model)"}}"#)
             lines.append(#"{"timestamp":"2026-06-15T0\#(index):01:00Z","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":100000,"cached_input_tokens":10000,"output_tokens":100000,"total_tokens":200000}}}}"#)
         }
         writeJSONL(lines, to: root.appendingPathComponent("priced.jsonl"))
 
         let summary = provider.usage(for: .codex, baseURL: root, now: now)
-        requireClose(summary.today.costUSD, 12.1582, "Current OpenAI models should use API-equivalent pricing and the gpt-5.6 Sol alias")
+        requireClose(summary.today.costUSD, 13.3993, "Current OpenAI models should use API-equivalent pricing and the gpt-5.6 Sol alias")
 
         let longContextRoot = temporaryDirectory("codex-long-context")
         defer { try? FileManager.default.removeItem(at: longContextRoot) }

@@ -282,6 +282,13 @@ final class LocalUsageProvider {
         if text.contains("fable-5") {
             return ModelRates(input: 10.0, cacheWrite: 12.5, cacheWriteOneHour: 20.0, cacheRead: 1.0, output: 50.0, cacheReadExplicit: true)
         }
+        // Claude Opus 5.5 (claude-opus-5-5, 2026-09-22): $4 in / $20 out,
+        // 5m write $5, 1h write $8, cache read $0.20 (0.05x — not the usual
+        // 0.10x). Must precede the generic opus-5 check below, which would
+        // otherwise mis-price 5.5 at Opus 5 rates.
+        if text.contains("opus-5-5") || text.contains("opus-5.5") || text.contains("opus 5.5") {
+            return ModelRates(input: 4.0, cacheWrite: 5.0, cacheWriteOneHour: 8.0, cacheRead: 0.20, output: 20.0, cacheReadExplicit: true)
+        }
         if text.contains("opus-5") {
             return ModelRates(input: 5.0, cacheWrite: 6.25, cacheWriteOneHour: 10.0, cacheRead: 0.50, output: 25.0, cacheReadExplicit: true)
         }
@@ -329,7 +336,16 @@ final class LocalUsageProvider {
             return codexRates(for: "gpt-5.1-codex")
         }
         if matches(text, "gpt-6-astra") {
-            return ModelRates(input: 10.0, cacheWrite: 10.0, cacheRead: 1.0, output: 50.0, cacheReadExplicit: true)
+            return ModelRates(input: 10.0, cacheWrite: 12.5, cacheRead: 1.0, output: 50.0, cacheReadExplicit: true)
+        }
+        // GPT-6 Sol / Luna (2026-09-22, gpt-6-sol / gpt-6-luna): Sol $2 in /
+        // $10 out (cached $0.20, writes $2.50), Luna $0.10 in / $0.50 out
+        // (cached $0.01, writes $0.125). GPT-6 family has no Terra tier.
+        if matches(text, "gpt-6-sol") {
+            return ModelRates(input: 2.0, cacheWrite: 2.5, cacheRead: 0.20, output: 10.0, cacheReadExplicit: true)
+        }
+        if matches(text, "gpt-6-luna") {
+            return ModelRates(input: 0.10, cacheWrite: 0.125, cacheRead: 0.01, output: 0.50, cacheReadExplicit: true)
         }
         if matches(text, "gpt-5.6-sol") || text == "gpt-5.6" {
             return ModelRates(input: 4.0, cacheWrite: 4.0, cacheRead: 0.40, output: 20.0, cacheReadExplicit: true)

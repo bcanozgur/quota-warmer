@@ -43,7 +43,7 @@ Inspect these first:
 Compile and run the regression gate:
 
 ```bash
-rtk swiftc -module-cache-path /tmp/QuotaWarmerQuotaModuleCache -parse-as-library Sources/QuotaWarmer/Models/ToolID.swift Sources/QuotaWarmer/Models/QuotaModels.swift Sources/QuotaWarmer/Services/CredentialStore.swift Sources/QuotaWarmer/Services/WarmupRunner.swift Sources/QuotaWarmer/Services/QuotaProvider.swift scripts/quota-extractor-regression.swift -o /tmp/quota-extractor-regression
+rtk swiftc -module-cache-path /tmp/QuotaWarmerQuotaModuleCache -parse-as-library Sources/QuotaWarmer/Models/ToolID.swift Sources/QuotaWarmer/Models/QuotaModels.swift Sources/QuotaWarmer/Services/DiagnosticLogger.swift Sources/QuotaWarmer/Services/CredentialStore.swift Sources/QuotaWarmer/Services/WarmupRunner.swift Sources/QuotaWarmer/Services/QuotaProvider.swift Sources/QuotaWarmer/Services/LocalUsageProvider.swift scripts/quota-extractor-regression.swift -o /tmp/quota-extractor-regression
 rtk /tmp/quota-extractor-regression
 ```
 
