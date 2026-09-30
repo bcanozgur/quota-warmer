@@ -35,15 +35,50 @@ enum ToolID: String, CaseIterable, Identifiable, Codable {
         }
     }
 
-    var warmupCommand: String {
+    /// Claude: `haiku` is the CLI alias for the cheapest current model (Claude
+    /// Haiku 4.5, $1/$5 per MTok as of 2026-09-30) and follows future Haiku
+    /// releases. Measured 2026-09-30 on CLI 2.1.285: without isolation the
+    /// default system prompt (user CLAUDE.md, MCP tool schemas, skills, plugins)
+    /// made a single `hi` write ~51K cache tokens plus ~190 thinking tokens;
+    /// `--safe-mode`/`--strict-mcp-config`, a one-line system prompt, disabled
+    /// thinking and `--effort low` bring it to ~400 input / 5 output tokens.
+    /// All of these flags are per-run only — nothing is written to settings.
+    ///
+    /// The models actually used come from the tool's model catalog
+    /// (`ModelCatalogStore.warmupModels`); these are the built-in defaults.
+    var warmupCommand: String { warmupCommand(model: defaultWarmupModel) }
+
+    /// Run only when the primary command is rejected for an unknown option
+    /// (an older CLI without the isolation flags). Still pinned to a cheap
+    /// model, so the fallback can never land on the user's default (e.g. Opus).
+    var fallbackWarmupCommand: String? { legacyWarmupCommand(model: defaultWarmupModel) }
+
+    /// Claude: the CLI alias for the cheapest tier. Codex: measured cheapest
+    /// per warm-up on a ChatGPT account (2026-09-30: ~15K prompt tokens vs
+    /// ~35K for gpt-6-luna, which is cheaper per token).
+    var defaultWarmupModel: String {
         switch self {
-        case .claude: return "claude --model haiku --no-session-persistence --max-turns 1 --tools '' -p 'hi'"
-        case .codex:  return "codex exec --model gpt-5.6-luna -c model_reasoning_effort=\"low\" --skip-git-repo-check --ephemeral --ignore-user-config --ignore-rules 'hi'"
+        case .claude: return "haiku"
+        case .codex:  return "gpt-5.6-luna"
         }
     }
 
-    var fallbackWarmupCommand: String? {
-        nil
+    /// `model` must pass `ModelCatalog.isSafeWarmupModel`: it is interpolated
+    /// into a `zsh -lc` command line.
+    func warmupCommand(model: String) -> String {
+        switch self {
+        case .claude:
+            return "claude --model \(model) --effort low --settings '{\"alwaysThinkingEnabled\":false}' --safe-mode --strict-mcp-config --system-prompt 'Reply with one word.' --no-session-persistence --max-turns 1 --tools '' -p 'hi'"
+        case .codex:
+            return "codex exec --model \(model) -c model_reasoning_effort=\"low\" --skip-git-repo-check --ephemeral --ignore-user-config --ignore-rules 'hi'"
+        }
+    }
+
+    func legacyWarmupCommand(model: String) -> String? {
+        switch self {
+        case .claude: return "claude --model \(model) --no-session-persistence --max-turns 1 --tools '' -p 'hi'"
+        case .codex:  return nil
+        }
     }
 
     var logDirectoryURL: URL? {

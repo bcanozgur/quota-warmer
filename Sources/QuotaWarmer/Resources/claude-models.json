@@ -1,0 +1,43 @@
+{
+  "schemaVersion": 1,
+  "revision": 1,
+  "updatedAt": "2026-09-30",
+  "source": "https://platform.claude.com/docs/en/about-claude/pricing",
+  "upstream": {
+    "url": "https://platform.claude.com/docs/en/about-claude/pricing.md",
+    "format": "anthropic"
+  },
+  "warmup": {
+    "models": ["haiku", "claude-haiku-4-5"],
+    "cheapestModel": "haiku-4-5"
+  },
+  "aliases": {
+    "haiku": "haiku-4-5",
+    "sonnet": "sonnet-5-5",
+    "opus": "opus-5-5",
+    "fable": "fable-5-1"
+  },
+  "models": [
+    { "id": "fable-5-1", "name": "Claude Fable 5.1", "input": 10, "cacheWrite5m": 12.5, "cacheWrite1h": 20, "cacheRead": 0.25, "output": 50 },
+    { "id": "mythos-5-1", "name": "Claude Mythos 5.1", "input": 10, "cacheWrite5m": 12.5, "cacheWrite1h": 20, "cacheRead": 0.25, "output": 50 },
+    { "id": "fable-5", "name": "Claude Fable 5", "input": 10, "cacheWrite5m": 12.5, "cacheWrite1h": 20, "cacheRead": 1, "output": 50 },
+    { "id": "mythos-5", "name": "Claude Mythos 5", "input": 10, "cacheWrite5m": 12.5, "cacheWrite1h": 20, "cacheRead": 1, "output": 50 },
+    { "id": "opus-5-5", "name": "Claude Opus 5.5", "input": 4, "cacheWrite5m": 5, "cacheWrite1h": 8, "cacheRead": 0.2, "output": 20 },
+    { "id": "opus-5", "name": "Claude Opus 5", "input": 5, "cacheWrite5m": 6.25, "cacheWrite1h": 10, "cacheRead": 0.5, "output": 25 },
+    { "id": "opus-4-8", "name": "Claude Opus 4.8", "input": 5, "cacheWrite5m": 6.25, "cacheWrite1h": 10, "cacheRead": 0.5, "output": 25 },
+    { "id": "opus-4-7", "name": "Claude Opus 4.7", "input": 5, "cacheWrite5m": 6.25, "cacheWrite1h": 10, "cacheRead": 0.5, "output": 25 },
+    { "id": "opus-4-6", "name": "Claude Opus 4.6", "input": 5, "cacheWrite5m": 6.25, "cacheWrite1h": 10, "cacheRead": 0.5, "output": 25 },
+    { "id": "opus-4-5", "name": "Claude Opus 4.5", "input": 5, "cacheWrite5m": 6.25, "cacheWrite1h": 10, "cacheRead": 0.5, "output": 25 },
+    { "id": "opus-4-1", "name": "Claude Opus 4.1", "input": 15, "cacheWrite5m": 18.75, "cacheWrite1h": 30, "cacheRead": 1.5, "output": 75 },
+    { "id": "opus-4", "name": "Claude Opus 4", "input": 15, "cacheWrite5m": 18.75, "cacheWrite1h": 30, "cacheRead": 1.5, "output": 75 },
+    { "id": "3-opus", "name": "Claude Opus 3", "aliases": ["opus-3"], "input": 15, "cacheWrite5m": 18.75, "cacheWrite1h": 30, "cacheRead": 1.5, "output": 75 },
+    { "id": "sonnet-5-5", "name": "Claude Sonnet 5.5", "input": 2, "cacheWrite5m": 2.5, "cacheWrite1h": 4, "cacheRead": 0.2, "output": 10 },
+    { "id": "sonnet-5", "name": "Claude Sonnet 5", "input": 2, "cacheWrite5m": 2.5, "cacheWrite1h": 4, "cacheRead": 0.2, "output": 10 },
+    { "id": "sonnet-4-6", "name": "Claude Sonnet 4.6", "input": 3, "cacheWrite5m": 3.75, "cacheWrite1h": 6, "cacheRead": 0.3, "output": 15 },
+    { "id": "sonnet-4-5", "name": "Claude Sonnet 4.5", "input": 3, "cacheWrite5m": 3.75, "cacheWrite1h": 6, "cacheRead": 0.3, "output": 15 },
+    { "id": "sonnet-4", "name": "Claude Sonnet 4", "input": 3, "cacheWrite5m": 3.75, "cacheWrite1h": 6, "cacheRead": 0.3, "output": 15 },
+    { "id": "haiku-4-5", "name": "Claude Haiku 4.5", "input": 1, "cacheWrite5m": 1.25, "cacheWrite1h": 2, "cacheRead": 0.1, "output": 5 },
+    { "id": "haiku-3-5", "name": "Claude Haiku 3.5", "aliases": ["3-5-haiku"], "input": 0.8, "cacheWrite5m": 1, "cacheWrite1h": 1.6, "cacheRead": 0.08, "output": 4 },
+    { "id": "3-haiku", "name": "Claude Haiku 3", "aliases": ["haiku-3"], "input": 0.25, "cacheWrite5m": 0.3125, "cacheWrite1h": 0.5, "cacheRead": 0.03, "output": 1.25 }
+  ]
+}

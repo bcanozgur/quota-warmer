@@ -1,6 +1,13 @@
 import Foundation
 
-final class LocalUsageProvider {
+/// Scans the CLIs' local JSONL logs for token usage. Keep one instance per tool
+/// for the app's lifetime: it caches each file's parsed records and, because
+/// the logs are append-only, re-reads only bytes appended since the last scan.
+/// A 30-day Codex history is ~1 GB; a full re-read cost ~30 s of CPU and
+/// ~700 MB of memory every refresh, an incremental one milliseconds.
+/// Not safe for concurrent `usage` calls on one instance (AppState single-
+/// flights each tool's scan).
+final class LocalUsageProvider: @unchecked Sendable {
     private struct UsageRecord {
         let date: Date
         let model: String?
@@ -40,27 +47,55 @@ final class LocalUsageProvider {
         let cacheWriteOneHour: Double
         let cacheRead: Double
         let output: Double
-        let cacheReadExplicit: Bool
-
-        init(
-            input: Double,
-            cacheWrite: Double,
-            cacheWriteOneHour: Double? = nil,
-            cacheRead: Double,
-            output: Double,
-            cacheReadExplicit: Bool
-        ) {
-            self.input = input
-            self.cacheWriteFiveMinute = cacheWrite
-            self.cacheWriteOneHour = cacheWriteOneHour ?? cacheWrite
-            self.cacheRead = cacheRead
-            self.output = output
-            self.cacheReadExplicit = cacheReadExplicit
-        }
     }
 
     private let fileManager: FileManager
     private let calendar: Calendar
+    /// A usage record plus the identity Claude records are de-duplicated by.
+    private struct CachedRecord {
+        let id: String?
+        let record: UsageRecord
+        /// `calendar.startOfDay(for: record.date)`, computed once at parse time
+        /// (it dominated re-scan time when recomputed for every record).
+        let day: Date
+    }
+
+    /// Parsed state of one JSONL file, reused while the file is unchanged and
+    /// extended from `parsedBytes` when it only grew.
+    private struct FileScan {
+        var size: Int
+        var modified: Date
+        /// Offset just past the last newline consumed.
+        var parsedBytes = 0
+        /// Non-empty complete lines consumed (Claude fallback record ids).
+        var lineCount = 0
+        /// Codex: the model in effect at `parsedBytes`.
+        var codexModel: String?
+        var records: [CachedRecord] = []
+        /// From an unterminated last line (still being written); re-read on
+        /// the next change instead of being committed twice.
+        var tailRecords: [CachedRecord] = []
+
+        var allRecords: [CachedRecord] { records + tailRecords }
+    }
+
+    private var fileScans: [String: FileScan] = [:]
+    /// Catalog lookups per model string for the current `usage` call (tens of
+    /// thousands of records share a handful of models; the catalog may change
+    /// between calls, so this is cleared each time).
+    private var entryCache: [String: ModelCatalog.Model?] = [:]
+    private static let readChunkSize = 1 << 20
+    private static let claudeMarkers: [[UInt8]] = [Array(#""usage""#.utf8)]
+    private static let codexMarkers: [[UInt8]] = [
+        Array(#""token_count""#.utf8),
+        Array(#""model""#.utf8),
+        Array(#""model_name""#.utf8)
+    ]
+
+    private let claudeCatalog: ModelCatalogStore
+    private let codexCatalog: ModelCatalogStore
+    /// Model ids seen in this scan that the catalog could not price.
+    private var unpricedModels = Set<String>()
 
     /// Codex and Claude JSONL timestamps are ISO-8601 UTC values. Keep the
     /// displayed day buckets aligned with the log's calendar rather than the
@@ -83,9 +118,16 @@ final class LocalUsageProvider {
         return formatter
     }()
 
-    init(fileManager: FileManager = .default, calendar: Calendar? = nil) {
+    init(
+        fileManager: FileManager = .default,
+        calendar: Calendar? = nil,
+        claudeCatalog: ModelCatalogStore = .claude,
+        codexCatalog: ModelCatalogStore = .codex
+    ) {
         self.fileManager = fileManager
         self.calendar = calendar ?? Self.logCalendar
+        self.claudeCatalog = claudeCatalog
+        self.codexCatalog = codexCatalog
     }
 
     func usage(for tool: ToolID, baseURL: URL? = nil, now: Date = Date()) -> TokenUsageSummary {
@@ -98,9 +140,15 @@ final class LocalUsageProvider {
         if let root, fileManager.fileExists(atPath: root.path) {
             switch tool {
             case .claude:
+                unpricedModels.removeAll()
+                entryCache.removeAll()
                 buckets = claudeBuckets(in: root, since: since)
+                if !unpricedModels.isEmpty { claudeCatalog.reportUnpricedModels(unpricedModels) }
             case .codex:
+                unpricedModels.removeAll()
+                entryCache.removeAll()
                 buckets = codexBuckets(in: root, since: since)
+                if !unpricedModels.isEmpty { codexCatalog.reportUnpricedModels(unpricedModels) }
             }
         } else {
             buckets = [:]
@@ -124,49 +172,151 @@ final class LocalUsageProvider {
     }
 
     private func claudeBuckets(in root: URL, since: Date) -> [Date: UsageBucket] {
-        var recordsByID: [String: UsageRecord] = [:]
-        enumerateJSONL(in: root, since: since) { url in
-            guard let text = try? String(contentsOf: url, encoding: .utf8) else { return }
-            let lines = text.split(separator: "\n", omittingEmptySubsequences: true)
-            for (index, line) in lines.enumerated() {
-                guard let object = jsonObject(String(line)),
-                      let date = date(from: object),
-                      date >= since,
-                      let record = claudeRecord(from: object, date: date) else { continue }
-                let id = claudeIdentity(from: object) ?? "\(url.path)#\(index)"
-                if let existing = recordsByID[id], existing.totalTokens >= record.totalTokens { continue }
-                recordsByID[id] = record
+        var recordsByID: [String: CachedRecord] = [:]
+        for scan in scanFiles(in: root, tool: .claude, since: since) {
+            for cached in scan.allRecords where cached.record.date >= since {
+                guard let id = cached.id else { continue }
+                if let existing = recordsByID[id], existing.record.totalTokens >= cached.record.totalTokens { continue }
+                recordsByID[id] = cached
             }
         }
         return buckets(from: Array(recordsByID.values), pricing: claudeCost)
     }
 
     private func codexBuckets(in root: URL, since: Date) -> [Date: UsageBucket] {
-        var records: [UsageRecord] = []
-        enumerateJSONL(in: root, since: since) { url in
-            guard let text = try? String(contentsOf: url, encoding: .utf8) else { return }
-            var currentModel: String?
-            let lines = text.split(separator: "\n", omittingEmptySubsequences: true)
-            for line in lines {
-                guard let object = jsonObject(String(line)) else { continue }
-                currentModel = model(from: object) ?? currentModel
-                guard let date = date(from: object),
-                      date >= since,
-                      let record = codexRecord(from: object, date: date, model: currentModel) else { continue }
-                records.append(record)
-            }
-        }
+        let records = scanFiles(in: root, tool: .codex, since: since)
+            .flatMap(\.allRecords)
+            .filter { $0.record.date >= since }
         return buckets(from: records, pricing: codexCost)
     }
 
+    /// Up-to-date scans of every log file touched since `since`, in enumeration
+    /// order. Cached scans of files that dropped out (deleted or too old) are
+    /// released.
+    private func scanFiles(in root: URL, tool: ToolID, since: Date) -> [FileScan] {
+        let prefix = "\(tool.rawValue):\(root.standardizedFileURL.path)/"
+        var seen = Set<String>()
+        var scans: [FileScan] = []
+        enumerateJSONL(in: root, since: since) { url, size, modified in
+            let key = "\(tool.rawValue):\(url.standardizedFileURL.path)"
+            seen.insert(key)
+            let scan = updatedScan(of: url, key: key, tool: tool, size: size, modified: modified)
+            fileScans[key] = scan
+            scans.append(scan)
+        }
+        for key in fileScans.keys where key.hasPrefix(prefix) && !seen.contains(key) {
+            fileScans[key] = nil
+        }
+        return scans
+    }
+
+    private func updatedScan(of url: URL, key: String, tool: ToolID, size: Int, modified: Date) -> FileScan {
+        if let cached = fileScans[key], cached.size == size, cached.modified == modified {
+            return cached
+        }
+        var scan: FileScan
+        if let cached = fileScans[key], size >= cached.parsedBytes {
+            // Appended to: keep what was parsed, re-read from the last newline.
+            scan = cached
+            scan.tailRecords = []
+        } else {
+            // New, truncated, or rewritten: parse from the start.
+            scan = FileScan(size: size, modified: modified)
+        }
+        scan.size = size
+        scan.modified = modified
+
+        let markers = tool == .claude ? Self.claudeMarkers : Self.codexMarkers
+        let consumed = readLines(of: url, from: scan.parsedBytes) { line, terminated in
+            guard line.count > 0 else { return }
+            let index = scan.lineCount
+            if terminated { scan.lineCount += 1 }
+            guard Self.contains(line, anyOf: markers),
+                  let object = try? JSONSerialization.jsonObject(with: Data(line)) as? [String: Any] else { return }
+            let parsed: CachedRecord?
+            switch tool {
+            case .claude:
+                parsed = date(from: object)
+                    .flatMap { claudeRecord(from: object, date: $0) }
+                    .map { CachedRecord(id: claudeIdentity(from: object) ?? "\(url.path)#\(index)", record: $0, day: calendar.startOfDay(for: $0.date)) }
+            case .codex:
+                // A tail line sees the committed model but never commits its own.
+                let model = model(from: object) ?? scan.codexModel
+                if terminated { scan.codexModel = model }
+                parsed = date(from: object)
+                    .flatMap { codexRecord(from: object, date: $0, model: model) }
+                    .map { CachedRecord(id: nil, record: $0, day: calendar.startOfDay(for: $0.date)) }
+            }
+            guard let parsed else { return }
+            if terminated { scan.records.append(parsed) } else { scan.tailRecords.append(parsed) }
+        }
+        if let consumed { scan.parsedBytes = consumed }
+        return scan
+    }
+
+    /// Streams `url` from `offset` in 1 MB chunks, calling `body` with each
+    /// line's bytes (newline excluded). A final line without a newline is
+    /// passed with `terminated == false`. Returns the offset just past the last
+    /// newline, or nil when the file cannot be read.
+    private func readLines(
+        of url: URL,
+        from offset: Int,
+        _ body: (UnsafeRawBufferPointer, _ terminated: Bool) -> Void
+    ) -> Int? {
+        guard let handle = try? FileHandle(forReadingFrom: url) else { return nil }
+        defer { try? handle.close() }
+        do { try handle.seek(toOffset: UInt64(offset)) } catch { return nil }
+
+        var pending: [UInt8] = []
+        var consumed = offset
+        var reachedEnd = false
+        while !reachedEnd {
+            // Drain JSONSerialization's autoreleased objects per chunk; without
+            // this a large file's objects pile up until the whole scan returns.
+            autoreleasepool {
+                guard let chunk = try? handle.read(upToCount: Self.readChunkSize), !chunk.isEmpty else {
+                    reachedEnd = true
+                    return
+                }
+                pending.append(contentsOf: chunk)
+                var lineStart = 0
+                pending.withUnsafeBytes { raw in
+                    guard let base = raw.baseAddress else { return }
+                    while lineStart < raw.count,
+                          let newline = memchr(base + lineStart, 0x0A, raw.count - lineStart) {
+                        let lineEnd = base.distance(to: UnsafeRawPointer(newline))
+                        body(UnsafeRawBufferPointer(rebasing: raw[lineStart..<lineEnd]), true)
+                        lineStart = lineEnd + 1
+                    }
+                }
+                consumed += lineStart
+                pending.removeFirst(lineStart)
+            }
+        }
+        if !pending.isEmpty {
+            pending.withUnsafeBytes { body($0, false) }
+        }
+        return consumed
+    }
+
+    /// Cheap pre-filter before JSON parsing: most log lines (tool output,
+    /// response text) can never produce a record.
+    private static func contains(_ line: UnsafeRawBufferPointer, anyOf markers: [[UInt8]]) -> Bool {
+        guard let base = line.baseAddress else { return false }
+        return markers.contains { marker in
+            marker.withUnsafeBytes { needle in
+                memmem(base, line.count, needle.baseAddress, needle.count) != nil
+            }
+        }
+    }
+
     private func buckets(
-        from records: [UsageRecord],
+        from records: [CachedRecord],
         pricing: (UsageRecord) -> Double?
     ) -> [Date: UsageBucket] {
-        records.reduce(into: [Date: UsageBucket]()) { buckets, record in
-            let day = calendar.startOfDay(for: record.date)
-            let cost = record.explicitCostUSD ?? pricing(record)
-            buckets[day, default: UsageBucket()].add(tokens: record.totalTokens, cost: cost)
+        records.reduce(into: [Date: UsageBucket]()) { buckets, cached in
+            let cost = cached.record.explicitCostUSD ?? pricing(cached.record)
+            buckets[cached.day, default: UsageBucket()].add(tokens: cached.record.totalTokens, cost: cost)
         }
     }
 
@@ -239,22 +389,22 @@ final class LocalUsageProvider {
 
     private func codexCost(_ record: UsageRecord) -> Double? {
         // Older Codex Desktop/VSCodium session files omit the model entirely.
-        // Their token-count shape is still authoritative, so use the app's
-        // bounded Sol warm-up tier as the explicit estimate baseline. An
-        // unknown model string remains unavailable rather than being silently
-        // priced as a different model.
-        let rates = record.model == nil
-            ? codexRates(for: "gpt-5.6-sol")
-            : codexRates(for: record.model)
-        guard let rates else { return nil }
+        // Their token-count shape is still authoritative, so they are priced as
+        // the catalog's `unlabeledModel`. An unknown model string remains
+        // unavailable rather than being silently priced as a different model.
+        guard let catalog = codexCatalog.catalog else { return nil }
+        guard let entry = cachedEntry(record.model ?? catalog.unlabeledModel, in: catalog) else {
+            if let model = record.model, !model.isEmpty { unpricedModels.insert(model) }
+            return nil
+        }
+        let rates = rates(entry)
         let cached = min(record.cachedInputTokens, record.inputTokens)
         let uncached = max(0, record.inputTokens - cached)
-        let cachedRate = rates.cacheReadExplicit ? rates.cacheRead : rates.input
-        let longContext = record.inputTokens > 272_000
-        let inputMultiplier = longContext ? 2.0 : 1.0
-        let outputMultiplier = longContext ? 1.5 : 1.0
+        let longContext = catalog.longContext.flatMap { record.inputTokens > $0.inputTokensAbove ? $0 : nil }
+        let inputMultiplier = longContext?.inputMultiplier ?? 1.0
+        let outputMultiplier = longContext?.outputMultiplier ?? 1.0
         return ((Double(uncached) * rates.input * inputMultiplier)
-            + (Double(cached) * cachedRate * inputMultiplier)
+            + (Double(cached) * rates.cacheRead * inputMultiplier)
             + (Double(record.outputTokens) * rates.output * outputMultiplier)) / 1_000_000
     }
 
@@ -273,118 +423,36 @@ final class LocalUsageProvider {
             + (Double(outputTokens) * rates.output)) / 1_000_000
     }
 
+    /// Prices come from the tool's model catalog (`ModelCatalogStore`), so a
+    /// new model or price change is picked up without an app release. A model
+    /// the catalog cannot price stays unpriced (cost shown as unavailable) and
+    /// is reported so the catalog refreshes early.
+    private func cachedEntry(_ model: String?, in catalog: ModelCatalog) -> ModelCatalog.Model? {
+        guard let model else { return nil }
+        if let cached = entryCache[model] { return cached }
+        let entry = catalog.model(for: model)
+        entryCache[model] = entry
+        return entry
+    }
+
     private func claudeRates(for model: String?) -> ModelRates? {
         guard let model, !model.isEmpty else { return nil }
-        let text = model.lowercased()
-        if text.contains("fable-5-1") || text.contains("fable-5.1") {
-            return ModelRates(input: 10.0, cacheWrite: 12.5, cacheWriteOneHour: 20.0, cacheRead: 0.25, output: 50.0, cacheReadExplicit: true)
-        }
-        if text.contains("fable-5") {
-            return ModelRates(input: 10.0, cacheWrite: 12.5, cacheWriteOneHour: 20.0, cacheRead: 1.0, output: 50.0, cacheReadExplicit: true)
-        }
-        // Claude Opus 5.5 (claude-opus-5-5, 2026-09-22): $4 in / $20 out,
-        // 5m write $5, 1h write $8, cache read $0.20 (0.05x — not the usual
-        // 0.10x). Must precede the generic opus-5 check below, which would
-        // otherwise mis-price 5.5 at Opus 5 rates.
-        if text.contains("opus-5-5") || text.contains("opus-5.5") || text.contains("opus 5.5") {
-            return ModelRates(input: 4.0, cacheWrite: 5.0, cacheWriteOneHour: 8.0, cacheRead: 0.20, output: 20.0, cacheReadExplicit: true)
-        }
-        if text.contains("opus-5") {
-            return ModelRates(input: 5.0, cacheWrite: 6.25, cacheWriteOneHour: 10.0, cacheRead: 0.50, output: 25.0, cacheReadExplicit: true)
-        }
-        if text.contains("sonnet-5") {
-            return ModelRates(input: 2.0, cacheWrite: 2.50, cacheWriteOneHour: 4.0, cacheRead: 0.20, output: 10.0, cacheReadExplicit: true)
-        }
-        if text.contains("opus") {
-            if usesModernOpusPricing(text) {
-                return ModelRates(input: 5.0, cacheWrite: 6.25, cacheWriteOneHour: 10.0, cacheRead: 0.50, output: 25.0, cacheReadExplicit: true)
-            }
-            return ModelRates(input: 15.0, cacheWrite: 18.75, cacheWriteOneHour: 30.0, cacheRead: 1.50, output: 75.0, cacheReadExplicit: true)
-        }
-        if text.contains("haiku") {
-            if text.contains("3-5") || text.contains("3.5") {
-                return ModelRates(input: 0.80, cacheWrite: 1.0, cacheWriteOneHour: 1.60, cacheRead: 0.08, output: 4.0, cacheReadExplicit: true)
-            }
-            if text.contains("claude-3-haiku") || text.contains("haiku-3") {
-                return ModelRates(input: 0.25, cacheWrite: 0.3125, cacheWriteOneHour: 0.50, cacheRead: 0.03, output: 1.25, cacheReadExplicit: true)
-            }
-            if text.contains("4-5") || text.contains("4.5") || text == "haiku" {
-                return ModelRates(input: 1.0, cacheWrite: 1.25, cacheWriteOneHour: 2.0, cacheRead: 0.10, output: 5.0, cacheReadExplicit: true)
-            }
+        guard let catalog = claudeCatalog.catalog, let entry = cachedEntry(model, in: catalog) else {
+            // `<synthetic>` and similar placeholders are not real models.
+            if !model.hasPrefix("<") { unpricedModels.insert(model) }
             return nil
         }
-        if text.contains("sonnet-4") || text == "sonnet" {
-            return ModelRates(input: 3.0, cacheWrite: 3.75, cacheWriteOneHour: 6.0, cacheRead: 0.30, output: 15.0, cacheReadExplicit: true)
-        }
-        return nil
+        return rates(entry)
     }
 
-    private func codexRates(for model: String?) -> ModelRates? {
-        guard let model, !model.isEmpty else { return nil }
-        let rawText = model.lowercased()
-        let text = rawText.split(separator: "/").last.map(String.init) ?? rawText
-        if text == "codex-auto-review" || text.hasPrefix("codex-auto-review-") {
-            // Guardian/reviewer sessions use a logical label in their settings
-            // event. Price them at the configured Sol tier instead of making
-            // every bucket containing a review unavailable.
-            return codexRates(for: "gpt-5.6-sol")
-        }
-        if text == "gpt-5-codex" {
-            return codexRates(for: "gpt-5.3-codex")
-        }
-        if text == "gpt-5.1-codex-max" {
-            return codexRates(for: "gpt-5.1-codex")
-        }
-        if matches(text, "gpt-6-astra") {
-            return ModelRates(input: 10.0, cacheWrite: 12.5, cacheRead: 1.0, output: 50.0, cacheReadExplicit: true)
-        }
-        // GPT-6 Sol / Luna (2026-09-22, gpt-6-sol / gpt-6-luna): Sol $2 in /
-        // $10 out (cached $0.20, writes $2.50), Luna $0.10 in / $0.50 out
-        // (cached $0.01, writes $0.125). GPT-6 family has no Terra tier.
-        if matches(text, "gpt-6-sol") {
-            return ModelRates(input: 2.0, cacheWrite: 2.5, cacheRead: 0.20, output: 10.0, cacheReadExplicit: true)
-        }
-        if matches(text, "gpt-6-luna") {
-            return ModelRates(input: 0.10, cacheWrite: 0.125, cacheRead: 0.01, output: 0.50, cacheReadExplicit: true)
-        }
-        if matches(text, "gpt-5.6-sol") || text == "gpt-5.6" {
-            return ModelRates(input: 4.0, cacheWrite: 4.0, cacheRead: 0.40, output: 20.0, cacheReadExplicit: true)
-        }
-        if matches(text, "gpt-5.6-luna") {
-            return ModelRates(input: 0.20, cacheWrite: 0.20, cacheRead: 0.020, output: 1.20, cacheReadExplicit: true)
-        }
-        if matches(text, "gpt-5.6-terra") {
-            return ModelRates(input: 2.0, cacheWrite: 2.0, cacheRead: 0.20, output: 12.0, cacheReadExplicit: true)
-        }
-        switch text {
-        case "gpt-5.5":
-            return ModelRates(input: 5.0, cacheWrite: 5.0, cacheRead: 0.50, output: 30.0, cacheReadExplicit: true)
-        case "gpt-5.4":
-            return ModelRates(input: 2.5, cacheWrite: 2.5, cacheRead: 0.25, output: 15.0, cacheReadExplicit: true)
-        case "gpt-5.4-mini":
-            return ModelRates(input: 0.75, cacheWrite: 0.75, cacheRead: 0.075, output: 4.5, cacheReadExplicit: true)
-        case "gpt-5.4-nano":
-            return ModelRates(input: 0.20, cacheWrite: 0.20, cacheRead: 0.020, output: 1.25, cacheReadExplicit: true)
-        case "gpt-5.3-codex", "gpt-5.3-spark", "gpt-5.3-codex-spark", "gpt-5.2", "gpt-5.2-codex":
-            return ModelRates(input: 1.75, cacheWrite: 1.75, cacheRead: 0.175, output: 14.0, cacheReadExplicit: true)
-        case "gpt-5", "gpt-5.1", "gpt-5.1-codex":
-            return ModelRates(input: 1.25, cacheWrite: 1.25, cacheRead: 0.125, output: 10.0, cacheReadExplicit: true)
-        case "gpt-5-mini", "gpt-5.1-codex-mini":
-            return ModelRates(input: 0.25, cacheWrite: 0.25, cacheRead: 0.025, output: 2.0, cacheReadExplicit: true)
-        case "gpt-5-nano":
-            return ModelRates(input: 0.05, cacheWrite: 0.05, cacheRead: 0.005, output: 0.40, cacheReadExplicit: true)
-        default:
-            return nil
-        }
-    }
-
-    private func matches(_ model: String, _ base: String) -> Bool {
-        model == base || model.hasPrefix(base + "-")
-    }
-
-    private func usesModernOpusPricing(_ model: String) -> Bool {
-        ["4-5", "4.5", "4_5", "4-6", "4.6", "4_6", "4-7", "4.7", "4_7", "4-8", "4.8", "4_8", "latest"]
-            .contains { model.contains($0) }
+    private func rates(_ entry: ModelCatalog.Model) -> ModelRates {
+        ModelRates(
+            input: entry.input,
+            cacheWriteFiveMinute: entry.cacheWrite5m,
+            cacheWriteOneHour: entry.cacheWrite1h,
+            cacheRead: entry.cacheRead,
+            output: entry.output
+        )
     }
 
     private func usageObject(from object: [String: Any]) -> [String: Any]? {
@@ -519,10 +587,11 @@ final class LocalUsageProvider {
         return nil
     }
 
-    private func enumerateJSONL(in directory: URL, since: Date, handler: (URL) -> Void) {
+    private func enumerateJSONL(in directory: URL, since: Date, handler: (URL, Int, Date) -> Void) {
+        let keys: [URLResourceKey] = [.contentModificationDateKey, .fileSizeKey, .isDirectoryKey]
         guard let enumerator = fileManager.enumerator(
             at: directory,
-            includingPropertiesForKeys: [.contentModificationDateKey, .isDirectoryKey],
+            includingPropertiesForKeys: keys,
             options: [.skipsHiddenFiles]
         ) else { return }
 
@@ -530,19 +599,12 @@ final class LocalUsageProvider {
         for case let url as URL in enumerator {
             count += 1
             if count > 50_000 { break }
-            guard url.pathExtension == "jsonl" else { continue }
-            if let mtime = (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate,
-               mtime < since {
-                continue
-            }
-            handler(url)
+            guard url.pathExtension == "jsonl",
+                  let values = try? url.resourceValues(forKeys: Set(keys)),
+                  let modified = values.contentModificationDate,
+                  modified >= since else { continue }
+            handler(url, values.fileSize ?? 0, modified)
         }
-    }
-
-    private func jsonObject(_ line: String) -> [String: Any]? {
-        guard let data = line.data(using: .utf8),
-              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
-        return object
     }
 
     private func intValue(_ value: Any?) -> Int {

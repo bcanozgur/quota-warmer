@@ -1,0 +1,51 @@
+{
+  "schemaVersion": 1,
+  "revision": 1,
+  "updatedAt": "2026-09-30",
+  "source": "https://developers.openai.com/api/docs/pricing",
+  "upstream": {
+    "url": "https://developers.openai.com/api/docs/pricing.md",
+    "format": "openai",
+    "include": "^gpt-([5-9]|[1-9][0-9])",
+    "cheapestAmong": "^gpt-[0-9.]+-luna$"
+  },
+  "warmup": {
+    "models": ["gpt-5.6-luna", "gpt-6-luna"],
+    "cheapestModel": "gpt-6-luna"
+  },
+  "aliases": {
+    "gpt-5.6": "gpt-5.6-sol"
+  },
+  "defaultMatch": "exact",
+  "unlabeledModel": "gpt-5.6-sol",
+  "longContext": {
+    "inputTokensAbove": 272000,
+    "inputMultiplier": 2,
+    "outputMultiplier": 1.5
+  },
+  "models": [
+    { "id": "gpt-6-astra", "match": "prefix", "input": 10, "cacheWrite5m": 12.5, "cacheWrite1h": 12.5, "cacheRead": 1, "output": 50 },
+    { "id": "gpt-6.1-sol", "match": "prefix", "input": 2, "cacheWrite5m": 2.5, "cacheWrite1h": 2.5, "cacheRead": 0.1, "output": 10 },
+    { "id": "gpt-6-sol", "match": "prefix", "input": 2, "cacheWrite5m": 2.5, "cacheWrite1h": 2.5, "cacheRead": 0.2, "output": 10 },
+    { "id": "gpt-6-luna", "match": "prefix", "input": 0.1, "cacheWrite5m": 0.125, "cacheWrite1h": 0.125, "cacheRead": 0.01, "output": 0.5 },
+    { "id": "gpt-5.6-sol", "aliases": ["codex-auto-review"], "match": "prefix", "input": 4, "cacheWrite5m": 5, "cacheWrite1h": 5, "cacheRead": 0.4, "output": 20 },
+    { "id": "gpt-5.6-terra", "match": "prefix", "input": 2, "cacheWrite5m": 2.5, "cacheWrite1h": 2.5, "cacheRead": 0.2, "output": 12 },
+    { "id": "gpt-5.6-luna", "match": "prefix", "input": 0.2, "cacheWrite5m": 0.25, "cacheWrite1h": 0.25, "cacheRead": 0.02, "output": 1.2 },
+    { "id": "gpt-5.5", "input": 5, "cacheWrite5m": 5, "cacheWrite1h": 5, "cacheRead": 0.5, "output": 30 },
+    { "id": "gpt-5.5-pro", "input": 30, "cacheWrite5m": 30, "cacheWrite1h": 30, "cacheRead": 30, "output": 180 },
+    { "id": "gpt-5.4", "input": 2.5, "cacheWrite5m": 2.5, "cacheWrite1h": 2.5, "cacheRead": 0.25, "output": 15 },
+    { "id": "gpt-5.4-mini", "input": 0.75, "cacheWrite5m": 0.75, "cacheWrite1h": 0.75, "cacheRead": 0.075, "output": 4.5 },
+    { "id": "gpt-5.4-nano", "input": 0.2, "cacheWrite5m": 0.2, "cacheWrite1h": 0.2, "cacheRead": 0.02, "output": 1.25 },
+    { "id": "gpt-5.4-pro", "input": 30, "cacheWrite5m": 30, "cacheWrite1h": 30, "cacheRead": 30, "output": 180 },
+    { "id": "gpt-5.3-codex", "aliases": ["gpt-5.3-spark", "gpt-5.3-codex-spark", "gpt-5.2-codex", "gpt-5-codex"], "input": 1.75, "cacheWrite5m": 1.75, "cacheWrite1h": 1.75, "cacheRead": 0.175, "output": 14 },
+    { "id": "gpt-5.2", "input": 1.75, "cacheWrite5m": 1.75, "cacheWrite1h": 1.75, "cacheRead": 0.175, "output": 14 },
+    { "id": "gpt-5.2-pro", "input": 21, "cacheWrite5m": 21, "cacheWrite1h": 21, "cacheRead": 21, "output": 168 },
+    { "id": "gpt-5.1-codex", "aliases": ["gpt-5.1-codex-max"], "input": 1.25, "cacheWrite5m": 1.25, "cacheWrite1h": 1.25, "cacheRead": 0.125, "output": 10 },
+    { "id": "gpt-5.1-codex-mini", "input": 0.25, "cacheWrite5m": 0.25, "cacheWrite1h": 0.25, "cacheRead": 0.025, "output": 2 },
+    { "id": "gpt-5.1", "input": 1.25, "cacheWrite5m": 1.25, "cacheWrite1h": 1.25, "cacheRead": 0.125, "output": 10 },
+    { "id": "gpt-5", "input": 1.25, "cacheWrite5m": 1.25, "cacheWrite1h": 1.25, "cacheRead": 0.125, "output": 10 },
+    { "id": "gpt-5-mini", "input": 0.25, "cacheWrite5m": 0.25, "cacheWrite1h": 0.25, "cacheRead": 0.025, "output": 2 },
+    { "id": "gpt-5-nano", "input": 0.05, "cacheWrite5m": 0.05, "cacheWrite1h": 0.05, "cacheRead": 0.005, "output": 0.4 },
+    { "id": "gpt-5-pro", "input": 15, "cacheWrite5m": 15, "cacheWrite1h": 15, "cacheRead": 15, "output": 120 }
+  ]
+}

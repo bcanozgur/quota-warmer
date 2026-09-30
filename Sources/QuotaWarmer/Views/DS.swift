@@ -75,7 +75,21 @@ enum DS {
     static let sidebarWidth: CGFloat = 56
     static let contentWidth: CGFloat = 372
     static let totalWidth:   CGFloat = sidebarWidth + contentWidth
-    static let totalHeight: CGFloat = 560
+    // Sized so the overview (header + status card + both provider cards) fits with no dead
+    // space below; longer tabs (Settings) scroll.
+    static let totalHeight: CGFloat = 436
+
+    // MARK: - Page layout
+    // Shared by every tab so the title, cards and edges line up when switching.
+    enum Page {
+        static let top: CGFloat = 24          // content top inset
+        static let side: CGFloat = 10         // content left/right inset
+        static let bottom: CGFloat = 10       // content bottom inset
+        static let spacing: CGFloat = 10      // gap between header / cards
+        static let headerHeight: CGFloat = 28
+        static let titleSize: CGFloat = 18
+        static let cardPadding: CGFloat = 12  // inner padding of content cards
+    }
 
     // MARK: - Typography
     static func mono(_ size: CGFloat, weight: Font.Weight = .regular) -> Font {

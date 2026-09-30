@@ -9,6 +9,7 @@ struct SettingsTabView: View {
     @AppStorage("notifyActivated")   private var notifyActivated: Bool   = true
     @State private var launchAtLogin: Bool = SMAppService.mainApp.status == .enabled
     @State private var launchAtLoginError: String?
+    @State private var historyExpanded = false
     @AppStorage("rateLimitGuard")    private var rateLimitGuard: Bool    = true
 
     @AppStorage("morningPrewarmHour")         private var morningHour: Int         = 6
@@ -139,6 +140,10 @@ struct SettingsTabView: View {
                     }
                 }
 
+                group("HISTORY") {
+                    historyContent
+                }
+
                 group("HOW IT WORKS") {
                     transparencyRow(
                         "What QuotaWarmer does",
@@ -176,7 +181,7 @@ struct SettingsTabView: View {
                         VStack(alignment: .leading, spacing: 2) {
                             Text("QuotaWarmer")
                                 .font(.system(size: 12.5, weight: .semibold)).foregroundStyle(DS.C.text)
-                            Text("v1.0  ·  macOS 14+")
+                            Text("Version \(appVersion)  ·  macOS 14+")
                                 .font(.system(size: 10)).foregroundStyle(DS.C.textMuted)
                         }
                         Spacer()
@@ -237,8 +242,69 @@ struct SettingsTabView: View {
                     .buttonStyle(.plain)
                 }
             }
+            .padding(.bottom, DS.Page.bottom)
         }
         .background(DS.C.bg)
+    }
+
+    private var appVersion: String {
+        let info = Bundle.main.infoDictionary
+        let version = info?["CFBundleShortVersionString"] as? String ?? "1.0"
+        if let build = info?["CFBundleVersion"] as? String, build != version {
+            return "\(version) (\(build))"
+        }
+        return version
+    }
+
+    // MARK: - History
+
+    /// Collapsible list of the latest events (moved here from the overview so
+    /// the main panel stays focused on the live quota windows).
+    private var historyContent: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Button(action: { historyExpanded.toggle() }) {
+                HStack(spacing: DS.Space.sm) {
+                    Image(systemName: "clock.arrow.circlepath")
+                        .font(.system(size: 12.5, weight: .medium))
+                        .foregroundStyle(DS.C.textSub)
+                        .frame(width: 20)
+                    Text("Recent Events")
+                        .font(.system(size: 11.5, weight: .medium))
+                        .foregroundStyle(DS.C.text)
+                    Spacer()
+                    Text("\(appState.history.count)")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(DS.C.textMuted)
+                    Image(systemName: historyExpanded ? "chevron.up" : "chevron.down")
+                        .font(.system(size: 9, weight: .semibold))
+                        .foregroundStyle(DS.C.textMuted)
+                }
+                .padding(.horizontal, DS.Space.md)
+                .padding(.vertical, DS.Space.sm + 2)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(PressableButtonStyle())
+            .accessibilityLabel(Text(historyExpanded ? "Collapse history" : "Expand history"))
+
+            if historyExpanded {
+                Divider().background(DS.C.border).padding(.leading, 36)
+                if appState.history.isEmpty {
+                    Text("No events yet")
+                        .font(.system(size: 10))
+                        .foregroundStyle(DS.C.textMuted)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, DS.Space.lg)
+                } else {
+                    LazyVStack(alignment: .leading, spacing: 7) {
+                        ForEach(appState.history.prefix(10)) { event in
+                            HistoryRow(event: event)
+                        }
+                    }
+                    .padding(.horizontal, DS.Space.md)
+                    .padding(.vertical, DS.Space.sm + 2)
+                }
+            }
+        }
     }
 
     // MARK: - Layout helpers
@@ -280,29 +346,24 @@ struct SettingsTabView: View {
     }
 
     private var settingsHeader: some View {
-        Text("SETTINGS")
-            .font(.system(size: 10, weight: .bold))
-            .foregroundStyle(DS.C.textMuted)
-            .padding(.horizontal, DS.Space.lg)
-            .padding(.top, DS.Space.lg)
-            .padding(.bottom, DS.Space.sm)
+        PanelHeader(title: "Settings") { EmptyView() }
+            .padding(.horizontal, DS.Page.side)
+            .padding(.top, DS.Page.top)
     }
 
     private func group<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
         VStack(alignment: .leading, spacing: 0) {
             Text(title)
-                .font(.system(size: 9, weight: .bold))
-                .foregroundStyle(DS.C.textMuted)
-                .padding(.horizontal, DS.Space.lg)
+                .dsSectionLabel()
+                .padding(.horizontal, DS.Page.side + 2)
                 .padding(.top, DS.Space.md)
-                .padding(.bottom, DS.Space.xs)
+                .padding(.bottom, DS.Space.xs + 2)
 
             VStack(spacing: 0) {
                 content()
             }
             .dsCard()
-            .padding(.horizontal, DS.Space.lg)
-            .padding(.bottom, DS.Space.sm)
+            .padding(.horizontal, DS.Page.side)
         }
     }
 
@@ -321,6 +382,8 @@ struct SettingsTabView: View {
                 Text(title)
                     .font(.system(size: 11.5, weight: .medium))
                     .foregroundStyle(DS.C.text)
+                    .lineLimit(1)
+                    .fixedSize()
                 Text(subtitle)
                     .font(.system(size: 9.5))
                     .foregroundStyle(DS.C.textMuted)
@@ -329,7 +392,7 @@ struct SettingsTabView: View {
             control()
         }
         .padding(.horizontal, DS.Space.md)
-        .padding(.vertical, DS.Space.sm + 2)
+        .padding(.vertical, DS.Space.sm - 1)
     }
 
     private func privacyLine(_ title: String, _ detail: String) -> some View {
@@ -379,7 +442,9 @@ struct SettingsTabView: View {
                 Button(action: { selected.wrappedValue = opt.value; onChange() }) {
                     Text(opt.label)
                         .font(.system(size: 9, weight: .semibold))
-                        .padding(.horizontal, 8).padding(.vertical, 4)
+                        .lineLimit(1)
+                        .fixedSize()
+                        .padding(.horizontal, 6).padding(.vertical, 4)
                         .background(
                             isSelected ? DS.C.surface : Color.clear,
                             in: RoundedRectangle(cornerRadius: 6, style: .continuous)

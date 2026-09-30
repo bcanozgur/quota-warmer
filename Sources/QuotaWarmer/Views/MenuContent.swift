@@ -24,8 +24,6 @@ enum AppTab: Hashable {
 
 struct MenuContent: View {
     @EnvironmentObject var appState: AppState
-    private let ticker = Timer.publish(every: 30, on: .main, in: .common).autoconnect()
-    @State private var now = Date()
 
     var body: some View {
         panel
@@ -41,22 +39,17 @@ struct MenuContent: View {
                 RoundedRectangle(cornerRadius: DS.R.xl, style: .continuous)
                     .stroke(DS.C.border, lineWidth: 1)
             )
-            .shadow(color: .black.opacity(0.16), radius: 18, x: 0, y: 8)
             .padding(2)
             .background(WindowTransparencyConfigurator())
-            .onReceive(ticker) { t in now = t }
     }
 
     private var panel: some View {
-        VStack(spacing: 0) {
-            HStack(spacing: 0) {
-                sidebar
-                Rectangle()
-                    .fill(DS.C.border)
-                    .frame(width: 1)
-                mainContent
-            }
-            footerStrip
+        HStack(spacing: 0) {
+            sidebar
+            Rectangle()
+                .fill(DS.C.border)
+                .frame(width: 1)
+            mainContent
         }
         .background(DS.C.bg)
     }
@@ -116,7 +109,8 @@ struct MenuContent: View {
                     toolState: appState.state(for: id),
                     onSetMode: { appState.setMode($0, for: id) },
                     onActivate: { appState.activate(id) },
-                    onRefresh: { Task { await appState.refreshQuotaManually(for: id) } }
+                    onRefresh: { Task { await appState.refreshQuotaManually(for: id) } },
+                    isPanelVisible: { appState.isPanelVisible }
                 )
                 .frame(width: DS.contentWidth)
                 .frame(maxHeight: .infinity)
@@ -129,95 +123,6 @@ struct MenuContent: View {
                 .frame(width: DS.contentWidth)
                 .frame(maxHeight: .infinity)
         }
-    }
-
-    // MARK: - Footer
-
-    private var footerStrip: some View {
-        HStack(spacing: 12) {
-            if let warning = appState.watcherStatusText {
-                HStack(spacing: 5) {
-                    Image(systemName: "exclamationmark.triangle.fill")
-                        .font(.system(size: 10, weight: .semibold))
-                    Text(warning)
-                        .font(.system(size: 11.5, weight: .semibold))
-                }
-                .foregroundStyle(DS.C.yellow)
-                .help("QuotaWarmer hasn't completed a quota check recently — it may be offline or blocked.")
-            } else if let update = appState.updateInfo {
-                Button(action: { NSWorkspace.shared.open(update.htmlURL) }) {
-                    Text("Restart to update")
-                        .font(.system(size: 12, weight: .semibold))
-                        .foregroundStyle(DS.C.red)
-                        .padding(.horizontal, 12)
-                        .frame(height: 26)
-                        .background(DS.C.red.opacity(0.10), in: Capsule())
-                        .overlay(Capsule().stroke(DS.C.red.opacity(0.22), lineWidth: 1))
-                }
-                .buttonStyle(PressableButtonStyle())
-            } else {
-                Text("QuotaWarmer v\(appVersion)")
-                    .font(.system(size: 11.5, weight: .medium))
-                    .foregroundStyle(DS.C.textMuted)
-            }
-
-            Spacer()
-
-            Button(action: footerAction) {
-                HStack(spacing: 5) {
-                    if isFooterRefreshing {
-                        Image(systemName: "hourglass")
-                            .font(.system(size: 11, weight: .medium))
-                    }
-                    Text(footerStatus)
-                }
-                .font(.system(size: 11.5, weight: .medium))
-                .foregroundStyle(DS.C.textSub)
-            }
-            .buttonStyle(.plain)
-            .disabled(!canRefreshFromFooter)
-        }
-        .frame(height: 38)
-        .padding(.horizontal, 12)
-        .background(DS.C.bg)
-        .overlay(Rectangle().fill(DS.C.border).frame(height: 1), alignment: .top)
-    }
-
-    private var appVersion: String {
-        Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0"
-    }
-
-    private var footerStatus: String {
-        if case .tool(let tool) = appState.selectedTab {
-            let state = appState.state(for: tool)
-            if state.isFetchingQuota { return "Updating..." }
-            if let next = state.nextRefreshAt { return "Next update in \(compactCountdown(next))" }
-        }
-        return "Idle"
-    }
-
-    private var isFooterRefreshing: Bool {
-        if case .tool(let tool) = appState.selectedTab {
-            return appState.state(for: tool).isFetchingQuota
-        }
-        return appState.isRefreshing
-    }
-
-    private var canRefreshFromFooter: Bool {
-        if case .tool = appState.selectedTab { return true }
-        return false
-    }
-
-    private func footerAction() {
-        guard case .tool(let tool) = appState.selectedTab else { return }
-        Task { await appState.refreshQuotaManually(for: tool) }
-    }
-
-    private func compactCountdown(_ date: Date) -> String {
-        let seconds = max(0, Int(date.timeIntervalSince(now)))
-        if seconds < 60 { return "\(seconds)s" }
-        if seconds < 3600 { return "\(seconds / 60)m" }
-        return "\(seconds / 3600)h \((seconds % 3600) / 60)m"
     }
 }
 

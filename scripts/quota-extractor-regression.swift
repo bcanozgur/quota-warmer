@@ -2,7 +2,17 @@ import Foundation
 
 @main
 struct QuotaExtractorRegression {
-    static func main() {
+    static func main() async {
+        // Keep fixture events out of the app's /tmp diagnostics log. This only
+        // touches the test binary's own defaults domain.
+        DebugLevel.current = .off
+        // Price every test from the repo's catalog files (the same files the app
+        // bundles and fetches), never the network or a user cache.
+        for tool in ToolID.allCases {
+            let store = ModelCatalogStore.shared(for: tool)
+            store.remoteRefreshEnabled = false
+            require(store.adopt(repoCatalog(tool), source: "repo"), "Repo \(tool) catalog should install into the shared store")
+        }
         let provider = QuotaProvider()
         let formatter = ISO8601DateFormatter()
         let sessionReset = Date().addingTimeInterval((4 * 3600) + (57 * 60))
@@ -18,14 +28,33 @@ struct QuotaExtractorRegression {
         {"loggedIn":true,"authMethod":"oauth","apiProvider":"firstParty"}
         """)
         require(loggedInAuth?.loggedIn == true, "Claude auth status should parse logged-in JSON")
+        let claudeWarmup = ToolID.claude.warmupCommand
         require(
-            ToolID.claude.warmupCommand.contains("--max-turns 1")
-                && ToolID.claude.warmupCommand.contains("--tools ''")
-                && ToolID.claude.warmupCommand.contains("--model haiku")
-                && !ToolID.claude.warmupCommand.contains("--effort"),
-            "Claude warmup should pin Haiku to one no-tool turn without an unsupported effort"
+            claudeWarmup.contains("--max-turns 1")
+                && claudeWarmup.contains("--tools ''")
+                && claudeWarmup.contains("--model haiku")
+                && claudeWarmup.contains("--effort low")
+                && claudeWarmup.contains("--no-session-persistence"),
+            "Claude warmup should pin Haiku at the lowest effort to one no-tool, unsaved turn"
         )
-        require(ToolID.claude.fallbackWarmupCommand == nil, "Claude warmup must not fall back to an arbitrary default model")
+        require(
+            claudeWarmup.contains("--safe-mode")
+                && claudeWarmup.contains("--strict-mcp-config")
+                && claudeWarmup.contains("--system-prompt ")
+                && claudeWarmup.contains(#""alwaysThinkingEnabled":false"#),
+            "Claude warmup should skip user CLAUDE.md/MCP/skills context and thinking so one `hi` stays ~400 tokens"
+        )
+        require(
+            ToolID.claude.fallbackWarmupCommand?.contains("--model haiku") == true
+                && ToolID.claude.fallbackWarmupCommand?.contains("--max-turns 1") == true,
+            "Claude warmup fallback must stay pinned to Haiku, never the user's default model"
+        )
+        require(
+            WarmupRunner.isUnsupportedOptionFailure("error: unknown option '--safe-mode'")
+                && !WarmupRunner.isUnsupportedOptionFailure("API Error: 529 overloaded")
+                && !WarmupRunner.isUnsupportedOptionFailure("Claude usage limit reached"),
+            "Claude warmup fallback should trigger only for flags an older CLI rejects"
+        )
         require(
             ToolID.codex.warmupCommand.contains("--model gpt-5.6-luna")
                 && ToolID.codex.warmupCommand.contains(#"model_reasoning_effort="low""#)
@@ -660,9 +689,14 @@ access_token=private-value
         testLocalClaudeTokenUsage()
         testLocalClaudeOpenUsageCostCompatibility()
         testCurrentClaudePricing()
+        testClaudeCatalogMatchingAndValidation()
+        testCodexCatalogMatching()
+        testCatalogRevisionsAndUnpricedModels()
+        await testCatalogWarmupModelFallback()
         testLocalCodexTokenUsage()
         testCurrentCodexPricingAndUnknownModels()
         testCodexSessionMetadataModelAndUTCDayBuckets()
+        testIncrementalUsageScan()
 
         let visibleReadySources = [
             "Sources/QuotaWarmer/Views/MenuBarLabel.swift",
@@ -951,7 +985,10 @@ access_token=private-value
         let now = isoDate("2026-06-15T12:00:00Z")
         let cases: [(String, Double)] = [
             ("claude-fable-5-1", 92.75),
+            ("claude-mythos-5-1", 92.75),
+            ("claude-mythos-5", 93.50),
             ("claude-opus-5", 46.75),
+            ("claude-sonnet-5-5", 18.70),
             ("claude-opus-5-5", 37.20),
             ("claude-sonnet-5", 18.70),
             ("claude-haiku-4-5", 9.35)
@@ -966,6 +1003,301 @@ access_token=private-value
             ], to: root.appendingPathComponent("session.jsonl"))
             let summary = provider.usage(for: .claude, baseURL: root, now: now)
             requireClose(summary.today.costUSD, entry.1, "Current Claude pricing for \(entry.0)")
+        }
+    }
+
+    private static func repoCatalogPath(_ tool: ToolID) -> String {
+        "Sources/QuotaWarmer/Resources/\(ModelCatalogStore.resourceName(for: tool)).json"
+    }
+
+    private static func repoCatalog(_ tool: ToolID) -> ModelCatalog {
+        do {
+            return try ModelCatalog.decode(Data(contentsOf: URL(fileURLWithPath: repoCatalogPath(tool))))
+        } catch {
+            fatalError("Repo \(tool) catalog must decode and validate: \(error)")
+        }
+    }
+
+    /// A repo catalog as JSON, edited by `transform` (for invalid/newer copies).
+    private static func catalogData(_ tool: ToolID, _ transform: (inout [String: Any]) -> Void) -> Data {
+        guard let data = try? Data(contentsOf: URL(fileURLWithPath: repoCatalogPath(tool))),
+              var object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            fatalError("Repo \(tool) catalog must be a JSON object")
+        }
+        transform(&object)
+        guard let edited = try? JSONSerialization.data(withJSONObject: object) else {
+            fatalError("Edited \(tool) catalog must serialize")
+        }
+        return edited
+    }
+
+    private static func catalog(_ tool: ToolID, revision: Int, warmupModels: [String]? = nil) -> ModelCatalog {
+        let data = catalogData(tool) { object in
+            object["revision"] = revision
+            if let warmupModels { object["warmup"] = ["models": warmupModels] }
+        }
+        guard let catalog = try? ModelCatalog.decode(data) else {
+            fatalError("Edited \(tool) catalog revision \(revision) must validate")
+        }
+        return catalog
+    }
+
+    private static func decodedCatalog(_ data: Data) -> ModelCatalog {
+        do { return try ModelCatalog.decode(data) } catch { fatalError("Edited catalog must validate: \(error)") }
+    }
+
+    private static func isolatedCatalogStore(_ tool: ToolID, _ catalog: ModelCatalog, cacheURL: URL? = nil) -> ModelCatalogStore {
+        let store = ModelCatalogStore(
+            tool: tool,
+            bundle: nil,
+            cacheURL: cacheURL,
+            remoteURL: URL(string: "https://example.invalid/\(tool.rawValue)-models.json")!,
+            defaults: UserDefaults(suiteName: "quotawarmer-regression-\(UUID().uuidString)")!
+        )
+        store.remoteRefreshEnabled = false
+        store.adopt(catalog, source: "test")
+        return store
+    }
+
+    private static func testClaudeCatalogMatchingAndValidation() {
+        let catalog = repoCatalog(.claude)
+        let expectations: [(String, String?)] = [
+            ("claude-opus-5-5", "opus-5-5"),
+            ("claude-opus-5-5[1m]", "opus-5-5"),
+            ("Claude Opus 5.5", "opus-5-5"),
+            ("claude-sonnet-5-5", "sonnet-5-5"),
+            ("claude-sonnet-5", "sonnet-5"),
+            ("claude-opus-4-20250514", "opus-4"),
+            ("claude-opus-4-1-20250805", "opus-4-1"),
+            ("claude-opus-4-5@20251101", "opus-4-5"),
+            ("anthropic.claude-haiku-4-5-20251001-v1:0", "haiku-4-5"),
+            ("us.anthropic.claude-sonnet-4-5-20250929-v1:0", "sonnet-4-5"),
+            ("claude-3-5-haiku-20241022", "haiku-3-5"),
+            ("claude-3-haiku-20240307", "3-haiku"),
+            ("haiku", "haiku-4-5"),
+            // Unknown future models must stay unpriced (and get reported), not
+            // be priced as the nearest older family (opus-4 is 3x Opus 4.8).
+            ("claude-opus-4-9", nil),
+            ("claude-haiku-5", nil),
+            ("<synthetic>", nil)
+        ]
+        for (raw, id) in expectations {
+            require(catalog.model(for: raw)?.id == id, "Claude catalog should resolve \(raw) to \(id ?? "nil")")
+        }
+        for tool in ToolID.allCases {
+            let repo = repoCatalog(tool)
+            require(
+                repo.warmup.models.first == tool.defaultWarmupModel
+                    && repo.warmup.models.allSatisfy(ModelCatalog.isSafeWarmupModel),
+                "\(tool) catalog warm-up list should start with the built-in default model"
+            )
+            if let cheapest = repo.warmup.cheapestModel {
+                require(repo.models.contains { $0.id == cheapest }, "\(tool) catalog cheapestModel must name a catalog model")
+            }
+        }
+
+        let rejected: [(String, (inout [String: Any]) -> Void)] = [
+            ("shell metacharacters in a warm-up model", { $0["warmup"] = ["models": ["haiku; rm -rf ~"]] }),
+            ("command substitution in a warm-up model", { $0["warmup"] = ["models": ["$(curl example.com)"]] }),
+            ("quote in a warm-up model", { $0["warmup"] = ["models": ["haiku' -p 'x"]] }),
+            ("empty warm-up list", { $0["warmup"] = ["models": [String]()] }),
+            ("future schema", { $0["schemaVersion"] = 2 }),
+            ("dangling alias", { $0["aliases"] = ["haiku": "haiku-9"] }),
+            ("unresolvable unlabeled model", { $0["unlabeledModel"] = "gpt-99" }),
+            ("bad long-context multiplier", { $0["longContext"] = ["inputTokensAbove": 272000, "inputMultiplier": 0, "outputMultiplier": 1.5] }),
+            ("negative price", { object in
+                var models = object["models"] as? [[String: Any]] ?? []
+                models[0]["input"] = -1
+                object["models"] = models
+            })
+        ]
+        for tool in ToolID.allCases {
+            for (label, transform) in rejected {
+                require(
+                    (try? ModelCatalog.decode(catalogData(tool, transform))) == nil,
+                    "\(tool) catalog validation should reject \(label)"
+                )
+            }
+        }
+    }
+
+    private static func testCodexCatalogMatching() {
+        let catalog = repoCatalog(.codex)
+        let expectations: [(String, String?)] = [
+            ("gpt-5.6-luna", "gpt-5.6-luna"),
+            ("gpt-6-sol-2026-09-22", "gpt-6-sol"),
+            ("gpt-6.1-sol", "gpt-6.1-sol"),
+            ("openai/gpt-5.5", "gpt-5.5"),
+            ("gpt-5.6", "gpt-5.6-sol"),
+            ("codex-auto-review", "gpt-5.6-sol"),
+            ("codex-auto-review-high", "gpt-5.6-sol"),
+            ("gpt-5-codex", "gpt-5.3-codex"),
+            ("gpt-5.1-codex-max", "gpt-5.1-codex"),
+            ("gpt-5-mini", "gpt-5-mini"),
+            ("gpt-5", "gpt-5"),
+            // Exact-matched families do not absorb unknown variants.
+            ("gpt-5.5-2026-01-01", nil),
+            ("future-unpriced-model", nil)
+        ]
+        for (raw, id) in expectations {
+            require(catalog.model(for: raw)?.id == id, "Codex catalog should resolve \(raw) to \(id ?? "nil")")
+        }
+        require(catalog.model(for: catalog.unlabeledModel)?.id == "gpt-5.6-sol", "Unlabeled Codex records should price as Sol")
+        require(catalog.longContext?.inputTokensAbove == 272_000, "Codex catalog should carry the 272K long-context threshold")
+        require(
+            ToolID.codex.warmupCommand(model: "gpt-6-luna").contains("--model gpt-6-luna")
+                && ToolID.codex.legacyWarmupCommand(model: "gpt-6-luna") == nil,
+            "Codex warm-up command should take the catalog model and has no legacy fallback"
+        )
+    }
+
+    private static func testCatalogRevisionsAndUnpricedModels() {
+        let store = isolatedCatalogStore(.claude, catalog(.claude, revision: 3))
+        require(!store.adopt(catalog(.claude, revision: 2), source: "remote"), "An older catalog revision must not replace a newer one")
+        require(store.adopt(catalog(.claude, revision: 4), source: "remote"), "A newer catalog revision should be adopted")
+        require(store.catalog?.revision == 4, "Store should expose the adopted revision")
+
+        let cacheRoot = temporaryDirectory("codex-catalog-cache")
+        defer { try? FileManager.default.removeItem(at: cacheRoot) }
+        createDirectory(cacheRoot)
+        let cacheURL = cacheRoot.appendingPathComponent("codex-models.json")
+        do {
+            try catalogData(.codex) { $0["revision"] = 7 }.write(to: cacheURL)
+        } catch {
+            fatalError("Could not write catalog cache fixture: \(error)")
+        }
+        let cachedStore = ModelCatalogStore(
+            tool: .codex,
+            bundle: nil,
+            cacheURL: cacheURL,
+            remoteURL: URL(string: "https://example.invalid/codex-models.json")!,
+            defaults: UserDefaults(suiteName: "quotawarmer-regression-\(UUID().uuidString)")!
+        )
+        require(cachedStore.catalog?.revision == 7, "A previously fetched catalog should load from the on-disk cache")
+
+        // A model the catalog cannot price leaves the cost unavailable rather
+        // than guessing, while the tokens still count.
+        let provider = LocalUsageProvider(
+            calendar: utcCalendar,
+            claudeCatalog: isolatedCatalogStore(.claude, repoCatalog(.claude)),
+            codexCatalog: isolatedCatalogStore(.codex, repoCatalog(.codex))
+        )
+        let root = temporaryDirectory("claude-unpriced-model")
+        defer { try? FileManager.default.removeItem(at: root) }
+        createDirectory(root)
+        writeJSONL([
+            #"{"timestamp":"2026-06-15T10:00:00Z","message":{"id":"future","model":"claude-opus-4-9","usage":{"input_tokens":100,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"output_tokens":100}}}"#
+        ], to: root.appendingPathComponent("session.jsonl"))
+        let summary = provider.usage(for: .claude, baseURL: root, now: isoDate("2026-06-15T12:00:00Z"))
+        require(summary.today.totalTokens == 200, "Unpriced Claude model tokens should still be counted")
+        require(summary.today.costUSD == nil, "Unpriced Claude model should report cost as unavailable")
+
+        // A price edit in a newer catalog revision reprices without a release.
+        let repriced = LocalUsageProvider(
+            calendar: utcCalendar,
+            codexCatalog: isolatedCatalogStore(.codex, decodedCatalog(catalogData(.codex) { object in
+                object["revision"] = 2
+                var models = object["models"] as? [[String: Any]] ?? []
+                if let index = models.firstIndex(where: { $0["id"] as? String == "gpt-5.6-luna" }) {
+                    models[index]["input"] = 1
+                    models[index]["output"] = 1
+                }
+                object["models"] = models
+            }))
+        )
+        let codexRoot = temporaryDirectory("codex-repriced")
+        defer { try? FileManager.default.removeItem(at: codexRoot) }
+        createDirectory(codexRoot)
+        writeJSONL([
+            #"{"timestamp":"2026-06-15T08:00:00Z","payload":{"type":"session_meta","model":"gpt-5.6-luna"}}"#,
+            #"{"timestamp":"2026-06-15T08:01:00Z","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":200000,"cached_input_tokens":0,"output_tokens":200000,"total_tokens":400000}}}}"#
+        ], to: codexRoot.appendingPathComponent("session.jsonl"))
+        requireClose(
+            repriced.usage(for: .codex, baseURL: codexRoot, now: isoDate("2026-06-15T12:00:00Z")).today.costUSD,
+            0.4,
+            "Codex cost should follow the active catalog's prices"
+        )
+    }
+
+    private static func testCatalogWarmupModelFallback() async {
+        let claudeRejection = """
+        "claude-haiku-9-9" isn't described by this version's model catalog; update Claude Code, or map it with behavesAs on a modelPicker row.
+        [claude-code:unrecognized_model] {"model":"claude-haiku-9-9","query_source":"sdk"}
+        There's an issue with the selected model (claude-haiku-9-9). It may not exist or you may not have access to it. Run --model to pick a different model.
+        """
+        let codexRejection = """
+        warning: Model metadata for `gpt-nonexistent-9` not found. Defaulting to fallback metadata; this can degrade performance and cause issues.
+        ERROR: {"type":"error","status":400,"error":{"type":"invalid_request_error","message":"The 'gpt-nonexistent-9' model is not supported when using Codex with a ChatGPT account."}}
+        """
+        require(
+            WarmupRunner.isInvalidModelFailure(claudeRejection) && WarmupRunner.isInvalidModelFailure(codexRejection),
+            "Claude and Codex model rejections should be recognized"
+        )
+        require(
+            !WarmupRunner.isInvalidModelFailure(#""claude-haiku-5" isn't described by this version's model catalog; update Claude Code"#)
+                && !WarmupRunner.isInvalidModelFailure("warning: Model metadata for `gpt-6.2-luna` not found. Defaulting to fallback metadata")
+                && !WarmupRunner.isInvalidModelFailure("error: unknown option '--safe-mode'"),
+            "A newer-than-CLI model warning or an unknown flag is not a rejected model"
+        )
+        require(
+            WarmupRunner.modelArgument(in: ToolID.claude.warmupCommand(model: "claude-haiku-4-5")) == "claude-haiku-4-5"
+                && WarmupRunner.modelArgument(in: ToolID.codex.warmupCommand(model: "gpt-6-luna")) == "gpt-6-luna",
+            "Warm-up commands should carry the catalog model as their --model argument"
+        )
+
+        func succeed(_ tool: ToolID, _ model: String) -> WarmupResult {
+            WarmupResult(date: Date(), command: tool.warmupCommand(model: model), output: "Hello!")
+        }
+
+        for tool in ToolID.allCases {
+            let fallback = tool.defaultWarmupModel
+            // A retired first model moves on to the next and is remembered.
+            let store = isolatedCatalogStore(tool, catalog(tool, revision: 2, warmupModels: ["retired-model", fallback]))
+            var tried: [String] = []
+            do {
+                let result = try await WarmupRunner.runCatalogWarmup(store: store) { model in
+                    tried.append(model)
+                    if model == "retired-model" { throw WarmupError.invalidModel(model, "gone") }
+                    return succeed(tool, model)
+                }
+                require(result.command.contains("--model \(fallback)"), "\(tool) warm-up should succeed on the next catalog model")
+            } catch {
+                fatalError("\(tool) warm-up should fall through a rejected model: \(error)")
+            }
+            require(tried == ["retired-model", fallback], "\(tool) warm-up models should be tried in catalog order")
+            require(store.warmupModels.first == fallback, "\(tool): the model that worked should be tried first next time")
+            store.adopt(catalog(tool, revision: 3, warmupModels: ["retired-model", fallback]), source: "remote")
+            require(
+                store.warmupModels.first == "retired-model",
+                "\(tool): a new catalog revision should reset the remembered model to the catalog's order"
+            )
+
+            // Any other failure must not spend a second request on another model.
+            let failingStore = isolatedCatalogStore(tool, catalog(tool, revision: 2, warmupModels: [fallback, "second-model"]))
+            tried = []
+            do {
+                _ = try await WarmupRunner.runCatalogWarmup(store: failingStore) { model in
+                    tried.append(model)
+                    throw WarmupError.exitCode(1, "API Error: 529 overloaded")
+                }
+                fatalError("A non-model warm-up failure should be thrown")
+            } catch WarmupError.exitCode {
+                require(tried == [fallback], "\(tool): only a rejected model may try the next warm-up model")
+            } catch {
+                fatalError("Unexpected warm-up error: \(error)")
+            }
+
+            // Every model rejected: a clear error naming what was tried.
+            do {
+                _ = try await WarmupRunner.runCatalogWarmup(store: failingStore) { model in
+                    throw WarmupError.invalidModel(model, "gone")
+                }
+                fatalError("All-rejected warm-up models should throw")
+            } catch WarmupError.noValidModel(let models) {
+                require(models == [fallback, "second-model"], "\(tool): noValidModel should list every tried model")
+            } catch {
+                fatalError("Unexpected warm-up error: \(error)")
+            }
         }
     }
 
@@ -1051,6 +1383,59 @@ access_token=private-value
         require(summary.today.totalTokens == 0, "UTC log usage before midnight must not appear in today's bucket")
         require(summary.yesterday.totalTokens == 220_000, "Codex session usage should use UTC day buckets")
         requireClose(summary.yesterday.costUSD, 2.604, "Codex session metadata and legacy missing-model records should be priced")
+    }
+
+    /// The long-lived scanner reuses parsed files and reads only appended
+    /// bytes; totals must match a fresh scan through every kind of file change.
+    private static func testIncrementalUsageScan() {
+        let now = isoDate("2026-06-15T12:00:00Z")
+        let root = temporaryDirectory("incremental-scan")
+        defer { try? FileManager.default.removeItem(at: root) }
+        createDirectory(root)
+        let file = root.appendingPathComponent("rollout.jsonl")
+        let provider = LocalUsageProvider(calendar: utcCalendar)
+        func turn(_ hour: Int, _ tokens: Int) -> String {
+            #"{"timestamp":"2026-06-15T\#(String(format: "%02d", hour)):00:00Z","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":\#(tokens),"cached_input_tokens":0,"output_tokens":0,"total_tokens":\#(tokens)}}}}"#
+        }
+        func write(_ text: String, append: Bool = false) {
+            do {
+                if append, let handle = try? FileHandle(forWritingTo: file) {
+                    try handle.seekToEnd()
+                    try handle.write(contentsOf: Data(text.utf8))
+                    try handle.close()
+                } else {
+                    try text.write(to: file, atomically: false, encoding: .utf8)
+                }
+            } catch {
+                fatalError("Could not write incremental fixture: \(error)")
+            }
+        }
+        func tokens() -> Int {
+            let cached = provider.usage(for: .codex, baseURL: root, now: now).today.totalTokens
+            let fresh = LocalUsageProvider(calendar: utcCalendar).usage(for: .codex, baseURL: root, now: now).today.totalTokens
+            require(cached == fresh, "Incremental scan (\(cached)) must equal a fresh scan (\(fresh))")
+            return cached
+        }
+
+        write(#"{"timestamp":"2026-06-15T01:00:00Z","payload":{"type":"session_meta","model":"gpt-5.6-luna"}}"# + "\n" + turn(2, 100) + "\n")
+        require(tokens() == 100, "Initial scan should count the first turn")
+        write(turn(3, 20) + "\n", append: true)
+        require(tokens() == 120, "An appended turn should be picked up")
+        // A line still being written (no newline yet) counts once, and is not
+        // counted again when it is completed.
+        write(turn(4, 3), append: true)
+        require(tokens() == 123, "An unterminated last line should count provisionally")
+        write("\n" + turn(5, 1000) + "\n", append: true)
+        require(tokens() == 1123, "Completing the last line must not double-count it")
+        require(
+            provider.usage(for: .codex, baseURL: root, now: now).today.costUSD != nil,
+            "Appended Codex turns should keep the session model for pricing"
+        )
+        // Rewritten shorter (e.g. rotated): parse from the start.
+        write(turn(6, 7) + "\n")
+        require(tokens() == 7, "A truncated or rewritten file should be re-parsed from scratch")
+        try? FileManager.default.removeItem(at: file)
+        require(tokens() == 0, "A deleted file should drop out of the totals")
     }
 
     private static var utcCalendar: Calendar {

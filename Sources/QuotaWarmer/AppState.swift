@@ -34,8 +34,6 @@ final class ToolState: ObservableObject {
     @Published var isFetchingQuota = false
     @Published var isWarming = false
     @Published var errorMessage: String?
-    @Published var lastLogActivity: Date?
-    @Published var weeklyActivity: [DayActivity] = []
     @Published var quotaSnapshot: QuotaSnapshot?
     @Published var tokenUsageSummary: TokenUsageSummary?
     @Published var isFetchingTokenUsage = false
@@ -253,7 +251,15 @@ final class AppState: ObservableObject {
         }
     }
 
-    private let scanner = ActivityScanner()
+    /// One long-lived scanner per tool: each caches parsed log files and only
+    /// reads what was appended since its last scan.
+    private let usageProviders: [ToolID: LocalUsageProvider] = Dictionary(
+        uniqueKeysWithValues: ToolID.allCases.map { ($0, LocalUsageProvider()) }
+    )
+    private var tokenUsageScannedAt: [ToolID: Date] = [:]
+    /// Quota refreshes come in bursts (warm-up verification, settle re-polls,
+    /// wake); token totals need not follow each one.
+    private let tokenUsageMinInterval: TimeInterval = 60
     private let runner = WarmupRunner()
     private let scheduler = Scheduler()
     private let notifications = NotificationManager.shared
@@ -296,6 +302,13 @@ final class AppState: ObservableObject {
         }
         Task { await checkOnboarding() }
         Task { await checkForAppUpdate() }
+        Task.detached(priority: .utility) {
+            for tool in ToolID.allCases {
+                let store = ModelCatalogStore.shared(for: tool)
+                DiagnosticLogger.append("model_catalog_loaded tool=\(tool.rawValue) catalog=\(store.summary)")
+                await store.refreshIfNeeded()
+            }
+        }
     }
 
     func state(for tool: ToolID) -> ToolState { toolStates[tool]! }
@@ -365,9 +378,6 @@ final class AppState: ObservableObject {
             return
         }
         for tool in tools {
-            let state = state(for: tool)
-            state.lastLogActivity = scanner.lastActivity(for: tool)
-            state.weeklyActivity = scanner.weeklyActivity(for: tool)
             Task { await refreshQuota(for: tool, allowAutomaticWarmup: allowAutomaticWarmup) }
         }
         Task { @MainActor in
@@ -405,7 +415,7 @@ final class AppState: ObservableObject {
         // Claude refresh tokens are single-use, so only one Claude request chain
         // may run at a time. Codex keeps its existing behavior unchanged.
         guard tool != .claude || !state.isFetchingQuota else { return }
-        refreshTokenUsage(for: tool)
+        refreshTokenUsage(for: tool, force: force)
         if let backoffUntil = state.quotaBackoffUntil, backoffUntil > Date() {
             // An explicit user request retries now. Clearing the backoff matters
             // as much as skipping it: a source that is no longer limited must be
@@ -469,18 +479,23 @@ final class AppState: ObservableObject {
         state.isFetchingQuota = false
     }
 
-    private func refreshTokenUsage(for tool: ToolID) {
+    private func refreshTokenUsage(for tool: ToolID, force: Bool = false) {
         let state = state(for: tool)
         // Skip if a scan is already in flight for this tool — otherwise rapid
-        // refresh cycles can pile up overlapping disk scans.
-        guard !state.isFetchingTokenUsage else { return }
+        // refresh cycles can pile up overlapping disk scans. This single-flight
+        // is also what makes sharing one provider per tool safe.
+        guard !state.isFetchingTokenUsage,
+              let provider = usageProviders[tool] else { return }
+        if !force, let last = tokenUsageScannedAt[tool], Date().timeIntervalSince(last) < tokenUsageMinInterval {
+            return
+        }
+        tokenUsageScannedAt[tool] = Date()
         state.isFetchingTokenUsage = true
-        // The scan walks thousands of CLI JSONL log files synchronously; keep it
-        // off the main actor so the menu-bar panel never freezes (which also kept
-        // it from dismissing on outside clicks). A fresh provider per call avoids
-        // sharing the non-thread-safe date formatters across concurrent scans.
+        // The scan walks the CLI JSONL logs synchronously; keep it off the main
+        // actor so the menu-bar panel never freezes (which also kept it from
+        // dismissing on outside clicks).
         Task.detached(priority: .utility) {
-            let summary = LocalUsageProvider().usage(for: tool)
+            let summary = provider.usage(for: tool)
             await MainActor.run {
                 state.tokenUsageSummary = summary
                 state.isFetchingTokenUsage = false
@@ -1271,6 +1286,10 @@ final class AppState: ObservableObject {
             Task { @MainActor [weak self] in
                 self?.refreshAllActivity(allowAutomaticWarmup: true)
             }
+            // Throttled to one GitHub fetch per day inside each store.
+            Task.detached(priority: .utility) {
+                for tool in ToolID.allCases { await ModelCatalogStore.shared(for: tool).refreshIfNeeded() }
+            }
         }
     }
 
@@ -1279,15 +1298,25 @@ final class AppState: ObservableObject {
         refreshTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
             Task { @MainActor [weak self] in
                 guard let self else { return }
-                self.toolStates.values.forEach { $0.objectWillChange.send() }
-                // Also poke AppState so the menu-bar label (which observes
-                // AppState, not each ToolState) re-renders its countdown.
-                self.objectWillChange.send()
+                // Countdowns only need a full SwiftUI pass while the panel is on
+                // screen. Closed (most of the time), just re-check the menu-bar
+                // label, which redraws only when its text or status changes.
+                if self.isPanelVisible {
+                    self.toolStates.values.forEach { $0.objectWillChange.send() }
+                    self.objectWillChange.send()
+                } else {
+                    self.onUITick?()
+                }
             }
         }
     }
 
     private var quotaTimer: Timer?
+    /// Set by AppDelegate while the panel is shown; gates the per-second
+    /// SwiftUI invalidation above.
+    var isPanelVisible = false
+    /// Menu-bar refresh for the 1 s tick while the panel is closed.
+    var onUITick: (() -> Void)?
 
     private var refreshInterval: TimeInterval {
         let stored = UserDefaults.standard.integer(forKey: "refreshInterval")

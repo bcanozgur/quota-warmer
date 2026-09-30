@@ -217,8 +217,48 @@ struct QuotaWindowRow: View {
     let pace: QuotaPace.Result
     var refreshing: Bool = false
     var statusColor: Color? = nil
+    /// Dense two-line layout for the overview: title + `% left` on one line,
+    /// a slim bar, then reset/pace on a single meta line.
+    var compact: Bool = false
 
     var body: some View {
+        if compact { compactBody } else { fullBody }
+    }
+
+    private var compactBody: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            HStack(spacing: 6) {
+                Text(title)
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(DS.C.text)
+                StatusDot(color: statusColor ?? dotColor, size: 7)
+                Spacer(minLength: 6)
+                Text(leftText)
+                    .font(.system(size: 12.5, weight: .semibold))
+                    .foregroundStyle(DS.C.textSub)
+                    .monospacedDigit()
+            }
+
+            UsageBar(fraction: quotaLeft, refreshing: refreshing, height: 8,
+                     thumbFraction: pace.timeLeftFraction)
+
+            HStack(spacing: 6) {
+                Text(pace.resetText)
+                    .foregroundStyle(DS.C.textMuted)
+                Spacer(minLength: 6)
+                if let shortPercent = pace.shortPercent {
+                    Text([ "\(shortPercent)% short", pace.runsOutText ]
+                        .compactMap { $0 }
+                        .joined(separator: " · "))
+                        .foregroundStyle(DS.C.textSub)
+                }
+            }
+            .font(.system(size: 11.5, weight: .medium))
+            .lineLimit(1)
+        }
+    }
+
+    private var fullBody: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 7) {
                 Text(title)
@@ -337,5 +377,33 @@ struct PressableButtonStyle: ButtonStyle {
         configuration.label
             .opacity(configuration.isPressed ? 0.62 : 1.0)
             .animation(.easeOut(duration: 0.10), value: configuration.isPressed)
+    }
+}
+
+/// Page title row shared by every tab: optional provider glyph + bold title on
+/// the left, controls on the right, fixed height so tabs line up exactly.
+struct PanelHeader<Trailing: View>: View {
+    let title: String
+    var glyph: String? = nil
+    @ViewBuilder var trailing: () -> Trailing
+
+    var body: some View {
+        HStack(spacing: 8) {
+            if let glyph {
+                Image(glyph)
+                    .resizable()
+                    .renderingMode(.template)
+                    .scaledToFit()
+                    .frame(width: 18, height: 18)
+                    .foregroundStyle(DS.C.text)
+            }
+            Text(title)
+                .font(.system(size: DS.Page.titleSize, weight: .bold))
+                .foregroundStyle(DS.C.text)
+                .lineLimit(1)
+            Spacer(minLength: 8)
+            trailing()
+        }
+        .frame(height: DS.Page.headerHeight)
     }
 }

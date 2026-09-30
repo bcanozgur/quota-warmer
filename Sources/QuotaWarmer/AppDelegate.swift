@@ -35,9 +35,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             .receive(on: RunLoop.main)
             .sink { [weak self] in self?.refreshButtonImage() }
             .store(in: &cancellables)
+        appState.onUITick = { [weak self] in self?.refreshButtonImage() }
     }
 
+    private var lastImageKey: String?
+
+    /// Called every second and on every state change; rebuilds and reassigns the
+    /// status-item image only when what it shows changed (about once a minute).
     private func refreshButtonImage() {
+        let key = MenuBarStatus.contentKey(for: appState)
+        guard key != lastImageKey else { return }
+        lastImageKey = key
         statusItem?.button?.image = MenuBarStatus.image(for: appState)
     }
 
@@ -102,12 +110,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             origin.x = min(max(origin.x, visible.minX + 6), visible.maxX - size.width - 6)
         }
         panel.setFrameOrigin(origin)
+        appState.isPanelVisible = true
+        // Countdowns were not ticking while hidden; refresh before showing.
+        appState.objectWillChange.send()
         panel.makeKeyAndOrderFront(nil)
+        // The native shadow is traced from the content's alpha; recompute it so
+        // it follows the rounded panel instead of a stale rectangular outline.
+        panel.invalidateShadow()
     }
 
     private func closePanel() {
         guard let panel, panel.isVisible else { return }
         panel.orderOut(nil)
+        appState.isPanelVisible = false
         lastCloseAt = Date()
     }
 

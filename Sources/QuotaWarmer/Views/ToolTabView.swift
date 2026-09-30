@@ -5,38 +5,38 @@ struct ToolTabView: View {
     let onSetMode: (ToolMode) -> Void
     let onActivate: () -> Void
     let onRefresh: () -> Void
+    /// Read on each tick (not observed): the panel stays alive while hidden,
+    /// and the countdown need not re-render every second then.
+    let isPanelVisible: () -> Bool
 
     private let ticker = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
     @State private var now = Date()
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
+        VStack(alignment: .leading, spacing: DS.Page.spacing) {
             header
-            quotaList
+            quotaCard
+            if let issue = ToolStatusCopy.providerIssue(for: toolState) {
+                Text(issue)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(DS.C.red)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            tokenUsageSection
             actions
             Spacer(minLength: 0)
         }
-        .padding(.horizontal, 18)
-        .padding(.top, 18)
-        .padding(.bottom, 16)
+        .padding(.horizontal, DS.Page.side)
+        .padding(.top, DS.Page.top)
+        .padding(.bottom, DS.Page.bottom)
+        .frame(maxHeight: .infinity, alignment: .top)
         .background(DS.C.bg)
-        .onReceive(ticker) { t in now = t }
+        .onReceive(ticker) { t in if isPanelVisible() { now = t } }
     }
 
     private var header: some View {
-        HStack(alignment: .center) {
-            HStack(spacing: 9) {
-                Image(toolState.tool == .claude ? "ClaudeCode" : "Codex")
-                    .resizable()
-                    .renderingMode(.template)
-                    .scaledToFit()
-                    .frame(width: 24, height: 24)
-                    .foregroundStyle(DS.C.text)
-                Text(toolState.tool.shortName)
-                    .font(.system(size: 22, weight: .bold))
-                    .foregroundStyle(DS.C.text)
-            }
-            Spacer()
+        PanelHeader(title: toolState.tool.shortName,
+                    glyph: toolState.tool == .claude ? "ClaudeCode" : "Codex") {
             if toolState.isFetchingQuota {
                 Image(systemName: "hourglass")
                     .font(.system(size: 11, weight: .medium))
@@ -46,30 +46,28 @@ struct ToolTabView: View {
         }
     }
 
-    private var quotaList: some View {
-        VStack(alignment: .leading, spacing: 22) {
+    /// Session + Weekly in one card, laid out exactly like the overview rows.
+    private var quotaCard: some View {
+        VStack(alignment: .leading, spacing: 10) {
             windowRow(
                 title: "Session",
                 metric: toolState.primaryMetric,
                 resetAt: toolState.resetAt,
                 windowDuration: toolState.tool.windowDuration
             )
+            Rectangle()
+                .fill(DS.C.borderSoft)
+                .frame(height: 1)
             windowRow(
                 title: "Weekly",
                 metric: toolState.weeklyMetric,
                 resetAt: toolState.weeklyMetric?.resetAt,
                 windowDuration: toolState.tool.weeklyWindowDuration
             )
-            tokenUsageSection
-            if let issue = ToolStatusCopy.providerIssue(for: toolState) {
-                Text(issue)
-                    .font(.system(size: 11.5))
-                    .foregroundStyle(DS.C.red)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
         }
+        .padding(DS.Page.cardPadding)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.top, 4)
+        .dsCard()
     }
 
     private func windowRow(title: String, metric: QuotaMetric?, resetAt: Date?, windowDuration: TimeInterval) -> some View {
@@ -89,18 +87,16 @@ struct ToolTabView: View {
             leftText: leftText,
             pace: pace,
             refreshing: toolState.isFetchingQuota,
-            statusColor: ToolStatusCopy.rowStatusColor(for: toolState, hasMetric: metric != nil)
+            statusColor: ToolStatusCopy.rowStatusColor(for: toolState, hasMetric: metric != nil),
+            compact: true
         )
     }
 
     private var tokenUsageSection: some View {
-        VStack(alignment: .leading, spacing: 9) {
-            Divider()
-                .overlay(DS.C.borderSoft)
+        VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 6) {
                 Text("Estimated API-equivalent cost")
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(DS.C.textMuted)
+                    .dsSectionLabel()
                 Spacer(minLength: 8)
                 if toolState.isFetchingTokenUsage {
                     Image(systemName: "hourglass")
@@ -114,6 +110,9 @@ struct ToolTabView: View {
                 tokenUsageRow("Last 30 Days", usage: toolState.tokenUsageSummary?.last30Days)
             }
         }
+        .padding(DS.Page.cardPadding)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .dsCard()
     }
 
     private func tokenUsageRow(_ title: String, usage: TokenUsageDay?) -> some View {
@@ -172,7 +171,8 @@ struct ToolTabView: View {
     }
 
     private var activeControl: some View {
-        ToolModeMenu(mode: toolState.mode) { onSetMode($0) }
+        ToolModeMenu(mode: toolState.mode, compact: true) { onSetMode($0) }
+            .fixedSize()
     }
 
     private static let integerFormatter: NumberFormatter = {
@@ -187,7 +187,7 @@ struct ToolTabView: View {
             Button(action: onActivate) {
                 Label("Warm", systemImage: "bolt.fill")
                     .font(.system(size: 12, weight: .semibold))
-                    .frame(height: 32)
+                    .frame(height: 30)
                     .padding(.horizontal, 14)
                     .foregroundStyle(.white)
                     .background(DS.C.accent(toolState.tool), in: Capsule())
@@ -199,7 +199,7 @@ struct ToolTabView: View {
             Button(action: onRefresh) {
                 Label("Refresh", systemImage: toolState.isFetchingQuota ? "hourglass" : toolState.quotaBackoffActive ? "clock.arrow.circlepath" : "arrow.clockwise")
                     .font(.system(size: 12, weight: .semibold))
-                    .frame(height: 32)
+                    .frame(height: 30)
                     .padding(.horizontal, 14)
                     .foregroundStyle(DS.C.textSub)
                     .background(DS.C.surfaceHigh, in: Capsule())

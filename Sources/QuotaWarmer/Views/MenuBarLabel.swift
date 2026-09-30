@@ -14,6 +14,16 @@ enum MenuBarStatus {
         return image
     }
 
+    /// Everything the image depends on, as a string. Equal keys draw identical
+    /// images, so the caller can skip rebuilding.
+    static func contentKey(for appState: AppState) -> String {
+        let items = composeItems(appState)
+        guard !items.isEmpty else { return "fallback|\(isHealthy(appState))" }
+        return items.map { item in
+            "\(item.assetName)|\(item.text)|\(item.dotColor)|\(item.dimmed)"
+        }.joined(separator: "||")
+    }
+
     private static func isHealthy(_ appState: AppState) -> Bool {
         guard !appState.globalPassive, !appState.watcherStale else { return false }
         return appState.toolStates.values.allSatisfy { state in
@@ -147,7 +157,10 @@ private enum MenuBarComposer {
     private static let height: CGFloat = 18
     private static let glyph: CGFloat = 15
     private static let glyphGap: CGFloat = 3
-    private static let itemGap: CGFloat = 8
+    private static let itemGap: CGFloat = 13
+    /// Thin vertical line centered in the gap between two pinned tools.
+    private static let separatorWidth: CGFloat = 1
+    private static let separatorHeight: CGFloat = 12
 
     static func image(for items: [Item]) -> NSImage {
         var widths: [CGFloat] = []
@@ -168,11 +181,23 @@ private enum MenuBarComposer {
             for (index, item) in items.enumerated() {
                 draw(item, at: x)
                 x += widths[index] + itemGap
+                if index < items.count - 1 { drawSeparator(centeredAt: x - itemGap / 2) }
             }
             return true
         }
         image.isTemplate = false
         return image
+    }
+
+    private static func drawSeparator(centeredAt midX: CGFloat) {
+        let rect = NSRect(
+            x: (midX - separatorWidth / 2).rounded(),
+            y: (height - separatorHeight) / 2,
+            width: separatorWidth,
+            height: separatorHeight
+        )
+        NSColor.white.withAlphaComponent(0.35).setFill()
+        rect.fill()
     }
 
     private static func textWidth(_ text: String) -> CGFloat {

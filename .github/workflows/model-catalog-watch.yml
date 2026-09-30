@@ -1,0 +1,57 @@
+name: Model catalog watch
+
+# Compares Sources/QuotaWarmer/Resources/{claude,codex}-models.json with the
+# Anthropic and OpenAI pricing pages every day. On drift (new model, price
+# change, or a cheaper warm-up candidate) it opens one issue and keeps its body
+# current. Fixing a catalog on `main` (scripts/check-model-catalog.py --fix)
+# reaches installed apps within a day; no release is needed.
+
+on:
+  schedule:
+    - cron: "17 6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: model-catalog-watch
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Compare catalog with published pricing
+        id: check
+        run: |
+          set +e
+          python3 scripts/check-model-catalog.py > report.md
+          status=$?
+          set -e
+          cat report.md
+          echo "status=$status" >> "$GITHUB_OUTPUT"
+
+      - name: Open or update drift issue
+        if: steps.check.outputs.status == '1'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          title="Model pricing catalog is out of date"
+          number=$(gh issue list --state open --search "\"$title\" in:title" --json number --jq '.[0].number // empty')
+          if [ -n "$number" ]; then
+            gh issue edit "$number" --body-file report.md
+          else
+            gh issue create --title "$title" --body-file report.md
+          fi
+
+      - name: Fail when the pricing page could not be read
+        if: steps.check.outputs.status == '2'
+        run: |
+          echo "::error::A pricing table could not be parsed; check scripts/check-model-catalog.py against the page format."
+          exit 1

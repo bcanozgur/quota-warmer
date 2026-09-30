@@ -2,39 +2,37 @@ import SwiftUI
 
 struct MainTabView: View {
     @EnvironmentObject var appState: AppState
-    @State private var historyExpanded = false
     // Session-only display state — never persisted, so every popover open
     // starts with both provider sections expanded (empty = nothing collapsed).
     @State private var collapsedTools: Set<ToolID> = []
 
     var body: some View {
-        ScrollView(.vertical, showsIndicators: false) {
-            VStack(alignment: .leading, spacing: 14) {
-                header
-                if !outcomeTools.isEmpty { statusCard }
-                providerList
-                historySection
-            }
-            .padding(.horizontal, 18)
-            .padding(.top, 18)
-            .padding(.bottom, 16)
+        // Fixed, non-scrolling overview — only Settings scrolls.
+        VStack(alignment: .leading, spacing: DS.Page.spacing) {
+            PanelHeader(title: "QuotaWarmer") { automationControl }
+            if let warning = appState.watcherStatusText { watcherWarning(warning) }
+            if !outcomeTools.isEmpty { statusCard }
+            providerList
+            Spacer(minLength: 0)
         }
+        .padding(.horizontal, DS.Page.side)
+        .padding(.top, DS.Page.top)
+        .padding(.bottom, DS.Page.bottom)
+        .frame(maxHeight: .infinity, alignment: .top)
         .background(DS.C.bg)
     }
 
-    private var header: some View {
-        HStack(alignment: .top) {
-            VStack(alignment: .leading, spacing: 3) {
-                Text("QuotaWarmer")
-                    .font(.system(size: 22, weight: .bold))
-                    .foregroundStyle(DS.C.text)
-                Text("Keep your quota windows warm.")
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(DS.C.textMuted)
-            }
-            Spacer()
-            automationControl
+    /// Shown only when no quota check has succeeded recently (moved here from
+    /// the removed footer strip).
+    private func watcherWarning(_ text: String) -> some View {
+        HStack(spacing: 5) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .font(.system(size: 10, weight: .semibold))
+            Text(text)
+                .font(.system(size: 11.5, weight: .semibold))
         }
+        .foregroundStyle(DS.C.yellow)
+        .help("QuotaWarmer hasn't completed a quota check recently — it may be offline or blocked.")
     }
 
     private var automationControl: some View {
@@ -56,34 +54,41 @@ struct MainTabView: View {
         .help(helpText)
     }
 
+    /// Both providers share one card, split by a hairline separator.
     private var providerList: some View {
-        VStack(spacing: 12) {
-            ForEach(ToolID.allCases) { tool in
+        VStack(spacing: 0) {
+            ForEach(Array(ToolID.allCases.enumerated()), id: \.element) { index, tool in
+                if index > 0 {
+                    Rectangle()
+                        .fill(DS.C.border)
+                        .frame(height: 1)
+                }
                 providerRow(tool)
             }
         }
+        .dsCard()
     }
 
     private func providerRow(_ tool: ToolID) -> some View {
         let state = appState.state(for: tool)
         let collapsed = collapsedTools.contains(tool)
-        return VStack(alignment: .leading, spacing: collapsed ? 0 : 16) {
+        return VStack(alignment: .leading, spacing: collapsed ? 0 : 10) {
             // Tool name on the left, the same mode / refresh / pin controls on
             // the right (where the reference shows the plan badge).
             HStack(spacing: 8) {
                 Button(action: { toggleCollapsed(tool) }) {
                     HStack(spacing: 6) {
                         Text(tool.shortName)
-                            .font(.system(size: 20, weight: .bold))
+                            .font(.system(size: 16, weight: .bold))
                             .foregroundStyle(DS.C.text)
                         Image(systemName: collapsed ? "chevron.down" : "chevron.up")
-                            .font(.system(size: 11, weight: .semibold))
+                            .font(.system(size: 10, weight: .semibold))
                             .foregroundStyle(DS.C.textMuted)
                     }
                     // The label's natural bounds are just the glyphs — pad the
                     // hit area out to a comfortably tappable rectangle instead
                     // of relying on precise glyph-edge hits.
-                    .padding(.vertical, 6)
+                    .padding(.vertical, 4)
                     .padding(.trailing, 10)
                     .contentShape(Rectangle())
                 }
@@ -116,13 +121,15 @@ struct MainTabView: View {
                 windowRow(state, title: "Session", metric: state.primaryMetric,
                           resetAt: state.resetAt, windowDuration: tool.windowDuration,
                           settling: state.sessionSettling)
+                Rectangle()
+                    .fill(DS.C.borderSoft)
+                    .frame(height: 1)
                 windowRow(state, title: "Weekly", metric: state.weeklyMetric,
                           resetAt: state.weeklyMetric?.resetAt, windowDuration: tool.weeklyWindowDuration)
             }
         }
-        .padding(.horizontal, collapsed ? 12 : 14)
-        .padding(.vertical, collapsed ? 9 : 13)
-        .dsCard()
+        .padding(.horizontal, 12)
+        .padding(.vertical, collapsed ? 6 : 10)
     }
 
     private func toggleCollapsed(_ tool: ToolID) {
@@ -159,7 +166,8 @@ struct MainTabView: View {
             leftText: leftText,
             pace: pace,
             refreshing: state.isFetchingQuota || settlingActive,
-            statusColor: ToolStatusCopy.rowStatusColor(for: state, hasMetric: metric != nil)
+            statusColor: ToolStatusCopy.rowStatusColor(for: state, hasMetric: metric != nil),
+            compact: true
         )
     }
 
@@ -185,44 +193,6 @@ struct MainTabView: View {
         .accessibilityLabel(Text(state.menuBarVisible ? "Hide \(tool.shortName) from menu bar" : "Show \(tool.shortName) in menu bar"))
     }
 
-    private var historySection: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Button(action: { historyExpanded.toggle() }) {
-                HStack(spacing: 6) {
-                    Text("History").dsSectionLabel()
-                    Spacer()
-                    Text("\(appState.history.count)")
-                        .font(.system(size: 10, weight: .semibold))
-                        .foregroundStyle(DS.C.textMuted)
-                    Image(systemName: historyExpanded ? "chevron.up" : "chevron.down")
-                        .font(.system(size: 9, weight: .semibold))
-                        .foregroundStyle(DS.C.textMuted)
-                }
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(PressableButtonStyle())
-            .accessibilityLabel(Text(historyExpanded ? "Collapse history" : "Expand history"))
-            if historyExpanded {
-                if appState.history.isEmpty {
-                    Text("No events yet")
-                        .font(.system(size: 10))
-                        .foregroundStyle(DS.C.textMuted)
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, DS.Space.lg)
-                } else {
-                    LazyVStack(alignment: .leading, spacing: 7) {
-                        ForEach(appState.history.prefix(10)) { event in
-                            HistoryRow(event: event)
-                        }
-                    }
-                }
-            }
-        }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 13)
-        .dsCard()
-    }
-
     // MARK: - Last warm-up status card ("did it actually work?")
 
     private var outcomeTools: [ToolID] {
@@ -237,15 +207,13 @@ struct MainTabView: View {
     }
 
     private var statusCard: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("Window Status")
-                .dsSectionLabel()
+        VStack(alignment: .leading, spacing: 5) {
             ForEach(outcomeTools) { tool in
                 outcomeRow(tool)
             }
         }
-        .padding(.horizontal, 13)
-        .padding(.vertical, 11)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
         .frame(maxWidth: .infinity, alignment: .leading)
         .dsCard()
     }
@@ -253,18 +221,18 @@ struct MainTabView: View {
     private func outcomeRow(_ tool: ToolID) -> some View {
         let state = appState.state(for: tool)
         let info = outcomeInfo(state.lastWarmupOutcome, mode: state.mode)
-        return HStack(alignment: .top, spacing: 9) {
+        return HStack(alignment: .center, spacing: 7) {
             StatusDot(color: info.color, size: 7)
-                .padding(.top, 3)
-            VStack(alignment: .leading, spacing: 1) {
-                Text(tool.shortName)
-                    .font(.system(size: 11.5, weight: .bold))
-                    .foregroundStyle(DS.C.text)
-                Text(info.message)
-                    .font(.system(size: 10.5, weight: .medium))
-                    .foregroundStyle(DS.C.textSub)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
+            // One line per tool keeps the overview inside the fixed panel height.
+            Text(tool.shortName)
+                .font(.system(size: 11.5, weight: .bold))
+                .foregroundStyle(DS.C.text)
+            Text(info.message)
+                .font(.system(size: 10.5, weight: .medium))
+                .foregroundStyle(DS.C.textSub)
+                .lineLimit(1)
+                .truncationMode(.tail)
+                .help(info.message)
             Spacer(minLength: 6)
             if info.showWarm {
                 Button(action: { appState.activate(tool) }) {

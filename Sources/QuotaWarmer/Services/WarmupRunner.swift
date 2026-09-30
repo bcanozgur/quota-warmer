@@ -4,6 +4,10 @@ enum WarmupError: LocalizedError {
     case cliNotFound(String)
     case authenticationRequired(String)
     case exitCode(Int32, String)
+    /// The CLI rejected the `--model` value (retired, unknown, or no access).
+    case invalidModel(String, String)
+    /// Every warm-up model in the catalog was rejected.
+    case noValidModel([String])
     case timeout
     case workspaceUnavailable
 
@@ -11,6 +15,10 @@ enum WarmupError: LocalizedError {
         switch self {
         case .cliNotFound(let cmd): return "CLI not found: \(cmd)"
         case .authenticationRequired(let message): return message
+        case .invalidModel(let model, let detail):
+            return "Warm-up model \(model) was rejected: \(detail)"
+        case .noValidModel(let models):
+            return "No warm-up model was accepted (tried \(models.joined(separator: ", "))). Update the CLI; QuotaWarmer picks up a new model list automatically."
         case .exitCode(let code, let detail):
             return detail.isEmpty
                 ? "Process exited with code \(code)"
@@ -68,12 +76,105 @@ class WarmupRunner {
         let pathPrefix = cliURL.deletingLastPathComponent().path
 
         let workspaceURL = try warmupWorkspaceURL()
-        return try await runWarmupCommand(
-            tool.warmupCommand,
-            cliName: cliName,
-            pathPrefix: pathPrefix,
-            workspaceURL: workspaceURL
-        )
+        return try await Self.runCatalogWarmup(store: .shared(for: tool)) { model in
+            try await self.runWithOptionFallback(
+                primary: tool.warmupCommand(model: model),
+                fallback: tool.legacyWarmupCommand(model: model),
+                tool: tool,
+                cliName: cliName,
+                pathPrefix: pathPrefix,
+                workspaceURL: workspaceURL
+            )
+        }
+    }
+
+    /// Tries the catalog's warm-up models in order. Only a model the CLI or API
+    /// rejects moves on to the next one; the first rejection also refreshes the
+    /// catalog early, so a model list published after a retirement is used in
+    /// the same warm-up. Any other failure is thrown as-is (no extra requests).
+    static func runCatalogWarmup(
+        store: ModelCatalogStore,
+        run: (String) async throws -> WarmupResult
+    ) async throws -> WarmupResult {
+        var tried: [String] = []
+        var refreshedCatalog = false
+        while let model = store.warmupModels.first(where: { !tried.contains($0) }) {
+            tried.append(model)
+            guard ModelCatalog.isSafeWarmupModel(model) else { continue }
+            do {
+                let result = try await run(model)
+                store.rememberWorkingWarmupModel(model)
+                return result
+            } catch WarmupError.invalidModel(let rejected, _) {
+                DiagnosticLogger.append("warmup_model_invalid tool=\(store.tool.rawValue) model=\(rejected) catalog=\(store.summary)")
+                if !refreshedCatalog {
+                    refreshedCatalog = true
+                    await store.refreshIfNeeded(early: true)
+                }
+            }
+        }
+        throw WarmupError.noValidModel(tried)
+    }
+
+    private func runWithOptionFallback(
+        primary: String,
+        fallback: String?,
+        tool: ToolID,
+        cliName: String,
+        pathPrefix: String,
+        workspaceURL: URL
+    ) async throws -> WarmupResult {
+        do {
+            return try await runWarmupCommand(
+                primary,
+                cliName: cliName,
+                pathPrefix: pathPrefix,
+                workspaceURL: workspaceURL
+            )
+        } catch WarmupError.exitCode(let code, let detail) {
+            // Only a CLI that predates one of the primary command's flags gets
+            // the fallback; any other failure (network, rate limit) must not
+            // send a second request.
+            guard let fallback, Self.isUnsupportedOptionFailure(detail) else {
+                throw WarmupError.exitCode(code, detail)
+            }
+            DiagnosticLogger.append("warmup_fallback tool=\(tool.rawValue) reason=unsupportedOption")
+            return try await runWarmupCommand(
+                fallback,
+                cliName: cliName,
+                pathPrefix: pathPrefix,
+                workspaceURL: workspaceURL
+            )
+        }
+    }
+
+    static func isUnsupportedOptionFailure(_ output: String) -> Bool {
+        let text = output.lowercased()
+        return text.contains("unknown option") || text.contains("unknown argument")
+    }
+
+    /// A retired, misspelled, or inaccessible `--model`, as each CLI reports it
+    /// (with exit 1):
+    /// - Claude Code 2.1.x: "There's an issue with the selected model (X). It
+    ///   may not exist or you may not have access to it." Its
+    ///   `unrecognized_model` warning alone is not a failure — a model newer
+    ///   than the CLI still runs.
+    /// - Codex 0.156: "The 'X' model is not supported when using Codex with a
+    ///   ChatGPT account." Its "Model metadata for `X` not found" warning alone
+    ///   is not a failure either.
+    static func isInvalidModelFailure(_ output: String) -> Bool {
+        let text = output.lowercased()
+        return text.contains("issue with the selected model")
+            || text.contains("may not exist or you may not have access")
+            || text.contains("model is not supported when using codex")
+            || text.contains("model_not_found")
+    }
+
+    /// The model named by `--model` in a warm-up command line.
+    static func modelArgument(in command: String) -> String? {
+        let parts = command.split(separator: " ")
+        guard let index = parts.firstIndex(of: "--model"), index + 1 < parts.count else { return nil }
+        return String(parts[index + 1])
     }
 
     func cliAuthenticationStatus(for tool: ToolID) async -> CLIAuthenticationStatus {
@@ -132,6 +233,13 @@ class WarmupRunner {
                     continuation.resume(returning: WarmupResult(date: Date(), command: command, output: combined.isEmpty ? "(no output)" : combined))
                 } else if cliName == "claude", Self.isClaudeAuthenticationFailure(combined) {
                     continuation.resume(throwing: WarmupError.authenticationRequired(Self.claudeLoginRequiredMessage))
+                } else if Self.isInvalidModelFailure(combined) {
+                    // Classified on the raw output: the CLI's long model-catalog
+                    // warning comes first and would be cut from the sanitized detail.
+                    continuation.resume(throwing: WarmupError.invalidModel(
+                        Self.modelArgument(in: command) ?? "unknown",
+                        Self.sanitizedFailureDetail(combined, limit: 200)
+                    ))
                 } else {
                     continuation.resume(throwing: WarmupError.exitCode(
                         p.terminationStatus,
