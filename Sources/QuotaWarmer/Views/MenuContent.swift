@@ -16,6 +16,19 @@ private struct WindowTransparencyConfigurator: NSViewRepresentable {
     func updateNSView(_ nsView: NSView, context: Context) {}
 }
 
+extension AppearanceMode {
+    /// Applies the theme app-wide. `nil` hands control back to macOS, so the
+    /// panel follows System Settings — including live light/dark switches.
+    @MainActor
+    func apply() {
+        switch self {
+        case .system: NSApp.appearance = nil
+        case .light:  NSApp.appearance = NSAppearance(named: .aqua)
+        case .dark:   NSApp.appearance = NSAppearance(named: .darkAqua)
+        }
+    }
+}
+
 enum AppTab: Hashable {
     case main
     case tool(ToolID)
@@ -24,6 +37,9 @@ enum AppTab: Hashable {
 
 struct MenuContent: View {
     @EnvironmentObject var appState: AppState
+    @AppStorage(AppearanceMode.defaultsKey) private var appearanceRaw = AppearanceMode.system.rawValue
+
+    private var appearance: AppearanceMode { AppearanceMode(rawValue: appearanceRaw) ?? .system }
 
     var body: some View {
         panel
@@ -75,6 +91,18 @@ struct MenuContent: View {
             }
 
             Spacer()
+
+            // Theme: System → Light → Dark. The icon shows the current theme.
+            SidebarSlot(isSelected: false, help: "Theme: \(appearance.label) — click for \(appearance.next.label)") {
+                let next = appearance.next
+                appearanceRaw = next.rawValue
+                next.apply()
+            } icon: {
+                Image(systemName: appearance.symbolName)
+                    .font(.system(size: 15, weight: .regular))
+                    .foregroundStyle(DS.C.textSub)
+                    .contentTransition(.symbolEffect(.replace))
+            }
 
             SidebarSlot(isSelected: appState.selectedTab == .settings, help: "Settings") {
                 appState.selectedTab = .settings

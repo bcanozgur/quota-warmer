@@ -31,6 +31,11 @@ final class ToolState: ObservableObject {
     @Published var menuBarVisible: Bool {
         didSet { UserDefaults.standard.set(menuBarVisible, forKey: "menuBarVisible.\(tool.rawValue)") }
     }
+    /// Show quota as remaining (drains to 0%) or used (fills to 100%). Affects
+    /// only the bars, row text and menu-bar percent — never warm-up decisions.
+    @Published var displayMode: QuotaDisplayMode {
+        didSet { UserDefaults.standard.set(displayMode.rawValue, forKey: QuotaDisplayMode.defaultsKey(for: tool)) }
+    }
     @Published var isFetchingQuota = false
     @Published var isWarming = false
     @Published var errorMessage: String?
@@ -63,6 +68,7 @@ final class ToolState: ObservableObject {
         self.tool = tool
         self.mode = ToolState.resolveMode(for: tool)
         self.menuBarVisible = UserDefaults.standard.object(forKey: "menuBarVisible.\(tool.rawValue)") as? Bool ?? true
+        self.displayMode = QuotaDisplayMode.stored(for: tool)
         self.lastAutoWindowKey = UserDefaults.standard.string(forKey: "lastAutoWindowKey.\(tool.rawValue)")
         if let storedEnds = UserDefaults.standard.object(forKey: "lastAutoWarmEndsAt.\(tool.rawValue)") as? TimeInterval {
             let endsAt = Date(timeIntervalSince1970: storedEnds)
@@ -319,6 +325,15 @@ final class AppState: ObservableObject {
     func setMenuBarVisible(_ tool: ToolID, _ visible: Bool) {
         objectWillChange.send()
         state(for: tool).menuBarVisible = visible
+    }
+
+    /// Flips a tool between showing quota left and quota used. Routed through
+    /// AppState so the menu-bar label (which observes AppState, not each
+    /// ToolState) switches its percent immediately.
+    func toggleDisplayMode(for tool: ToolID) {
+        objectWillChange.send()
+        let state = state(for: tool)
+        state.displayMode = state.displayMode.toggled
     }
 
     /// Whether anything is being polled right now (drives the watchdog).

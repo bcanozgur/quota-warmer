@@ -4,15 +4,17 @@ import SwiftUI
 // OpenUsage visual language: slim usage bars, muted status dots/badges, and
 // quiet native-feeling controls with very subtle hover/press states.
 
-/// Slim, gradient-free usage bar: light track + near-black fill. The fill shows
-/// how much quota is left. An optional `thumbFraction` draws a slider-style knob
-/// marking how much of the window's *time* remains — when the knob sits ahead of
-/// the fill, quota is being spent faster than time (the "behind pace" warning).
+/// Slim, gradient-free usage bar: a track tinted with the fill color (like
+/// claude.ai's usage page) + a solid fill. The fill shows quota left or used,
+/// depending on the tool's display mode. An optional `thumbFraction` draws a
+/// slider-style knob marking the window's time (see `QuotaDisplay.thumbFraction`)
+/// — when fill and knob disagree, quota is being spent faster than time.
 struct UsageBar: View {
     var fraction: Double
     var refreshing: Bool = false
     var height: CGFloat = 8
     var fill: Color = DS.C.ink
+    var track: Color = DS.C.track
     var thumbFraction: Double? = nil
 
     private func clamp(_ value: Double) -> CGFloat { CGFloat(min(max(value, 0), 1)) }
@@ -22,7 +24,7 @@ struct UsageBar: View {
             let w = geo.size.width
             let fillW = max(0, w * clamp(fraction))
             ZStack(alignment: .leading) {
-                Capsule().fill(DS.C.track)
+                Capsule().fill(track)
                 Capsule()
                     .fill(fill)
                     .frame(width: fillW)
@@ -35,7 +37,7 @@ struct UsageBar: View {
                 if let thumbFraction {
                     let thumbW: CGFloat = 5
                     Capsule()
-                        .fill(DS.C.surface)
+                        .fill(DS.C.knob)
                         .overlay(Capsule().stroke(DS.C.textMuted, lineWidth: 1))
                         .frame(width: thumbW, height: height + 5)
                         .shadow(color: .black.opacity(0.18), radius: 1.5, y: 0.5)
@@ -111,9 +113,11 @@ enum QuotaPace {
 enum ToolStatusCopy {
     static func quotaLeftText(for state: ToolState, metric: QuotaMetric?, settling: Bool = false) -> String {
         if settling { return "Updating..." }
-        guard let metric else { return "-- left" }
-        let percent = Int(metric.remainingFraction * 100)
-        return isLive(state) ? "\(percent)% left" : "\(percent)% last known"
+        return QuotaDisplay.quotaText(
+            remainingFraction: metric?.remainingFraction,
+            isLive: isLive(state),
+            mode: state.displayMode
+        )
     }
 
     static func resetFallback(for state: ToolState, metric: QuotaMetric?) -> String {
@@ -220,9 +224,45 @@ struct QuotaWindowRow: View {
     /// Dense two-line layout for the overview: title + `% left` on one line,
     /// a slim bar, then reset/pace on a single meta line.
     var compact: Bool = false
+    /// Remaining (bar drains) or used (bar fills). Pace/level math stays on
+    /// `quotaLeft` either way.
+    var displayMode: QuotaDisplayMode = .remaining
+    /// A just-opened window whose number hasn't settled: keep the neutral blue.
+    var settling: Bool = false
 
     var body: some View {
         if compact { compactBody } else { fullBody }
+    }
+
+    @AppStorage(QuotaDisplay.colorfulBarsKey) private var colorfulBars = true
+
+    /// nil = plain single-color bars (Settings → Colorful Quota Bars off).
+    private var level: QuotaUsageLevel? {
+        QuotaDisplay.colorLevel(remainingFraction: quotaLeft, hasMetric: hasMetric,
+                                settling: settling, colorful: colorfulBars)
+    }
+
+    private var barColor: Color { level.map(DS.C.usage) ?? DS.C.barPlain }
+
+    private var trackColor: Color {
+        guard hasMetric, level != nil else { return DS.C.track }
+        return barColor.opacity(DS.C.usageTrackOpacity)
+    }
+
+    private var percentTextColor: Color {
+        guard let level, level != .normal else { return DS.C.textSub }
+        return barColor
+    }
+
+    private func bar(height: CGFloat) -> some View {
+        UsageBar(
+            fraction: QuotaDisplay.barFraction(remainingFraction: quotaLeft, hasMetric: hasMetric, mode: displayMode),
+            refreshing: refreshing,
+            height: height,
+            fill: barColor,
+            track: trackColor,
+            thumbFraction: QuotaDisplay.thumbFraction(timeLeftFraction: pace.timeLeftFraction, mode: displayMode)
+        )
     }
 
     private var compactBody: some View {
@@ -235,12 +275,11 @@ struct QuotaWindowRow: View {
                 Spacer(minLength: 6)
                 Text(leftText)
                     .font(.system(size: 12.5, weight: .semibold))
-                    .foregroundStyle(DS.C.textSub)
+                    .foregroundStyle(percentTextColor)
                     .monospacedDigit()
             }
 
-            UsageBar(fraction: quotaLeft, refreshing: refreshing, height: 8,
-                     thumbFraction: pace.timeLeftFraction)
+            bar(height: 8)
 
             HStack(spacing: 6) {
                 Text(pace.resetText)
@@ -267,8 +306,7 @@ struct QuotaWindowRow: View {
                 StatusDot(color: statusColor ?? dotColor, size: 8)
             }
 
-            UsageBar(fraction: quotaLeft, refreshing: refreshing, height: 12,
-                     thumbFraction: pace.timeLeftFraction)
+            bar(height: 12)
 
             VStack(spacing: 3) {
                 metaLine(left: leftText, right: pace.resetText)
@@ -405,5 +443,38 @@ struct PanelHeader<Trailing: View>: View {
             trailing()
         }
         .frame(height: DS.Page.headerHeight)
+    }
+}
+
+/// Remaining ⇄ used toggle for one tool's quota display: an icon-only capsule
+/// (↓% = counting down what's left, ↑% = counting up what's used) styled like
+/// the compact mode capsule next to it. The tooltip spells the mode out.
+struct QuotaDisplayModeToggle: View {
+    let mode: QuotaDisplayMode
+    let toolName: String
+    let onToggle: () -> Void
+    @AppStorage(QuotaDisplay.colorfulBarsKey) private var colorfulBars = true
+
+    var body: some View {
+        Button(action: onToggle) {
+            HStack(spacing: 1) {
+                Image(systemName: mode == .remaining ? "arrow.down" : "arrow.up")
+                    .font(.system(size: 10, weight: .bold))
+                Image(systemName: "percent")
+                    .font(.system(size: 10.5, weight: .bold))
+            }
+            .foregroundStyle(colorfulBars ? DS.C.usageBlue : DS.C.textSub)
+            .frame(width: 34, height: 26)
+            .background(DS.C.surface, in: Capsule())
+            .overlay(Capsule().stroke(DS.C.border, lineWidth: 1))
+            .contentShape(Capsule())
+        }
+        .buttonStyle(PressableButtonStyle())
+        .help(mode == .remaining
+              ? "Showing \(toolName) quota left (counts down from 100%). Click to show quota used."
+              : "Showing \(toolName) quota used (counts up from 0%). Click to show quota left.")
+        .accessibilityLabel(Text(mode == .remaining
+              ? "\(toolName) quota shown as percent left. Activate to show percent used."
+              : "\(toolName) quota shown as percent used. Activate to show percent left."))
     }
 }

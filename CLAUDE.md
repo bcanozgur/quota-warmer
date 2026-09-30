@@ -21,9 +21,11 @@ scripts/local-package.command
 
 ### Tests
 
-The only automated test is the quota-extractor regression in `scripts/quota-extractor-regression.swift`. It is **not** an XCTest target — it's compiled standalone with `swiftc` against a hand-picked subset of source files (see `.github/workflows/ci.yml`). To run it locally, compile `Models/ToolID.swift`, `Models/QuotaModels.swift`, `Services/DiagnosticLogger.swift`, `Services/ModelCatalog.swift`, `Services/CredentialStore.swift`, `Services/WarmupRunner.swift`, `Services/QuotaProvider.swift`, `Services/LocalUsageProvider.swift`, and the script together, then run the binary. It exits non-zero on failure and prints which assertion failed. **Add a case here whenever you touch quota parsing** — it's the safety net for the heuristic extractor and the Codex `wham/usage` parser.
+The primary automated test is the quota-extractor regression in `scripts/quota-extractor-regression.swift`. It is **not** an XCTest target — it's compiled standalone with `swiftc` against a hand-picked subset of source files (see `.github/workflows/ci.yml`). To run it locally, compile `Models/ToolID.swift`, `Models/QuotaModels.swift`, `Services/DiagnosticLogger.swift`, `Services/ModelCatalog.swift`, `Services/CredentialStore.swift`, `Services/WarmupRunner.swift`, `Services/QuotaProvider.swift`, `Services/LocalUsageProvider.swift`, and the script together, then run the binary. It exits non-zero on failure and prints which assertion failed. **Add a case here whenever you touch quota parsing** — it's the safety net for the heuristic extractor and the Codex `wham/usage` parser.
 
-CI (`ci.yml`) runs on macOS with Xcode 16.3: regression test → Debug build → Release build.
+A second standalone suite, `scripts/quota-display-regression.swift`, covers quota *presentation* (`Models/QuotaDisplay.swift`): the per-tool remaining/used display mode, Claude-style bar colors (blue < 50% used ≤ orange < 80% ≤ red, judged on the displayed whole percent), bar/pace-knob geometry, row text, the menu-bar text, the Colorful Quota Bars on/off setting, the System/Light/Dark theme cycle (`Models/AppearanceMode.swift`) and the hand-typed wake-time parser (`Models/TimeInput.swift`). Compile it with the same file list plus `Models/QuotaDisplay.swift`, `Models/AppearanceMode.swift` and `Models/TimeInput.swift`. **Add a case here whenever you touch how a percent is shown.**
+
+CI (`ci.yml`) runs on macOS with Xcode 16.3: extractor regression → display regression → Debug build → Release build.
 
 ## Project skills and subagents
 

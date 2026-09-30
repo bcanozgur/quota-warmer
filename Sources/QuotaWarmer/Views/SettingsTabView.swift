@@ -15,6 +15,7 @@ struct SettingsTabView: View {
     @AppStorage("morningPrewarmHour")         private var morningHour: Int         = 6
     @AppStorage("morningPrewarmMinute")       private var morningMinute: Int       = 0
     @AppStorage("morningPrewarmWeekdaysOnly") private var morningWeekdaysOnly: Bool = true
+    @AppStorage(QuotaDisplay.colorfulBarsKey) private var colorfulBars: Bool = true
 
     private let refreshOptions: [(label: String, value: Int)] = [
         ("5m", 300), ("10m", 600), ("15m", 900), ("30m", 1800)
@@ -39,7 +40,7 @@ struct SettingsTabView: View {
                     row(icon: "shield.lefthalf.filled", title: "Rate-limit Guard",
                         subtitle: "Back off after failures") {
                         Toggle("", isOn: $rateLimitGuard)
-                            .toggleStyle(.switch).scaleEffect(0.75).tint(DS.C.accent(.claude))
+                            .toggleStyle(.switch).scaleEffect(0.75).tint(DS.C.green)
                     }
 
                     Divider().background(DS.C.border).padding(.leading, 36)
@@ -59,6 +60,15 @@ struct SettingsTabView: View {
                     }
                 }
 
+                group("DISPLAY") {
+                    row(icon: "paintpalette", title: "Colorful Quota Bars",
+                        subtitle: colorfulBars ? "Blue → orange at 50% → red at 80% used" : "Single-color bars") {
+                        Toggle("", isOn: $colorfulBars)
+                            .toggleStyle(.switch).scaleEffect(0.75).tint(DS.C.green)
+                            .accessibilityLabel(Text("Colorful quota bars"))
+                    }
+                }
+
                 group("MORNING PRE-WARM") {
                     row(icon: "sunrise", title: "Wake & Warm Each Morning",
                         subtitle: "Wakes a sleeping Mac to start your window") {
@@ -66,18 +76,19 @@ struct SettingsTabView: View {
                             get: { appState.morningPrewarmEnabled },
                             set: { appState.setMorningPrewarm($0) }
                         ))
-                        .toggleStyle(.switch).scaleEffect(0.75).tint(DS.C.accent(.claude))
+                        .toggleStyle(.switch).scaleEffect(0.75).tint(DS.C.green)
                     }
 
                     Divider().background(DS.C.border).padding(.leading, 36)
 
                     row(icon: "clock", title: "Wake Time",
                         subtitle: "Start the window before you sit down") {
-                        DatePicker("", selection: morningTimeBinding, displayedComponents: .hourAndMinute)
-                            .datePickerStyle(.stepperField)
-                            .labelsHidden()
-                            .scaleEffect(0.9)
-                            .fixedSize()
+                        // Typed by hand (HH:mm). A DS-styled text field instead of
+                        // the AppKit stepper DatePicker, which renders as a
+                        // clipped dark box in this scaled borderless panel.
+                        WakeTimeField(hour: $morningHour, minute: $morningMinute) {
+                            appState.morningTimeChanged()
+                        }
                     }
 
                     Divider().background(DS.C.border).padding(.leading, 36)
@@ -85,7 +96,7 @@ struct SettingsTabView: View {
                     row(icon: "calendar", title: "Weekdays Only",
                         subtitle: "Skip Saturday and Sunday") {
                         Toggle("", isOn: $morningWeekdaysOnly)
-                            .toggleStyle(.switch).scaleEffect(0.75).tint(DS.C.accent(.claude))
+                            .toggleStyle(.switch).scaleEffect(0.75).tint(DS.C.green)
                             .onChange(of: morningWeekdaysOnly) { _, _ in appState.morningTimeChanged() }
                     }
 
@@ -108,7 +119,7 @@ struct SettingsTabView: View {
                     row(icon: "bell.badge", title: "Window Expiring Soon",
                         subtitle: "30 min before reset") {
                         Toggle("", isOn: $notifyWarning)
-                            .toggleStyle(.switch).scaleEffect(0.75).tint(DS.C.accent(.claude))
+                            .toggleStyle(.switch).scaleEffect(0.75).tint(DS.C.green)
                     }
 
                     Divider().background(DS.C.border).padding(.leading, 36)
@@ -116,7 +127,7 @@ struct SettingsTabView: View {
                     row(icon: "checkmark.circle", title: "Window Activated",
                         subtitle: "After warmup succeeds") {
                         Toggle("", isOn: $notifyActivated)
-                            .toggleStyle(.switch).scaleEffect(0.75).tint(DS.C.accent(.claude))
+                            .toggleStyle(.switch).scaleEffect(0.75).tint(DS.C.green)
                     }
                 }
 
@@ -124,7 +135,7 @@ struct SettingsTabView: View {
                     row(icon: "power", title: "Launch at Login",
                         subtitle: "Start with macOS") {
                         Toggle("", isOn: $launchAtLogin)
-                            .toggleStyle(.switch).scaleEffect(0.75).tint(DS.C.accent(.claude))
+                            .toggleStyle(.switch).scaleEffect(0.75).tint(DS.C.green)
                             .onChange(of: launchAtLogin) { _, v in
                                 updateLaunchAtLogin(v)
                             }
@@ -309,23 +320,6 @@ struct SettingsTabView: View {
 
     // MARK: - Layout helpers
 
-    private var morningTimeBinding: Binding<Date> {
-        Binding(
-            get: {
-                var c = DateComponents()
-                c.hour = morningHour
-                c.minute = morningMinute
-                return Calendar.current.date(from: c) ?? Date()
-            },
-            set: { newValue in
-                let c = Calendar.current.dateComponents([.hour, .minute], from: newValue)
-                morningHour = c.hour ?? 6
-                morningMinute = c.minute ?? 0
-                appState.morningTimeChanged()
-            }
-        )
-    }
-
     private func updateLaunchAtLogin(_ enabled: Bool) {
         do {
             if enabled, SMAppService.mainApp.status != .enabled {
@@ -460,5 +454,66 @@ struct SettingsTabView: View {
         }
         .padding(2)
         .background(DS.C.surfaceHigh, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+    }
+}
+
+/// Hand-typed HH:mm field drawn with DS tokens so it matches both themes.
+/// Commits on Return or when focus leaves; input is parsed by `TimeInput`
+/// (`6`, `630`, `6:30`, `06.30` …). Invalid text is rejected and the field
+/// snaps back to the last valid time, so a typo can never schedule a bogus wake.
+struct WakeTimeField: View {
+    @Binding var hour: Int
+    @Binding var minute: Int
+    let onChange: () -> Void
+
+    @State private var draft = ""
+    @State private var invalid = false
+    @FocusState private var focused: Bool
+
+    var body: some View {
+        TextField("HH:mm", text: $draft)
+            .textFieldStyle(.plain)
+            .font(.system(size: 12, weight: .semibold))
+            .monospacedDigit()
+            .multilineTextAlignment(.center)
+            .foregroundStyle(DS.C.text)
+            .focused($focused)
+            .frame(width: 52, height: 26)
+            .background(DS.C.surfaceHigh, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .stroke(invalid ? DS.C.red : (focused ? DS.C.blue.opacity(0.6) : DS.C.border), lineWidth: 1)
+            )
+            .onAppear { draft = TimeInput.text(hour: hour, minute: minute) }
+            .onChange(of: hour) { _, _ in if !focused { resetDraft() } }
+            .onChange(of: minute) { _, _ in if !focused { resetDraft() } }
+            // Keep the red "rejected" border until the user types something new
+            // (the snap-back to the valid time must not clear it).
+            .onChange(of: draft) { _, text in
+                if text != TimeInput.text(hour: hour, minute: minute) { invalid = false }
+            }
+            .onSubmit(commit)
+            .onChange(of: focused) { _, isFocused in if !isFocused { commit() } }
+            .help("Type a time, e.g. 06:00, 6:30 or 0715, then press Return.")
+            .accessibilityLabel(Text("Wake time"))
+    }
+
+    private func commit() {
+        guard let parsed = TimeInput.parse(draft) else {
+            invalid = true
+            resetDraft()
+            return
+        }
+        let changed = parsed.hour != hour || parsed.minute != minute
+        invalid = false
+        hour = parsed.hour
+        minute = parsed.minute
+        resetDraft()
+        if changed { onChange() }
+    }
+
+    private func resetDraft() {
+        let text = TimeInput.text(hour: hour, minute: minute)
+        if draft != text { draft = text }
     }
 }

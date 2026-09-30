@@ -88,7 +88,8 @@ struct ToolTabView: View {
             pace: pace,
             refreshing: toolState.isFetchingQuota,
             statusColor: ToolStatusCopy.rowStatusColor(for: toolState, hasMetric: metric != nil),
-            compact: true
+            compact: true,
+            displayMode: toolState.displayMode
         )
     }
 

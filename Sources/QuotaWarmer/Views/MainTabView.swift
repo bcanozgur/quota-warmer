@@ -97,6 +97,9 @@ struct MainTabView: View {
                 Spacer(minLength: 6)
                 ToolModeMenu(mode: state.mode, compact: true) { appState.setMode($0, for: tool) }
                     .fixedSize()
+                QuotaDisplayModeToggle(mode: state.displayMode, toolName: tool.shortName) {
+                    appState.toggleDisplayMode(for: tool)
+                }
                 IconButton(
                     systemName: state.isFetchingQuota ? "hourglass" : state.quotaBackoffActive ? "clock.arrow.circlepath" : "arrow.clockwise",
                     help: "Refresh \(tool.shortName) quota now",
@@ -167,7 +170,9 @@ struct MainTabView: View {
             pace: pace,
             refreshing: state.isFetchingQuota || settlingActive,
             statusColor: ToolStatusCopy.rowStatusColor(for: state, hasMetric: metric != nil),
-            compact: true
+            compact: true,
+            displayMode: state.displayMode,
+            settling: settlingActive
         )
     }
 

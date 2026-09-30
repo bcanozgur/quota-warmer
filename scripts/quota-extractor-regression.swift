@@ -854,11 +854,14 @@ access_token=private-value
             !claudeIdle.primaryWindowRolledOver(now: rolloverNow),
             "An idle projection has no real window to roll over"
         )
+        // The menu-bar text lives in QuotaDisplay.menuBarText (behavior covered
+        // by quota-display-regression.swift); the label must feed it the flag.
         let menuBarSource = readSource("Sources/QuotaWarmer/Views/MenuBarLabel.swift")
+        let menuBarTextSource = readSource("Sources/QuotaWarmer/Models/QuotaDisplay.swift")
         require(
-            menuBarSource.contains("st.primaryWindowRolledOver")
-                && menuBarSource.range(of: "primaryWindowRolledOver")!.lowerBound
-                    < menuBarSource.range(of: "Int(metric.remainingFraction * 100)")!.lowerBound,
+            menuBarSource.contains("primaryWindowRolledOver: st.primaryWindowRolledOver")
+                && menuBarTextSource.range(of: "if input.primaryWindowRolledOver")!.lowerBound
+                    < menuBarTextSource.range(of: "if let remaining = input.remainingFraction")!.lowerBound,
             "The menu bar must report a rolled-over window as restored before falling back to the stale percentage"
         )
         require(

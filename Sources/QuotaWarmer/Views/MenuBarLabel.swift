@@ -46,40 +46,21 @@ enum MenuBarStatus {
             let prominent = st.isWarming || (st.isMonitored && st.sourceHealth == .healthy
                 && st.freshness != .expired && st.freshness != .unknown)
 
-            let text: String
-            if st.isWarming {
-                text = "warming"
-            } else if st.sessionSettling, let r = st.timeUntilReset {
-                // Window just opened; the percentage is a not-yet-settled rollover
-                // artifact, so show only the countdown (no misleading "0%").
-                text = compactTime(r)
-            } else if st.primaryMetric?.isIdleFiveHourWindow == true {
-                // No active window yet: the only "reset" is a sliding projection,
-                // so show the full remaining percent without a fake countdown that
-                // would make a not-yet-started window look active.
-                text = "\(Int((st.primaryMetric?.remainingFraction ?? 1) * 100))%"
-            } else if let r = st.timeUntilReset {
-                text = compactQuotaText(time: r, metric: st.primaryMetric)
-            } else if st.primaryWindowRolledOver {
-                // The known reset already passed while polling was blocked, so the
-                // window rolled over and quota is restored. Report that instead of
-                // the pre-reset percentage, which would badly understate what is
-                // available. Approximate ("~") because the exact figure is only
-                // knowable once a live fetch succeeds again.
-                text = "~100%"
-            } else if let metric = st.primaryMetric {
-                // No live 5h countdown (window depleted/expired/rate-limited): show
-                // the 5h remaining percent only. The menu-bar label represents the
-                // 5-hour window — never fall back to the weekly window's countdown
-                // here, which spans days and misrepresents the 5h slot as lasting
-                // more than five hours.
-                text = "\(Int(metric.remainingFraction * 100))%"
-            } else {
-                // Auth/setup problems are conveyed by the status dot and the
-                // popover. A raw "login" label in the system menu bar looks like
-                // an app defect, especially when another tool still has live data.
-                text = ""
-            }
+            // Idle 5h windows drop their sliding projected reset, rolled-over
+            // windows report restored quota, and settling windows show only the
+            // countdown — see `QuotaDisplay.menuBarText`. The percent follows
+            // the tool's remaining/used display mode.
+            let text = QuotaDisplay.menuBarText(
+                QuotaDisplay.MenuBarInput(
+                    isWarming: st.isWarming,
+                    sessionSettling: st.sessionSettling,
+                    timeUntilReset: st.timeUntilReset,
+                    isIdleFiveHourWindow: st.primaryMetric?.isIdleFiveHourWindow == true,
+                    primaryWindowRolledOver: st.primaryWindowRolledOver,
+                    remainingFraction: st.primaryMetric?.remainingFraction
+                ),
+                mode: st.displayMode
+            )
 
             return MenuBarComposer.Item(
                 assetName: tool == .claude ? "ClaudeCode" : "Codex",
@@ -91,20 +72,6 @@ enum MenuBarStatus {
                 dimmed: !prominent
             )
         }
-    }
-
-    private static func compactTime(_ secs: TimeInterval) -> String {
-        let total = Int(secs)
-        let d = total / 86_400
-        let h = (total % 86_400) / 3600
-        let m = (total % 3600) / 60
-        if d > 0 { return "\(d)d\(h)h" }
-        return h > 0 ? "\(h)h\(String(format: "%02d", m))m" : "\(m)m"
-    }
-
-    private static func compactQuotaText(time: TimeInterval, metric: QuotaMetric?) -> String {
-        let percent = Int((metric?.remainingFraction ?? 0) * 100)
-        return "\(compactTime(time)) - \(percent)%"
     }
 
     private static func nsStatusColor(for state: ToolState, appState: AppState) -> NSColor {
