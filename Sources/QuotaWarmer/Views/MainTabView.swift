@@ -40,7 +40,26 @@ struct MainTabView: View {
         let helpText = paused ? "Resume automatic warmups" : "Pause all automatic warmups"
         let stateColor = paused ? DS.C.red : DS.C.green
 
+        let fetching = ToolID.allCases.contains { appState.state(for: $0).isFetchingQuota }
         return HStack(spacing: 7) {
+            // Double-arrow icon (the per-tool buttons use a single arrow) = "both".
+            // While refreshing it stays the same icon, just dimmed and not clickable.
+            IconButton(
+                systemName: "arrow.triangle.2.circlepath",
+                help: "Refresh Claude and Codex quota now",
+                size: 26,
+                isDisabled: fetching
+            ) {
+                Task {
+                    await withTaskGroup(of: Void.self) { group in
+                        for tool in ToolID.allCases {
+                            group.addTask { await appState.refreshQuotaManually(for: tool) }
+                        }
+                    }
+                }
+            }
+            .opacity(fetching ? 0.4 : 1)
+            .animation(.easeOut(duration: 0.15), value: fetching)
             StatusBadge(text: paused ? "Paused" : "Active", color: stateColor)
 
             IconButton(

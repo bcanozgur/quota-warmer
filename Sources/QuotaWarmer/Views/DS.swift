@@ -131,7 +131,7 @@ enum DS {
     // MARK: - Page layout
     // Shared by every tab so the title, cards and edges line up when switching.
     enum Page {
-        static let top: CGFloat = 24          // content top inset
+        static let top: CGFloat = 12          // content top inset
         static let side: CGFloat = 10         // content left/right inset
         static let bottom: CGFloat = 10       // content bottom inset
         static let spacing: CGFloat = 10      // gap between header / cards
