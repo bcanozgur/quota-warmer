@@ -1,0 +1,156 @@
+name: Auto release
+
+# Cuts a release automatically once CI is green on main:
+#   1. pick the next version from the commits since the last v* tag
+#   2. bump CFBundleShortVersionString (project.yml + Info.plist), commit, tag
+#   3. dispatch `Release (unsigned)` for that tag, which builds the DMG and
+#      publishes the GitHub Release (+ latest.json for the in-app updater)
+#
+# Bump rule (commit subjects since the last tag):
+#   major  a subject starting with "BREAKING" / "major:" or containing "!:"
+#   minor  a subject starting with "Add" or "feat"
+#   patch  anything else that touches the app (Sources/, project.yml)
+# Docs/CI-only changes never release. Put "[skip release]" in any commit
+# subject to hold the release back. Run it by hand to force a bump level.
+#
+# Note: pushes made with GITHUB_TOKEN do not trigger other workflows, so the
+# release is started explicitly with `gh workflow run` instead of a tag trigger.
+
+on:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: "Version bump"
+        type: choice
+        options: [auto, patch, minor, major]
+        default: auto
+
+permissions:
+  contents: write
+  actions: write
+
+concurrency:
+  group: auto-release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Bump, tag and publish
+    runs-on: ubuntu-latest
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.event == 'push')
+
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Skip if CI ran on an older commit
+        if: github.event_name == 'workflow_run'
+        run: |
+          set -euo pipefail
+          if [[ "$(git rev-parse HEAD)" != "${{ github.event.workflow_run.head_sha }}" ]]; then
+            echo "main moved past the CI-verified commit; a later CI run will release."
+            echo "SKIP=1" >> "${GITHUB_ENV}"
+          fi
+
+      - name: Decide next version
+        id: next
+        if: env.SKIP != '1'
+        shell: bash
+        env:
+          BUMP_INPUT: ${{ github.event.inputs.bump || 'auto' }}
+        run: |
+          set -euo pipefail
+          LAST=$(git describe --tags --abbrev=0 --match 'v[0-9]*' 2>/dev/null || echo "")
+          RANGE="${LAST:+${LAST}..}HEAD"
+          SUBJECTS=$(git log "${RANGE}" --format=%s | grep -v '^Release v' || true)
+
+          if [[ -z "${SUBJECTS}" ]]; then
+            echo "No commits since ${LAST:-the beginning}; nothing to release."
+            echo "release=false" >> "${GITHUB_OUTPUT}"; exit 0
+          fi
+          if grep -qi '\[skip release\]' <<<"${SUBJECTS}"; then
+            echo "A commit asked to skip the release."
+            echo "release=false" >> "${GITHUB_OUTPUT}"; exit 0
+          fi
+          if [[ -n "${LAST}" && "${BUMP_INPUT}" == "auto" ]] \
+             && [[ -z "$(git diff --name-only "${LAST}..HEAD" -- Sources project.yml)" ]]; then
+            echo "No app changes since ${LAST}; nothing to release."
+            echo "release=false" >> "${GITHUB_OUTPUT}"; exit 0
+          fi
+
+          BUMP="${BUMP_INPUT}"
+          if [[ "${BUMP}" == "auto" ]]; then
+            if grep -Eqi '^(BREAKING|major:)|!:' <<<"${SUBJECTS}"; then BUMP=major
+            elif grep -Eqi '^(Add|feat)' <<<"${SUBJECTS}"; then BUMP=minor
+            else BUMP=patch; fi
+          fi
+
+          BASE="${LAST#v}"; BASE="${BASE:-0.0.0}"
+          IFS=. read -r MAJOR MINOR PATCH <<<"${BASE%%-*}"
+          case "${BUMP}" in
+            major) MAJOR=$((MAJOR+1)); MINOR=0; PATCH=0 ;;
+            minor) MINOR=$((MINOR+1)); PATCH=0 ;;
+            patch) PATCH=$((PATCH+1)) ;;
+          esac
+          VERSION="${MAJOR}.${MINOR}.${PATCH}"
+
+          if git rev-parse -q --verify "refs/tags/v${VERSION}" >/dev/null; then
+            echo "Tag v${VERSION} already exists."; exit 1
+          fi
+          echo "Releasing v${VERSION} (${BUMP}) from ${LAST:-scratch}"
+          echo "release=true" >> "${GITHUB_OUTPUT}"
+          echo "version=${VERSION}" >> "${GITHUB_OUTPUT}"
+
+      - name: Bump version files
+        if: steps.next.outputs.release == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="${{ steps.next.outputs.version }}"
+          python3 - "${VERSION}" <<'PY'
+          import re, sys
+          v = sys.argv[1]
+          p = "project.yml"
+          s = open(p).read()
+          s, n = re.subn(r'(CFBundleShortVersionString:\s*")[^"]*(")', r'\g<1>' + v + r'\g<2>', s, count=1)
+          assert n == 1, "CFBundleShortVersionString not found in project.yml"
+          open(p, "w").write(s)
+          p = "Sources/QuotaWarmer/Info.plist"
+          s = open(p).read()
+          s, n = re.subn(r'(<key>CFBundleShortVersionString</key>\s*<string>)[^<]*(</string>)', r'\g<1>' + v + r'\g<2>', s, count=1)
+          assert n == 1, "CFBundleShortVersionString not found in Info.plist"
+          open(p, "w").write(s)
+          PY
+          git diff --stat
+
+      - name: Commit, tag and push
+        if: steps.next.outputs.release == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="${{ steps.next.outputs.version }}"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -am "Release v${VERSION} [skip ci]"
+          git tag "v${VERSION}"
+          git push origin main "v${VERSION}"
+
+      - name: Publish release
+        if: steps.next.outputs.release == 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          VERSION="${{ steps.next.outputs.version }}"
+          gh workflow run release-unsigned.yml --ref "v${VERSION}" -f version="${VERSION}"
