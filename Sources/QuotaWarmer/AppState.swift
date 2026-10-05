@@ -274,7 +274,6 @@ final class AppState: ObservableObject {
     private let wakeScheduler = WakeScheduler()
     private let claudeAuthRetryDelays: [TimeInterval] = [15, 45, 90]
     private var refreshTimer: Timer?
-    private var morningTimer: Timer?
     private var morningReapplyTask: Task<Void, Never>?
 
     init() {
@@ -408,6 +407,22 @@ final class AppState: ObservableObject {
     /// interaction is wanted. An opted-in auto-warm still resumes here, bounded
     /// to once per window by the usual dedup, so approving access mid-window
     /// claims it instead of waiting for the next tick.
+    /// Redeems a banked Codex reset, then force-refreshes so the bars show the
+    /// restored quota. Returns a user-facing error, or nil on success.
+    func useResetCredit(_ credit: ResetCredit) async -> String? {
+        do {
+            let windows = try await quotaProvider.consumeCodexResetCredit(id: credit.id)
+            addHistory(tool: .codex, kind: .quotaFetch, title: "Banked reset used",
+                       detail: "\(credit.title); \(windows) window(s) reset")
+            await refreshQuotaManually(for: .codex)
+            return nil
+        } catch let error as QuotaProviderError {
+            return error.errorDescription ?? "Could not use the reset."
+        } catch {
+            return "Could not use the reset."
+        }
+    }
+
     func refreshQuotaManually(for tool: ToolID) async {
         let shouldAutoWarm = tool == .claude && state(for: tool).isAutoWarmEnabled
         await refreshQuota(
@@ -563,14 +578,14 @@ final class AppState: ObservableObject {
             // Admin cancelled / failed — revert so the UI reflects reality.
             morningPrewarmEnabled = false
             UserDefaults.standard.set(false, forKey: "morningPrewarmEnabled")
-            morningTimer?.invalidate(); morningTimer = nil
+            scheduler.cancelMorning()
         }
     }
 
     private func disableMorningPrewarm() async {
         morningPrewarmEnabled = false
         UserDefaults.standard.set(false, forKey: "morningPrewarmEnabled")
-        morningTimer?.invalidate(); morningTimer = nil
+        scheduler.cancelMorning()
         morningReapplyTask?.cancel()
         let result = await wakeScheduler.cancel()
         morningStatus = result.success ? "Morning pre-warm is off." : result.message
@@ -610,13 +625,15 @@ final class AppState: ObservableObject {
     }
 
     private func scheduleMorningTimer() {
-        morningTimer?.invalidate()
+        scheduler.cancelMorning()
         guard morningPrewarmEnabled, let fireDate = nextMorningFireDate() else { return }
-        let timer = Timer(fire: fireDate, interval: 0, repeats: false) { [weak self] _ in
-            Task { @MainActor [weak self] in await self?.runScheduledMorningWarmupIfNeeded(source: .timer) }
+        DiagnosticLogger.append("morning_timer_scheduled fireAt=\(ISO8601DateFormatter().string(from: fireDate))")
+        scheduler.scheduleMorning(at: fireDate) { [weak self] sleepGuard in
+            Task { @MainActor [weak self] in
+                defer { sleepGuard.release() }
+                await self?.runScheduledMorningWarmupIfNeeded(source: .timer)
+            }
         }
-        RunLoop.main.add(timer, forMode: .common)
-        morningTimer = timer
     }
 
     private enum ScheduledMorningSource {
@@ -653,6 +670,9 @@ final class AppState: ObservableObject {
             reason: "QuotaWarmer scheduled morning warm-up"
         )
         defer { ProcessInfo.processInfo.endActivity(scheduledActivity) }
+        let sleepGuard = SleepGuard(reason: "morning-\(String(describing: source))")
+        defer { sleepGuard.release() }
+        DiagnosticLogger.append("morning_warm_running source=\(String(describing: source))")
 
         var caughtUpSuccessfully = false
         for tool in ToolID.allCases where state(for: tool).isAutoWarmEnabled {
@@ -871,6 +891,10 @@ final class AppState: ObservableObject {
 
         state.isWarming = true
         state.errorMessage = nil
+        // Any warm-up (auto, morning, manual) can start inside a DarkWake; hold
+        // the Mac awake until the command and the immediate quota re-check end.
+        let sleepGuard = SleepGuard(reason: "warmup-\(tool.rawValue)-\(mode)")
+        defer { sleepGuard.release() }
         state.claimVerifyTask?.cancel(); state.claimVerifyTask = nil
         state.settleRepollTask?.cancel(); state.settleRepollTask = nil
         notifications.cancelAll(for: tool)
@@ -1330,6 +1354,12 @@ final class AppState: ObservableObject {
     /// Set by AppDelegate while the panel is shown; gates the per-second
     /// SwiftUI invalidation above.
     var isPanelVisible = false
+    /// Natural height of the visible tab's content (0 when the tab doesn't report one).
+    @Published var panelContentHeight: CGFloat = 0
+
+    static func panelHeight(forMeasured measured: CGFloat) -> CGFloat {
+        measured > 0 ? min(max(measured, 300), 640) : DS.totalHeight
+    }
     /// Menu-bar refresh for the 1 s tick while the panel is closed.
     var onUITick: (() -> Void)?
 

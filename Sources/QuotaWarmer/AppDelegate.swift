@@ -1,5 +1,6 @@
 import AppKit
 import Combine
+import Combine
 import SwiftUI
 
 /// Owns the menu-bar status item. We use an AppKit `NSStatusItem` (rather than a
@@ -12,6 +13,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private var statusItem: NSStatusItem!
     private var panel: NSPanel?
+    private var heightObserver: AnyCancellable?
     private var cancellables = Set<AnyCancellable>()
     private var lastCloseAt: Date = .distantPast
 
@@ -95,7 +97,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         created.hidesOnDeactivate = false
         created.delegate = self
         panel = created
+        // Follow the content height (resets gained/used, tab switches) while open,
+        // keeping the top edge pinned under the menu bar item.
+        heightObserver = appState.$panelContentHeight
+            .removeDuplicates()
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in self?.fitPanelToContent() }
         return created
+    }
+
+    private func fitPanelToContent() {
+        guard let panel, panel.isVisible, let hosting = panel.contentView else { return }
+        let newSize = hosting.fittingSize
+        guard abs(newSize.height - panel.frame.height) > 0.5 else { return }
+        var frame = panel.frame
+        frame.origin.y += frame.height - newSize.height
+        frame.size = newSize
+        panel.setFrame(frame, display: true)
+        panel.invalidateShadow()
     }
 
     private func showPanel() {

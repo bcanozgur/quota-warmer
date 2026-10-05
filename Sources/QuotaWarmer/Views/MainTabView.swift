@@ -13,11 +13,11 @@ struct MainTabView: View {
             if let warning = appState.watcherStatusText { watcherWarning(warning) }
             if !outcomeTools.isEmpty { statusCard }
             providerList
-            Spacer(minLength: 0)
         }
         .padding(.horizontal, DS.Page.side)
         .padding(.top, DS.Page.top)
         .padding(.bottom, DS.Page.bottom)
+        .reportsPanelHeight()
         .frame(maxHeight: .infinity, alignment: .top)
         .background(DS.C.bg)
     }
@@ -54,19 +54,14 @@ struct MainTabView: View {
         .help(helpText)
     }
 
-    /// Both providers share one card, split by a hairline separator.
+    /// One card per provider, so each reads as its own panel.
     private var providerList: some View {
-        VStack(spacing: 0) {
-            ForEach(Array(ToolID.allCases.enumerated()), id: \.element) { index, tool in
-                if index > 0 {
-                    Rectangle()
-                        .fill(DS.C.border)
-                        .frame(height: 1)
-                }
+        VStack(spacing: DS.Page.spacing) {
+            ForEach(ToolID.allCases, id: \.self) { tool in
                 providerRow(tool)
+                    .dsCard()
             }
         }
-        .dsCard()
     }
 
     private func providerRow(_ tool: ToolID) -> some View {
@@ -129,6 +124,12 @@ struct MainTabView: View {
                     .frame(height: 1)
                 windowRow(state, title: "Weekly", metric: state.weeklyMetric,
                           resetAt: state.weeklyMetric?.resetAt, windowDuration: tool.weeklyWindowDuration)
+                if let credits = state.quotaSnapshot?.resetCredits, !credits.isEmpty {
+                    Rectangle()
+                        .fill(DS.C.borderSoft)
+                        .frame(height: 1)
+                    ResetCreditsRow(credits: credits, now: Date()) { await appState.useResetCredit($0) }
+                }
             }
         }
         .padding(.horizontal, 12)

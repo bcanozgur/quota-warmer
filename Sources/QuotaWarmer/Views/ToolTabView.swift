@@ -1,6 +1,7 @@
 import SwiftUI
 
 struct ToolTabView: View {
+    @EnvironmentObject var appState: AppState
     @ObservedObject var toolState: ToolState
     let onSetMode: (ToolMode) -> Void
     let onActivate: () -> Void
@@ -24,11 +25,11 @@ struct ToolTabView: View {
             }
             tokenUsageSection
             actions
-            Spacer(minLength: 0)
         }
         .padding(.horizontal, DS.Page.side)
         .padding(.top, DS.Page.top)
         .padding(.bottom, DS.Page.bottom)
+        .reportsPanelHeight()
         .frame(maxHeight: .infinity, alignment: .top)
         .background(DS.C.bg)
         .onReceive(ticker) { t in if isPanelVisible() { now = t } }
@@ -64,6 +65,12 @@ struct ToolTabView: View {
                 resetAt: toolState.weeklyMetric?.resetAt,
                 windowDuration: toolState.tool.weeklyWindowDuration
             )
+            if let credits = toolState.quotaSnapshot?.resetCredits, !credits.isEmpty {
+                Rectangle()
+                    .fill(DS.C.borderSoft)
+                    .frame(height: 1)
+                ResetCreditsRow(credits: credits, now: now) { await appState.useResetCredit($0) }
+            }
         }
         .padding(DS.Page.cardPadding)
         .frame(maxWidth: .infinity, alignment: .leading)

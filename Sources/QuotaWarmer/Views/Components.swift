@@ -17,6 +17,8 @@ struct UsageBar: View {
     var track: Color = DS.C.track
     var thumbFraction: Double? = nil
 
+    @State private var pulse = false
+
     private func clamp(_ value: Double) -> CGFloat { CGFloat(min(max(value, 0), 1)) }
 
     var body: some View {
@@ -28,12 +30,7 @@ struct UsageBar: View {
                 Capsule()
                     .fill(fill)
                     .frame(width: fillW)
-                if refreshing {
-                    Capsule()
-                        .fill(.white.opacity(0.22))
-                        .frame(width: w * 0.25)
-                        .offset(x: w * 0.25)
-                }
+                    .opacity(refreshing && pulse ? 0.7 : 1)
                 if let thumbFraction {
                     let thumbW: CGFloat = 5
                     Capsule()
@@ -46,6 +43,89 @@ struct UsageBar: View {
             }
         }
         .frame(height: height)
+        // A whole-fill pulse while refreshing — a static highlight band read as a
+        // stray shadow inside the bar.
+        .animation(refreshing ? .easeInOut(duration: 0.8).repeatForever(autoreverses: true) : .default, value: pulse)
+        .onChange(of: refreshing, initial: true) { _, on in pulse = on }
+    }
+}
+
+/// Banked, expiring rate-limit resets (Codex). Count on the header line, then one
+/// line per grant with its expiry, soonest first. Each line has a two-step button:
+/// "Use" arms it ("Sure?", auto-disarms after a few seconds), a second tap redeems.
+struct ResetCreditsRow: View {
+    var credits: [ResetCredit]
+    var now: Date
+    var onUse: (ResetCredit) async -> String?
+
+    @State private var armedID: String?
+    @State private var busyID: String?
+    @State private var errorText: String?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            HStack {
+                Text("Banked resets")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(DS.C.text)
+                Spacer(minLength: 8)
+                Text("\(credits.count) available")
+                    .font(DS.mono(11, weight: .semibold))
+                    .foregroundStyle(DS.C.textSub)
+            }
+            ForEach(credits, id: \.id) { credit in
+                HStack(spacing: 8) {
+                    Text(credit.expiresAt.formatted(.dateTime.month(.abbreviated).day()))
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(DS.C.textSub)
+                    Text("expires in \(quotaDurationText(max(0, Int(credit.expiresAt.timeIntervalSince(now)))))")
+                        .font(.system(size: 10))
+                        .foregroundStyle(DS.C.textMuted)
+                    Spacer(minLength: 8)
+                    useButton(credit)
+                }
+            }
+            if let errorText {
+                Text(errorText)
+                    .font(.system(size: 10.5, weight: .medium))
+                    .foregroundStyle(DS.C.red)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
+    private func useButton(_ credit: ResetCredit) -> some View {
+        let busy = busyID == credit.id
+        let armed = armedID == credit.id
+        return Button {
+            errorText = nil
+            if armed {
+                armedID = nil
+                busyID = credit.id
+                Task {
+                    errorText = await onUse(credit)
+                    busyID = nil
+                }
+            } else {
+                armedID = credit.id
+                // Disarm if the second tap never comes.
+                Task {
+                    try? await Task.sleep(nanoseconds: 4_000_000_000)
+                    if armedID == credit.id { armedID = nil }
+                }
+            }
+        } label: {
+            Text(busy ? "Using…" : armed ? "Sure?" : "Use")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(armed ? DS.C.red : DS.C.text)
+                .frame(minWidth: 52)
+                .padding(.vertical, 3)
+                .background(Capsule().fill((armed ? DS.C.red : DS.C.textMuted).opacity(0.14)))
+                .overlay(Capsule().stroke((armed ? DS.C.red : DS.C.border).opacity(armed ? 0.5 : 1), lineWidth: 1))
+        }
+        .buttonStyle(PressableButtonStyle())
+        .disabled(busyID != nil)
+        .help(armed ? "Click again to use this reset now" : "Use this banked reset (asks to confirm)")
     }
 }
 

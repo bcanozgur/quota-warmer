@@ -141,6 +141,22 @@ access_token=private-value
         requireClose(wham.weekly?.remainingFraction, 1.0, "Codex wham weekly remaining (0% used)")
         require(wham.fiveHour?.resetAt != nil, "Codex wham 5h reset should be extracted")
         require(wham.fiveHour?.name == "5h", "Codex wham primary window should be 5h")
+
+        // Banked reset credits: only unredeemed + unexpired, soonest expiry first.
+        let creditsPayload: [String: Any] = ["credits": [
+            ["id": "b", "status": "available", "title": "Full reset", "expires_at": "2026-10-29T18:47:24.251038Z"],
+            ["id": "a", "status": "available", "title": "Full reset", "expires_at": "2026-10-22T19:12:07.257940Z"],
+            ["id": "c", "status": "redeemed", "title": "Full reset", "expires_at": "2026-10-30T00:00:00Z"],
+            ["id": "d", "status": "available", "title": "Full reset", "expires_at": "2026-09-01T00:00:00Z"],
+        ]]
+        let credits = QuotaProvider.parseResetCredits(creditsPayload, now: Date(timeIntervalSince1970: 1_791_000_000)) // 2026-10-03
+        require(credits.map(\.id) == ["a", "b"], "Reset credits should keep available+unexpired, soonest first")
+
+        // Consume response: applied only when windows_reset > 0; `no_credit` is an error.
+        require((try? QuotaProvider.parseConsumeResult(["code": "ok", "windows_reset": 2])) == 2,
+                "Consume with windows_reset > 0 should succeed")
+        require((try? QuotaProvider.parseConsumeResult(["code": "no_credit", "credit": NSNull(), "windows_reset": 0])) == nil,
+                "Consume no_credit should throw")
         require(wham.weekly?.name == "Weekly", "Codex wham secondary window should be weekly")
 
         var whamLaterPayload = whamPayload

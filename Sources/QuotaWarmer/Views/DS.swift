@@ -124,9 +124,9 @@ enum DS {
     static let sidebarWidth: CGFloat = 56
     static let contentWidth: CGFloat = 372
     static let totalWidth:   CGFloat = sidebarWidth + contentWidth
-    // Sized so the overview (header + status card + both provider cards) fits with no dead
-    // space below; longer tabs (Settings) scroll.
-    static let totalHeight: CGFloat = 436
+    // Fallback height for tabs that scroll (Settings). The overview and tool tabs measure
+    // their own content and the panel follows it (see `PanelHeightKey`).
+    static let totalHeight: CGFloat = 462
 
     // MARK: - Page layout
     // Shared by every tab so the title, cards and edges line up when switching.
@@ -162,5 +162,21 @@ extension View {
             .foregroundStyle(DS.C.textMuted)
             .tracking(0.7)
             .textCase(.uppercase)
+    }
+}
+
+
+/// Natural height of a tab's content, reported up so the panel can size to it —
+/// no dead space with no banked resets, no clipping with several.
+struct PanelHeightKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = max(value, nextValue()) }
+}
+
+extension View {
+    func reportsPanelHeight() -> some View {
+        background(GeometryReader { geo in
+            Color.clear.preference(key: PanelHeightKey.self, value: geo.size.height)
+        })
     }
 }

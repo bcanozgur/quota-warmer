@@ -2,6 +2,8 @@ import Foundation
 
 protocol QuotaProviding {
     func fetchQuota(for tool: ToolID, allowsCredentialInteraction: Bool) async throws -> QuotaSnapshot
+    /// Redeems one banked Codex rate-limit reset. Returns the number of windows reset.
+    func consumeCodexResetCredit(id: String) async throws -> Int
 }
 
 extension QuotaProviding {
@@ -83,14 +85,75 @@ final class QuotaProvider: QuotaProviding {
         // same source the Codex web analytics page uses — is the live quota.
         let usageURL = URL(string: "https://chatgpt.com/backend-api/wham/usage")!
         let payload = try await requestJSON(url: usageURL, credential: credential)
-        return try requireRecognizedMetrics(
+        let snapshot = try requireRecognizedMetrics(
             codexSnapshot(payload: payload, source: "Codex usage", message: credential.source)
         )
+        // Banked resets are a display extra: a failure here must never fail the quota.
+        let creditsURL = URL(string: "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits")!
+        if let creditsPayload = try? await requestJSON(url: creditsURL, credential: credential) {
+            return snapshot.withResetCredits(Self.parseResetCredits(creditsPayload))
+        }
+        return snapshot
     }
 
-    private func requestJSON(url: URL, credential: Credential) async throws -> Any {
+    /// Parses `wham/rate-limit-reset-credits`: only `available`, not-yet-expired
+    /// grants, soonest expiry first.
+    static func parseResetCredits(_ payload: Any, now: Date = Date()) -> [ResetCredit] {
+        guard let list = (payload as? [String: Any])?["credits"] as? [[String: Any]] else { return [] }
+        let withFraction = ISO8601DateFormatter()
+        withFraction.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        let plain = ISO8601DateFormatter()
+        return list.compactMap { item -> ResetCredit? in
+            guard (item["status"] as? String) == "available",
+                  let raw = item["expires_at"] as? String,
+                  let expiry = withFraction.date(from: raw) ?? plain.date(from: raw),
+                  expiry > now else { return nil }
+            let id = (item["id"] as? String) ?? raw
+            let title = (item["title"] as? String) ?? "Rate limit reset"
+            return ResetCredit(id: id, title: title, expiresAt: expiry)
+        }
+        .sorted { $0.expiresAt < $1.expiresAt }
+    }
+
+    /// POST `wham/rate-limit-reset-credits/consume` (shape taken from the Codex CLI:
+    /// `credit_id` + an idempotency `redeem_request_id`). A real redeem is
+    /// irreversible, so this is only ever called from an explicit, confirmed tap.
+    func consumeCodexResetCredit(id: String) async throws -> Int {
+        let credential: Credential
+        do {
+            credential = try await credentialStore.credential(for: .codex)
+        } catch {
+            throw QuotaProviderError.missingCredentials("Codex credentials not found")
+        }
+        let url = URL(string: "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits/consume")!
+        let body = try JSONSerialization.data(withJSONObject: [
+            "credit_id": id,
+            "redeem_request_id": UUID().uuidString.lowercased(),
+        ])
+        let payload = try await requestJSON(url: url, credential: credential, method: "POST", body: body)
+        return try Self.parseConsumeResult(payload)
+    }
+
+    /// `{"code": "...", "credit": {...}|null, "windows_reset": N}`. Success is
+    /// `windows_reset > 0`; anything else (e.g. `no_credit`) is surfaced as an error.
+    static func parseConsumeResult(_ payload: Any) throws -> Int {
+        let dict = payload as? [String: Any]
+        let windows = (dict?["windows_reset"] as? NSNumber)?.intValue ?? 0
+        if windows > 0 { return windows }
+        let code = (dict?["code"] as? String) ?? "unknown"
+        switch code {
+        case "no_credit": throw QuotaProviderError.unavailable("That reset is no longer available.")
+        default: throw QuotaProviderError.unavailable("Reset was not applied (\(code)).")
+        }
+    }
+
+    private func requestJSON(url: URL, credential: Credential, method: String = "GET", body: Data? = nil) async throws -> Any {
         var request = URLRequest(url: url)
-        request.httpMethod = "GET"
+        request.httpMethod = method
+        if let body {
+            request.httpBody = body
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        }
         request.setValue("Bearer \(credential.accessToken)", forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         if url.host == "api.anthropic.com", url.path == "/api/oauth/usage" {

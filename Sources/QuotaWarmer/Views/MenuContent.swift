@@ -41,13 +41,17 @@ struct MenuContent: View {
 
     private var appearance: AppearanceMode { AppearanceMode(rawValue: appearanceRaw) ?? .system }
 
+    /// Content-driven height (clamped); Settings and the not-yet-measured first
+    /// frame fall back to the fixed height.
+    private var panelHeight: CGFloat { AppState.panelHeight(forMeasured: appState.panelContentHeight) }
+
     var body: some View {
         panel
-            .frame(width: DS.totalWidth, height: DS.totalHeight)
+            .frame(width: DS.totalWidth, height: panelHeight)
             .scaleEffect(DS.panelScale, anchor: .topLeading)
             .frame(
                 width: DS.totalWidth * DS.panelScale,
-                height: DS.totalHeight * DS.panelScale,
+                height: panelHeight * DS.panelScale,
                 alignment: .topLeading
             )
             .clipShape(RoundedRectangle(cornerRadius: DS.R.xl, style: .continuous))
@@ -57,6 +61,7 @@ struct MenuContent: View {
             )
             .padding(2)
             .background(WindowTransparencyConfigurator())
+            .onPreferenceChange(PanelHeightKey.self) { appState.panelContentHeight = $0 }
     }
 
     private var panel: some View {

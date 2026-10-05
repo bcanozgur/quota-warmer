@@ -271,6 +271,13 @@ struct TokenUsageSummary: Equatable {
     }
 }
 
+/// A banked, expiring "reset my rate limits" grant (Codex `rate-limit-reset-credits`).
+struct ResetCredit: Equatable {
+    let id: String
+    let title: String
+    let expiresAt: Date
+}
+
 struct QuotaSnapshot {
     let tool: ToolID
     let fetchedAt: Date
@@ -281,6 +288,15 @@ struct QuotaSnapshot {
     let extras: [QuotaMetric]
     let rawWindowKey: String
     let message: String?
+    /// Unredeemed banked resets, soonest-expiring first. Display-only: never part of
+    /// `rawWindowKey` or any warm-up decision.
+    var resetCredits: [ResetCredit] = []
+
+    func withResetCredits(_ credits: [ResetCredit]) -> QuotaSnapshot {
+        var copy = self
+        copy.resetCredits = credits
+        return copy
+    }
 
     func freshness(now: Date = Date()) -> QuotaFreshness {
         let age = now.timeIntervalSince(fetchedAt)

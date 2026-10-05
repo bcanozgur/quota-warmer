@@ -27,6 +27,7 @@
 		8A78A0AF9DE7B804BAE53247 /* UpdateChecker.swift in Sources */ = {isa = PBXBuildFile; fileRef = EA5F1077252CA9BA28AE19CD /* UpdateChecker.swift */; };
 		96139FB348BF9DD32C982148 /* DiagnosticLogger.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0D3454470E2CC3AC8ACED995 /* DiagnosticLogger.swift */; };
 		AE93A125268295B8FEFE106B /* DS.swift in Sources */ = {isa = PBXBuildFile; fileRef = EA95269FE22AE9471F2D23BA /* DS.swift */; };
+		AF4A75FD5837B3CE14D9654D /* SleepGuard.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5671B1D539CA7F63B3146770 /* SleepGuard.swift */; };
 		B26ECE071262E827974ADF29 /* ModelCatalog.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2ED6A0B93CBD320D269C645 /* ModelCatalog.swift */; };
 		C5A94740BD8B9C128E344EFB /* WarmupRunner.swift in Sources */ = {isa = PBXBuildFile; fileRef = F4D8BDF7070D1A323481D7BE /* WarmupRunner.swift */; };
 		C7A75684B732A7F922EBB865 /* MainTabView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6F3B64B4293CFBD14217DA2B /* MainTabView.swift */; };
@@ -49,6 +50,7 @@
 		2C0FFA24004A3B12BB624E6F /* Scheduler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Scheduler.swift; sourceTree = "<group>"; };
 		3739BD62D7E5AAF6EB84DC3C /* AppState+Ext.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "AppState+Ext.swift"; sourceTree = "<group>"; };
 		4DD0A6F158460741008A6DC8 /* Components.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Components.swift; sourceTree = "<group>"; };
+		5671B1D539CA7F63B3146770 /* SleepGuard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SleepGuard.swift; sourceTree = "<group>"; };
 		6605B93E21CDFAC205269177 /* TimeInput.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TimeInput.swift; sourceTree = "<group>"; };
 		6F3B64B4293CFBD14217DA2B /* MainTabView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MainTabView.swift; sourceTree = "<group>"; };
 		708576E3C4101A8F6BF23DD1 /* claude-models.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "claude-models.json"; sourceTree = "<group>"; };
@@ -124,6 +126,7 @@
 				8AA0B158FEC9459E92677A33 /* NotificationManager.swift */,
 				F0ECCEAAAD4F2D01A85698B2 /* QuotaProvider.swift */,
 				2C0FFA24004A3B12BB624E6F /* Scheduler.swift */,
+				5671B1D539CA7F63B3146770 /* SleepGuard.swift */,
 				EA5F1077252CA9BA28AE19CD /* UpdateChecker.swift */,
 				166E35057E1F11E7F1A327F8 /* WakeScheduler.swift */,
 				F4D8BDF7070D1A323481D7BE /* WarmupRunner.swift */,
@@ -255,6 +258,7 @@
 				05F1FB14EBC371E06BE9E39A /* QuotaWarmerApp.swift in Sources */,
 				79B2AB603B32FA480DB5D162 /* Scheduler.swift in Sources */,
 				790C57D3B366DA66EB4464E7 /* SettingsTabView.swift in Sources */,
+				AF4A75FD5837B3CE14D9654D /* SleepGuard.swift in Sources */,
 				47EA1E34F8A6A95E90A79721 /* TimeInput.swift in Sources */,
 				5E1789AD3B2F0CAA3B34784F /* ToolID.swift in Sources */,
 				242099BB055E5B570D3E0ED3 /* ToolTabView.swift in Sources */,
