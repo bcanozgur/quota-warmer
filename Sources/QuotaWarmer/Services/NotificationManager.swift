@@ -10,7 +10,7 @@ class NotificationManager {
         UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
     }
 
-    func scheduleWindowWarning(for tool: ToolID, expiresAt: Date) {
+    func scheduleWindowWarning(for tool: ProviderID, expiresAt: Date) {
         let warnDate = expiresAt.addingTimeInterval(-1800)
         guard warnDate > Date() else { return }
 
@@ -29,7 +29,7 @@ class NotificationManager {
         UNUserNotificationCenter.current().add(req)
     }
 
-    func notifyWarmupCommandSent(tool: ToolID) {
+    func notifyWarmupCommandSent(tool: ProviderID) {
         let content = UNMutableNotificationContent()
         content.title = "\(tool.displayName) 5h Window Warmup Sent"
         content.subtitle = "QuotaWarmer"
@@ -47,7 +47,7 @@ class NotificationManager {
         UNUserNotificationCenter.current().add(req)
     }
 
-    func notifyActivated(tool: ToolID) {
+    func notifyActivated(tool: ProviderID) {
         let content = UNMutableNotificationContent()
         content.title = "\(tool.displayName) — Window Started"
         content.body  = "5-hour quota window is now active. Next auto-trigger in 5 hours."
@@ -77,17 +77,17 @@ class NotificationManager {
         UNUserNotificationCenter.current().add(req)
     }
 
-    func cancelAll(for tool: ToolID) {
+    func cancelAll(for tool: ProviderID) {
         cancelPending(id: warningID(tool))
     }
 
-    private func warningID(_ tool: ToolID) -> String { "warning.\(tool.rawValue)" }
+    private func warningID(_ tool: ProviderID) -> String { "warning.\(tool.rawValue)" }
 
     private func cancelPending(id: String) {
         UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: [id])
     }
 
-    private func brandedAttachment(for tool: ToolID) -> UNNotificationAttachment? {
+    private func brandedAttachment(for tool: ProviderID) -> UNNotificationAttachment? {
         guard let data = brandedAttachmentImageData(for: tool) else { return nil }
 
         let directory = FileManager.default.temporaryDirectory
@@ -103,8 +103,8 @@ class NotificationManager {
         }
     }
 
-    private func brandedAttachmentImageData(for tool: ToolID) -> Data? {
-        guard let providerIcon = NSImage(named: tool.notificationAssetName) else { return nil }
+    private func brandedAttachmentImageData(for tool: ProviderID) -> Data? {
+        guard let providerIcon = NSImage(named: tool.kind.notificationAssetName) else { return nil }
 
         let size = NSSize(width: 256, height: 128)
         let image = NSImage(size: size)
@@ -123,7 +123,7 @@ class NotificationManager {
         drawIcon(
             providerIcon,
             in: NSRect(x: 148, y: 26, width: 76, height: 76),
-            tint: tool.notificationTint
+            tint: tool.kind.notificationTint
         )
 
         guard let tiff = image.tiffRepresentation,

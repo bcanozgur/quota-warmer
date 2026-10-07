@@ -31,7 +31,8 @@ extension AppearanceMode {
 
 enum AppTab: Hashable {
     case main
-    case tool(ToolID)
+    case tool(ProviderID)
+    case history
     case settings
 }
 
@@ -87,7 +88,7 @@ struct MenuContent: View {
                     .foregroundStyle(appState.selectedTab == .main ? DS.C.ink : DS.C.textSub)
             }
 
-            ForEach(ToolID.allCases) { tool in
+            ForEach(appState.providers) { tool in
                 SidebarToolItem(
                     tool: tool,
                     toolState: appState.state(for: tool),
@@ -96,6 +97,14 @@ struct MenuContent: View {
             }
 
             Spacer()
+
+            SidebarSlot(isSelected: appState.selectedTab == .history, help: "History") {
+                appState.selectedTab = .history
+            } icon: {
+                Image(systemName: "chart.bar.xaxis")
+                    .font(.system(size: 15, weight: .regular))
+                    .foregroundStyle(appState.selectedTab == .history ? DS.C.ink : DS.C.textSub)
+            }
 
             // Theme: System → Light → Dark. The icon shows the current theme.
             SidebarSlot(isSelected: false, help: "Theme: \(appearance.label) — click for \(appearance.next.label)") {
@@ -132,7 +141,7 @@ struct MenuContent: View {
             MainTabView()
                 .frame(width: DS.contentWidth)
                 .frame(maxHeight: .infinity)
-        case .tool(let id):
+        case .tool(let id) where appState.toolStates[id] != nil:
             VStack(spacing: 0) {
                 if appState.showOnboarding {
                     OnboardingView()
@@ -151,6 +160,15 @@ struct MenuContent: View {
             }
             .frame(width: DS.contentWidth)
             .frame(maxHeight: .infinity)
+        case .tool:
+            // The account behind this tab was removed.
+            MainTabView()
+                .frame(width: DS.contentWidth)
+                .frame(maxHeight: .infinity)
+        case .history:
+            HistoryTabView()
+                .frame(width: DS.contentWidth)
+                .frame(maxHeight: .infinity)
         case .settings:
             SettingsTabView()
                 .frame(width: DS.contentWidth)
@@ -202,20 +220,42 @@ struct SidebarSlot<Icon: View>: View {
 /// Provider glyph slot in the sidebar. Observes the tool so the icon dims when
 /// the tool isn't being monitored. Keeps the Claude/Codex glyphs untouched.
 struct SidebarToolItem: View {
-    let tool: ToolID
+    let tool: ProviderID
     @ObservedObject var toolState: ToolState
     let isSelected: Bool
     let action: () -> Void
 
     var body: some View {
         SidebarSlot(isSelected: isSelected, help: tool.shortName, action: action) {
-            Image(tool == .claude ? "ClaudeCode" : "Codex")
+            Image(tool.kind.glyphAssetName)
                 .resizable()
                 .renderingMode(.template)
                 .scaledToFit()
                 .frame(width: 19, height: 19)
                 .foregroundStyle(isSelected ? DS.C.ink : DS.C.text)
                 .opacity(toolState.isMonitored || toolState.isWarming || isSelected ? 1.0 : 0.55)
+                .overlay(alignment: .bottomTrailing) {
+                    if let badge = tool.badge {
+                        AccountBadge(text: badge, color: DS.C.accent(tool.kind))
+                            .offset(x: 6, y: 5)
+                    }
+                }
         }
+    }
+}
+
+/// Initial of an added account, shown on its provider glyph so two Claude (or
+/// Codex) accounts can be told apart at a glance.
+struct AccountBadge: View {
+    let text: String
+    let color: Color
+
+    var body: some View {
+        Text(text)
+            .font(.system(size: 8, weight: .heavy, design: .rounded))
+            .foregroundStyle(.white)
+            .frame(minWidth: 12, minHeight: 12)
+            .background(color, in: Circle())
+            .overlay(Circle().stroke(DS.C.sidebar, lineWidth: 1.5))
     }
 }

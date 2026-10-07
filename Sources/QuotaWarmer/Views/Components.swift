@@ -17,11 +17,26 @@ struct UsageBar: View {
     var track: Color = DS.C.track
     var thumbFraction: Double? = nil
 
-    @State private var pulse = false
-
     private func clamp(_ value: Double) -> CGFloat { CGFloat(min(max(value, 0), 1)) }
 
     var body: some View {
+        // The refresh pulse is computed from the clock, not an implicit
+        // repeatForever animation: that animation also caught every layout change
+        // made while it ran (countdown ticks, panel resizes) and replayed it forever,
+        // so the fill bobbed up and down away from the knob and the row titles.
+        TimelineView(.animation(paused: !refreshing)) { context in
+            bar(fillOpacity: refreshing ? pulseOpacity(at: context.date) : 1)
+        }
+        .frame(height: height)
+    }
+
+    /// 1 → 0.7 → 1 every 1.6 s.
+    private func pulseOpacity(at date: Date) -> Double {
+        let phase = date.timeIntervalSinceReferenceDate * .pi / 0.8
+        return 0.85 + 0.15 * cos(phase)
+    }
+
+    private func bar(fillOpacity: Double) -> some View {
         GeometryReader { geo in
             let w = geo.size.width
             let fillW = max(0, w * clamp(fraction))
@@ -30,7 +45,7 @@ struct UsageBar: View {
                 Capsule()
                     .fill(fill)
                     .frame(width: fillW)
-                    .opacity(refreshing && pulse ? 0.7 : 1)
+                    .opacity(fillOpacity)
                 if let thumbFraction {
                     let thumbW: CGFloat = 5
                     Capsule()
@@ -42,11 +57,6 @@ struct UsageBar: View {
                 }
             }
         }
-        .frame(height: height)
-        // A whole-fill pulse while refreshing — a static highlight band read as a
-        // stray shadow inside the bar.
-        .animation(refreshing ? .easeInOut(duration: 0.8).repeatForever(autoreverses: true) : .default, value: pulse)
-        .onChange(of: refreshing, initial: true) { _, on in pulse = on }
     }
 }
 
@@ -240,7 +250,7 @@ enum ToolStatusCopy {
         if state.quotaBackoffActive, let until = state.quotaBackoffUntil {
             return "Quota source is rate-limited. Retrying at \(shortClock(until))."
         }
-        if state.tool == .claude,
+        if state.tool.kind == .claude,
            state.healthMessage.contains("quota credential needs a CLI refresh") {
             return "Claude is signed in. Its quota will refresh when Claude runs; the last known reading is shown for context."
         }
@@ -271,7 +281,10 @@ enum ToolStatusCopy {
     }
 
     private static func authActionText(for state: ToolState) -> String {
-        switch state.tool {
+        if !state.tool.isDefault {
+            return "\(state.tool.shortName) needs signing in. Use Sign in under Settings › Accounts, then Refresh."
+        }
+        switch state.tool.kind {
         case .claude:
             if state.healthMessage.contains("access needs approval") {
                 return "Claude access is paused. Click Refresh to approve Keychain access."

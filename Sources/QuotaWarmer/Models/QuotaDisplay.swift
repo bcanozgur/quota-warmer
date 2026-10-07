@@ -10,10 +10,16 @@ enum QuotaDisplayMode: String, CaseIterable {
     var toggled: QuotaDisplayMode { self == .remaining ? .used : .remaining }
 
     static func stored(for tool: ToolID, defaults: UserDefaults = .standard) -> QuotaDisplayMode {
-        defaults.string(forKey: defaultsKey(for: tool)).flatMap(QuotaDisplayMode.init(rawValue:)) ?? .remaining
+        stored(storageKey: tool.rawValue, defaults: defaults)
     }
 
-    static func defaultsKey(for tool: ToolID) -> String { "quotaDisplayMode.\(tool.rawValue)" }
+    /// `storageKey` is a tool or account key (`claude`, `claude.work`).
+    static func stored(storageKey: String, defaults: UserDefaults = .standard) -> QuotaDisplayMode {
+        defaults.string(forKey: defaultsKey(storageKey: storageKey)).flatMap(QuotaDisplayMode.init(rawValue:)) ?? .remaining
+    }
+
+    static func defaultsKey(for tool: ToolID) -> String { defaultsKey(storageKey: tool.rawValue) }
+    static func defaultsKey(storageKey: String) -> String { "quotaDisplayMode.\(storageKey)" }
 }
 
 /// Claude-style severity of a quota window, driven by how much has been used.

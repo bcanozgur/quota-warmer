@@ -68,8 +68,10 @@ struct ClaudeCLIAuthSnapshot {
 class WarmupRunner {
     static let claudeLoginRequiredMessage = "Claude Code is not logged in. Run `claude auth login` in Terminal, then retry warmup."
 
-    func warmup(_ tool: ToolID) async throws -> WarmupResult {
+    func warmup(_ provider: ProviderID) async throws -> WarmupResult {
+        let tool = provider.kind
         let cliName = tool == .claude ? "claude" : "codex"
+        let envPrefix = Self.environmentPrefix(for: provider)
         guard let cliURL = await resolveCLI(named: cliName) else {
             throw WarmupError.cliNotFound(cliName)
         }
@@ -78,8 +80,8 @@ class WarmupRunner {
         let workspaceURL = try warmupWorkspaceURL()
         return try await Self.runCatalogWarmup(store: .shared(for: tool)) { model in
             try await self.runWithOptionFallback(
-                primary: tool.warmupCommand(model: model),
-                fallback: tool.legacyWarmupCommand(model: model),
+                primary: envPrefix + tool.warmupCommand(model: model),
+                fallback: tool.legacyWarmupCommand(model: model).map { envPrefix + $0 },
                 tool: tool,
                 cliName: cliName,
                 pathPrefix: pathPrefix,
@@ -177,12 +179,25 @@ class WarmupRunner {
         return String(parts[index + 1])
     }
 
-    func cliAuthenticationStatus(for tool: ToolID) async -> CLIAuthenticationStatus {
-        guard tool == .claude else { return .authenticated(nil) }
+    func cliAuthenticationStatus(for provider: ProviderID) async -> CLIAuthenticationStatus {
+        guard provider.kind == .claude else { return .authenticated(nil) }
         guard let cliURL = await resolveCLI(named: "claude") else {
             return .unknown("Claude CLI not found")
         }
-        return await claudeAuthenticationStatus(pathPrefix: cliURL.deletingLastPathComponent().path)
+        return await claudeAuthenticationStatus(
+            pathPrefix: cliURL.deletingLastPathComponent().path,
+            envPrefix: Self.environmentPrefix(for: provider)
+        )
+    }
+
+    /// `CLAUDE_CONFIG_DIR='/Users/me/.claude-work' ` for an added account, empty
+    /// for the default one. Set on the command line rather than the process
+    /// environment so a login shell profile cannot override it.
+    static func environmentPrefix(for provider: ProviderID) -> String {
+        provider.cliEnvironment
+            .sorted { $0.key < $1.key }
+            .map { "\($0.key)=\(ProviderID.shellQuoted($0.value)) " }
+            .joined()
     }
 
     private func runWarmupCommand(_ command: String, cliName: String, pathPrefix: String, workspaceURL: URL) async throws -> WarmupResult {
@@ -265,9 +280,9 @@ class WarmupRunner {
         return await resolveCLI(named: name) == nil
     }
 
-    private func claudeAuthenticationStatus(pathPrefix: String) async -> CLIAuthenticationStatus {
+    private func claudeAuthenticationStatus(pathPrefix: String, envPrefix: String) async -> CLIAuthenticationStatus {
         let result = await runShellCommand(
-            "claude auth status",
+            envPrefix + "claude auth status",
             pathPrefix: pathPrefix,
             currentDirectoryURL: nil,
             timeout: 15

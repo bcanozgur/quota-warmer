@@ -88,6 +88,9 @@ def parse_anthropic(markdown, upstream):
             continue
         name = clean_name(cells[0])
         lowered = cells[0].lower()
+        if "prompts over" in lowered:
+            # Long-prompt surcharge row (Haiku 5.5): the catalog tracks the base rate.
+            continue
         status = "retired" if "retired" in lowered else "limited" if ("limited" in lowered or "glasswing" in lowered) else "available"
         model_id = re.sub(r"[\s._]+", "-", name.lower().removeprefix("claude ").strip())
         prices = dict(zip(PRICE_FIELDS, (parse_price(cell) for cell in cells[1:6])))

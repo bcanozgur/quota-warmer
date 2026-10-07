@@ -4,7 +4,7 @@ struct MainTabView: View {
     @EnvironmentObject var appState: AppState
     // Session-only display state — never persisted, so every popover open
     // starts with both provider sections expanded (empty = nothing collapsed).
-    @State private var collapsedTools: Set<ToolID> = []
+    @State private var collapsedTools: Set<ProviderID> = []
 
     var body: some View {
         // Fixed, non-scrolling overview — only Settings scrolls.
@@ -40,19 +40,19 @@ struct MainTabView: View {
         let helpText = paused ? "Resume automatic warmups" : "Pause all automatic warmups"
         let stateColor = paused ? DS.C.red : DS.C.green
 
-        let fetching = ToolID.allCases.contains { appState.state(for: $0).isFetchingQuota }
+        let fetching = appState.providers.contains { appState.state(for: $0).isFetchingQuota }
         return HStack(spacing: 7) {
             // Double-arrow icon (the per-tool buttons use a single arrow) = "both".
             // While refreshing it stays the same icon, just dimmed and not clickable.
             IconButton(
                 systemName: "arrow.triangle.2.circlepath",
-                help: "Refresh Claude and Codex quota now",
+                help: "Refresh every account's quota now",
                 size: 26,
                 isDisabled: fetching
             ) {
                 Task {
                     await withTaskGroup(of: Void.self) { group in
-                        for tool in ToolID.allCases {
+                        for tool in appState.providers {
                             group.addTask { await appState.refreshQuotaManually(for: tool) }
                         }
                     }
@@ -76,14 +76,14 @@ struct MainTabView: View {
     /// One card per provider, so each reads as its own panel.
     private var providerList: some View {
         VStack(spacing: DS.Page.spacing) {
-            ForEach(ToolID.allCases, id: \.self) { tool in
+            ForEach(appState.providers) { tool in
                 providerRow(tool)
                     .dsCard()
             }
         }
     }
 
-    private func providerRow(_ tool: ToolID) -> some View {
+    private func providerRow(_ tool: ProviderID) -> some View {
         let state = appState.state(for: tool)
         let collapsed = collapsedTools.contains(tool)
         return VStack(alignment: .leading, spacing: collapsed ? 0 : 10) {
@@ -147,7 +147,7 @@ struct MainTabView: View {
                     Rectangle()
                         .fill(DS.C.borderSoft)
                         .frame(height: 1)
-                    ResetCreditsRow(credits: credits, now: Date()) { await appState.useResetCredit($0) }
+                    ResetCreditsRow(credits: credits, now: Date()) { await appState.useResetCredit($0, for: tool) }
                 }
             }
         }
@@ -155,7 +155,7 @@ struct MainTabView: View {
         .padding(.vertical, collapsed ? 6 : 10)
     }
 
-    private func toggleCollapsed(_ tool: ToolID) {
+    private func toggleCollapsed(_ tool: ProviderID) {
         if collapsedTools.contains(tool) {
             collapsedTools.remove(tool)
         } else {
@@ -206,7 +206,7 @@ struct MainTabView: View {
 
     /// Minimal pin toggle: shows/hides this tool's quota in the menu bar,
     /// independent of whether warmup is active.
-    private func menuBarPin(_ tool: ToolID, _ state: ToolState) -> some View {
+    private func menuBarPin(_ tool: ProviderID, _ state: ToolState) -> some View {
         Button(action: { appState.setMenuBarVisible(tool, !state.menuBarVisible) }) {
             Image(systemName: "menubar.rectangle")
                 .font(.system(size: 11.5, weight: .semibold))
@@ -220,12 +220,12 @@ struct MainTabView: View {
 
     // MARK: - Last warm-up status card ("did it actually work?")
 
-    private var outcomeTools: [ToolID] {
+    private var outcomeTools: [ProviderID] {
         // Only show a row once an actual warm-up outcome exists. Mode is already
         // visible in each provider row (its colored dot + status text), so the
         // Auto-warm state no longer adds a card here — that previously made the
         // panel grow/shrink on every mode toggle and jolt the scroll position.
-        ToolID.allCases.filter { tool in
+        appState.providers.filter { tool in
             if case .none = appState.state(for: tool).lastWarmupOutcome { return false }
             return true
         }
@@ -243,7 +243,7 @@ struct MainTabView: View {
         .dsCard()
     }
 
-    private func outcomeRow(_ tool: ToolID) -> some View {
+    private func outcomeRow(_ tool: ProviderID) -> some View {
         let state = appState.state(for: tool)
         let info = outcomeInfo(state.lastWarmupOutcome, mode: state.mode)
         return HStack(alignment: .center, spacing: 7) {

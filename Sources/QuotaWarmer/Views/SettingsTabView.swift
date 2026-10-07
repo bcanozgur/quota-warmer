@@ -60,6 +60,10 @@ struct SettingsTabView: View {
                     }
                 }
 
+                group("ACCOUNTS") {
+                    AccountsSection()
+                }
+
                 group("DISPLAY") {
                     row(icon: "paintpalette", title: "Colorful Quota Bars",
                         subtitle: colorfulBars ? "Blue → orange at 50% → red at 80% used" : "Single-color bars") {
@@ -175,7 +179,7 @@ struct SettingsTabView: View {
                 group("PRIVACY") {
                     infoRow(
                         title: "Credential access",
-                        detail: "Monitored tools only. Claude reads Keychain Claude Code-credentials, env CLAUDE_CODE_OAUTH_TOKEN, or ~/.claude/.credentials.json. Codex reads auth.json or Keychain Codex Auth."
+                        detail: "Monitored accounts only. Claude reads Keychain Claude Code-credentials, env CLAUDE_CODE_OAUTH_TOKEN, or ~/.claude/.credentials.json. Codex reads auth.json or Keychain Codex Auth. An added account reads only its own folder's Keychain item or credentials file."
                     )
                     Divider().background(DS.C.border).padding(.leading, 36)
                     infoRow(

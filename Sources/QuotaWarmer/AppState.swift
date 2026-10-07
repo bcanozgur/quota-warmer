@@ -1,3 +1,4 @@
+import AppKit
 import Combine
 import Foundation
 
@@ -13,7 +14,9 @@ struct WarmupLog: Identifiable {
 
 @MainActor
 final class ToolState: ObservableObject {
-    let tool: ToolID
+    /// The watched account. A `var` only so a rename can update its label;
+    /// identity (kind + account id) never changes.
+    var tool: ProviderID
 
     /// Source of truth for how this tool is treated. `.monitor` is the safe
     /// default; `.autoWarm` is an explicit opt-in. See `ToolMode`.
@@ -34,7 +37,7 @@ final class ToolState: ObservableObject {
     /// Show quota as remaining (drains to 0%) or used (fills to 100%). Affects
     /// only the bars, row text and menu-bar percent — never warm-up decisions.
     @Published var displayMode: QuotaDisplayMode {
-        didSet { UserDefaults.standard.set(displayMode.rawValue, forKey: QuotaDisplayMode.defaultsKey(for: tool)) }
+        didSet { UserDefaults.standard.set(displayMode.rawValue, forKey: QuotaDisplayMode.defaultsKey(storageKey: tool.storageKey)) }
     }
     @Published var isFetchingQuota = false
     @Published var isWarming = false
@@ -64,11 +67,19 @@ final class ToolState: ObservableObject {
     var claimVerifyTask: Task<Void, Never>?
     var settleRepollTask: Task<Void, Never>?
 
-    init(tool: ToolID) {
+    /// A stand-in for a removed account: off, nothing restored or saved.
+    init(orphan tool: ProviderID) {
+        self.tool = tool
+        self.mode = .off
+        self.menuBarVisible = false
+        self.displayMode = .remaining
+    }
+
+    init(tool: ProviderID) {
         self.tool = tool
         self.mode = ToolState.resolveMode(for: tool)
         self.menuBarVisible = UserDefaults.standard.object(forKey: "menuBarVisible.\(tool.rawValue)") as? Bool ?? true
-        self.displayMode = QuotaDisplayMode.stored(for: tool)
+        self.displayMode = QuotaDisplayMode.stored(storageKey: tool.storageKey)
         self.lastAutoWindowKey = UserDefaults.standard.string(forKey: "lastAutoWindowKey.\(tool.rawValue)")
         if let storedEnds = UserDefaults.standard.object(forKey: "lastAutoWarmEndsAt.\(tool.rawValue)") as? TimeInterval {
             let endsAt = Date(timeIntervalSince1970: storedEnds)
@@ -91,7 +102,7 @@ final class ToolState: ObservableObject {
     /// Resolves the persisted mode, migrating older installs. A previously
     /// "active" tool keeps auto-warm; a previously "passive" tool stays off;
     /// brand-new installs default to monitor-only (safe, read-only).
-    private static func resolveMode(for tool: ToolID) -> ToolMode {
+    private static func resolveMode(for tool: ProviderID) -> ToolMode {
         let key = "toolMode.\(tool.rawValue)"
         if let raw = UserDefaults.standard.string(forKey: key), let stored = ToolMode(rawValue: raw) {
             return stored
@@ -238,7 +249,9 @@ final class AppState: ObservableObject {
     /// right-click menu ("Show Stats" / "Go to Settings") can drive it.
     @Published var selectedTab: AppTab = .main
     @Published var updateInfo: ReleaseInfo?
-    @Published private(set) var toolStates: [ToolID: ToolState]
+    @Published private(set) var toolStates: [ProviderID: ToolState]
+    /// Accounts the user added on top of each CLI's default account.
+    @Published private(set) var accounts: [ProviderAccount]
     @Published var history: [HistoryEvent] = []
     @Published var morningPrewarmEnabled: Bool = UserDefaults.standard.bool(forKey: "morningPrewarmEnabled")
     @Published var morningStatus: String?
@@ -250,7 +263,7 @@ final class AppState: ObservableObject {
             UserDefaults.standard.set(globalPassive, forKey: "globalPassive")
             if globalPassive {
                 scheduler.invalidateAll()
-                ToolID.allCases.forEach { notifications.cancelAll(for: $0) }
+                providers.forEach { notifications.cancelAll(for: $0) }
             } else {
                 refreshAllActivity(allowAutomaticWarmup: true)
             }
@@ -259,10 +272,8 @@ final class AppState: ObservableObject {
 
     /// One long-lived scanner per tool: each caches parsed log files and only
     /// reads what was appended since its last scan.
-    private let usageProviders: [ToolID: LocalUsageProvider] = Dictionary(
-        uniqueKeysWithValues: ToolID.allCases.map { ($0, LocalUsageProvider()) }
-    )
-    private var tokenUsageScannedAt: [ToolID: Date] = [:]
+    private var usageProviders: [ProviderID: LocalUsageProvider] = [:]
+    private var tokenUsageScannedAt: [ProviderID: Date] = [:]
     /// Quota refreshes come in bursts (warm-up verification, settle re-polls,
     /// wake); token totals need not follow each one.
     private let tokenUsageMinInterval: TimeInterval = 60
@@ -277,8 +288,10 @@ final class AppState: ObservableObject {
     private var morningReapplyTask: Task<Void, Never>?
 
     init() {
-        var states: [ToolID: ToolState] = [:]
-        for tool in ToolID.allCases { states[tool] = ToolState(tool: tool) }
+        let storedAccounts = ProviderAccount.load()
+        accounts = storedAccounts
+        var states: [ProviderID: ToolState] = [:]
+        for tool in Self.orderedProviders(accounts: storedAccounts) { states[tool] = ToolState(tool: tool) }
         toolStates = states
         globalPassive = UserDefaults.standard.object(forKey: "globalPassive") as? Bool ?? false
 
@@ -286,6 +299,9 @@ final class AppState: ObservableObject {
             Task { @MainActor [weak self] in
                 await self?.attemptAutomaticWarmup(tool: tool, reason: "scheduled refresh")
             }
+        }
+        scheduler.providers = { [weak self] in
+            MainActor.assumeIsolated { self?.providers ?? [] }
         }
         scheduler.onWake = { [weak self] in
             Task { @MainActor [weak self] in
@@ -316,12 +332,142 @@ final class AppState: ObservableObject {
         }
     }
 
-    func state(for tool: ToolID) -> ToolState { toolStates[tool]! }
+    /// The account's live state. A task still in flight for an account that
+    /// was just removed gets an inert, unsaved stand-in (mode `.off`), so it
+    /// winds down without crashing or re-arming timers.
+    func state(for tool: ProviderID) -> ToolState {
+        if let state = toolStates[tool] { return state }
+        if let orphan = orphanStates[tool] { return orphan }
+        let orphan = ToolState(orphan: tool)
+        orphanStates[tool] = orphan
+        return orphan
+    }
+    private var orphanStates: [ProviderID: ToolState] = [:]
+
+    /// Every watched account in display order: per CLI, the default account
+    /// first, then added accounts in the order they were added.
+    var providers: [ProviderID] { Self.orderedProviders(accounts: accounts) }
+
+    static func orderedProviders(accounts: [ProviderAccount]) -> [ProviderID] {
+        ToolID.allCases.flatMap { kind in
+            [ProviderID.default(kind)] + accounts.filter { $0.kind == kind }.map(\.providerID)
+        }
+    }
+
+    // MARK: - Accounts
+
+    enum AccountError: LocalizedError {
+        case invalidName
+        case invalidHome
+        case duplicateHome
+        case createFailed(String)
+
+        var errorDescription: String? {
+            switch self {
+            case .invalidName: return "Give the account a name."
+            case .invalidHome: return "The folder must be an absolute path without quotes."
+            case .duplicateHome: return "Another account already uses this folder."
+            case .createFailed(let reason): return "Could not create the folder: \(reason)"
+            }
+        }
+    }
+
+    /// Adds an account whose CLI home is `home` (created if missing). The new
+    /// account starts in Monitor mode; nothing is sent until the user opts in.
+    @discardableResult
+    func addAccount(kind: ToolID, name: String, home: String) throws -> ProviderID {
+        let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedName.isEmpty else { throw AccountError.invalidName }
+        let standardized = (home as NSString).expandingTildeInPath
+        let normalized = standardized.count > 1 && standardized.hasSuffix("/")
+            ? String(standardized.dropLast()) : standardized
+        guard ProviderAccount.isValidHome(normalized) else { throw AccountError.invalidHome }
+        let defaultHome = (kind.logDirectoryURL?.deletingLastPathComponent().path) ?? ""
+        guard normalized != defaultHome,
+              !accounts.contains(where: { $0.kind == kind && $0.home == normalized }) else {
+            throw AccountError.duplicateHome
+        }
+        do {
+            try FileManager.default.createDirectory(
+                atPath: normalized,
+                withIntermediateDirectories: true,
+                attributes: [.posixPermissions: 0o700]
+            )
+        } catch {
+            throw AccountError.createFailed(error.localizedDescription)
+        }
+
+        var id = ProviderAccount.slugified(trimmedName)
+        if !ProviderAccount.isValidID(id) { id = "acct" }
+        let base = id
+        var n = 2
+        while accounts.contains(where: { $0.id == id }) {
+            id = "\(base)-\(n)"
+            n += 1
+        }
+
+        let account = ProviderAccount(id: id, kind: kind, name: trimmedName, home: normalized)
+        let provider = account.providerID
+        UserDefaults.standard.set(ToolMode.monitor.rawValue, forKey: "toolMode.\(provider.storageKey)")
+        // Menu-bar space is scarce; an added account is pinned only on request.
+        UserDefaults.standard.set(false, forKey: "menuBarVisible.\(provider.storageKey)")
+        let newState = ToolState(tool: provider)
+        objectWillChange.send()
+        accounts.append(account)
+        ProviderAccount.save(accounts)
+        toolStates[provider] = newState
+        addHistory(tool: provider, kind: .quotaFetch, title: "Account added", detail: normalized)
+        Task { await refreshQuota(for: provider, allowAutomaticWarmup: false) }
+        return provider
+    }
+
+    func renameAccount(_ tool: ProviderID, to name: String) {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !tool.isDefault, !trimmed.isEmpty,
+              let index = accounts.firstIndex(where: { $0.id == tool.accountID }) else { return }
+        objectWillChange.send()
+        accounts[index].name = trimmed
+        ProviderAccount.save(accounts)
+        toolStates[tool]?.tool = accounts[index].providerID
+    }
+
+    /// Stops watching an added account and forgets its settings. The CLI home
+    /// folder (and the login inside it) is left on disk untouched.
+    func removeAccount(_ tool: ProviderID) {
+        guard !tool.isDefault, let state = toolStates[tool] else { return }
+        scheduler.invalidate(tool: tool)
+        notifications.cancelAll(for: tool)
+        state.claimVerifyTask?.cancel()
+        state.settleRepollTask?.cancel()
+        clearAuthRetry(for: state)
+        if tool.kind == .claude { CredentialStore().invalidateCachedClaudeCredential(for: tool) }
+
+        let suffix = ".\(tool.storageKey)"
+        for key in UserDefaults.standard.dictionaryRepresentation().keys where key.hasSuffix(suffix) {
+            UserDefaults.standard.removeObject(forKey: key)
+        }
+        UsageHistoryStore.shared.removeAll(for: tool)
+
+        objectWillChange.send()
+        accounts.removeAll { $0.id == tool.accountID }
+        ProviderAccount.save(accounts)
+        toolStates[tool] = nil
+        usageProviders[tool] = nil
+        tokenUsageScannedAt[tool] = nil
+        addHistory(tool: nil, kind: .quotaFetch, title: "Account removed", detail: tool.displayName)
+    }
+
+    private func usageProvider(for tool: ProviderID) -> LocalUsageProvider {
+        if let existing = usageProviders[tool] { return existing }
+        let created = LocalUsageProvider()
+        usageProviders[tool] = created
+        return created
+    }
 
     /// Pins/unpins a tool in the menu bar. Routed through AppState so the
     /// menu-bar label (which observes AppState, not each ToolState) refreshes
     /// immediately when toggled.
-    func setMenuBarVisible(_ tool: ToolID, _ visible: Bool) {
+    func setMenuBarVisible(_ tool: ProviderID, _ visible: Bool) {
         objectWillChange.send()
         state(for: tool).menuBarVisible = visible
     }
@@ -329,7 +475,7 @@ final class AppState: ObservableObject {
     /// Flips a tool between showing quota left and quota used. Routed through
     /// AppState so the menu-bar label (which observes AppState, not each
     /// ToolState) switches its percent immediately.
-    func toggleDisplayMode(for tool: ToolID) {
+    func toggleDisplayMode(for tool: ProviderID) {
         objectWillChange.send()
         let state = state(for: tool)
         state.displayMode = state.displayMode.toggled
@@ -337,7 +483,7 @@ final class AppState: ObservableObject {
 
     /// Whether anything is being polled right now (drives the watchdog).
     var hasLivePolling: Bool {
-        !globalPassive && ToolID.allCases.contains { state(for: $0).isMonitored }
+        !globalPassive && providers.contains { state(for: $0).isMonitored }
     }
 
     /// True when the app should be polling but hasn't had a successful quota
@@ -357,7 +503,7 @@ final class AppState: ObservableObject {
     /// Switches a tool between off / monitor-only / auto-warm. Routed through
     /// AppState (with an explicit objectWillChange) so the menu-bar label —
     /// which observes AppState, not each ToolState — refreshes immediately.
-    func setMode(_ mode: ToolMode, for tool: ToolID) {
+    func setMode(_ mode: ToolMode, for tool: ProviderID) {
         let state = state(for: tool)
         guard state.mode != mode else { return }
         objectWillChange.send()
@@ -380,13 +526,13 @@ final class AppState: ObservableObject {
         }
     }
 
-    func activate(_ tool: ToolID) {
+    func activate(_ tool: ProviderID) {
         Task { await triggerWarmup(tool: tool, mode: "manual") }
     }
 
     func refreshAllActivity(allowAutomaticWarmup: Bool = false, includeInactive: Bool = false) {
         isRefreshing = true
-        let tools = ToolID.allCases.filter { includeInactive || state(for: $0).isMonitored }
+        let tools = providers.filter { includeInactive || state(for: $0).isMonitored }
         guard !tools.isEmpty else {
             isRefreshing = false
             return
@@ -409,12 +555,12 @@ final class AppState: ObservableObject {
     /// claims it instead of waiting for the next tick.
     /// Redeems a banked Codex reset, then force-refreshes so the bars show the
     /// restored quota. Returns a user-facing error, or nil on success.
-    func useResetCredit(_ credit: ResetCredit) async -> String? {
+    func useResetCredit(_ credit: ResetCredit, for tool: ProviderID) async -> String? {
         do {
-            let windows = try await quotaProvider.consumeCodexResetCredit(id: credit.id)
-            addHistory(tool: .codex, kind: .quotaFetch, title: "Banked reset used",
+            let windows = try await quotaProvider.consumeCodexResetCredit(id: credit.id, provider: tool)
+            addHistory(tool: tool, kind: .quotaFetch, title: "Banked reset used",
                        detail: "\(credit.title); \(windows) window(s) reset")
-            await refreshQuotaManually(for: .codex)
+            await refreshQuotaManually(for: tool)
             return nil
         } catch let error as QuotaProviderError {
             return error.errorDescription ?? "Could not use the reset."
@@ -423,18 +569,18 @@ final class AppState: ObservableObject {
         }
     }
 
-    func refreshQuotaManually(for tool: ToolID) async {
-        let shouldAutoWarm = tool == .claude && state(for: tool).isAutoWarmEnabled
+    func refreshQuotaManually(for tool: ProviderID) async {
+        let shouldAutoWarm = tool.kind == .claude && state(for: tool).isAutoWarmEnabled
         await refreshQuota(
             for: tool,
             allowAutomaticWarmup: shouldAutoWarm,
-            allowsCredentialInteraction: tool == .claude,
+            allowsCredentialInteraction: tool.kind == .claude,
             force: true
         )
     }
 
     func refreshQuota(
-        for tool: ToolID,
+        for tool: ProviderID,
         allowAutomaticWarmup: Bool = false,
         reconcileStuckOutcome: Bool = true,
         allowsCredentialInteraction: Bool = false,
@@ -444,7 +590,7 @@ final class AppState: ObservableObject {
         // Timer, wake and scheduler callbacks can converge on the same instant.
         // Claude refresh tokens are single-use, so only one Claude request chain
         // may run at a time. Codex keeps its existing behavior unchanged.
-        guard tool != .claude || !state.isFetchingQuota else { return }
+        guard tool.kind != .claude || !state.isFetchingQuota else { return }
         refreshTokenUsage(for: tool, force: force)
         if let backoffUntil = state.quotaBackoffUntil, backoffUntil > Date() {
             // An explicit user request retries now. Clearing the backoff matters
@@ -474,6 +620,8 @@ final class AppState: ObservableObject {
             clearAuthRetry(for: state)
             lastSuccessfulPollAt = Date()
             state.quotaSnapshot = snapshot
+            // Removed mid-fetch: don't recreate the deleted history file.
+            if toolStates[tool] != nil { UsageHistoryStore.shared.record(snapshot, for: tool) }
             state.sourceHealth = snapshot.freshness() == .fresh ? .healthy : .stale
             state.authStatus = .available
             state.healthMessage = snapshot.message ?? snapshot.primarySource
@@ -499,7 +647,7 @@ final class AppState: ObservableObject {
                 // Claude serializes quota fetches. Release the outer fetch before
                 // the warm-up path performs its post-command verification fetch;
                 // otherwise the single-flight guard would discard that proof.
-                if tool == .claude { state.isFetchingQuota = false }
+                if tool.kind == .claude { state.isFetchingQuota = false }
                 await attemptAutomaticWarmup(tool: tool, reason: "fresh quota")
             }
         } catch {
@@ -509,13 +657,13 @@ final class AppState: ObservableObject {
         state.isFetchingQuota = false
     }
 
-    private func refreshTokenUsage(for tool: ToolID, force: Bool = false) {
+    private func refreshTokenUsage(for tool: ProviderID, force: Bool = false) {
         let state = state(for: tool)
         // Skip if a scan is already in flight for this tool — otherwise rapid
         // refresh cycles can pile up overlapping disk scans. This single-flight
         // is also what makes sharing one provider per tool safe.
-        guard !state.isFetchingTokenUsage,
-              let provider = usageProviders[tool] else { return }
+        guard !state.isFetchingTokenUsage else { return }
+        let provider = usageProvider(for: tool)
         if !force, let last = tokenUsageScannedAt[tool], Date().timeIntervalSince(last) < tokenUsageMinInterval {
             return
         }
@@ -525,7 +673,7 @@ final class AppState: ObservableObject {
         // actor so the menu-bar panel never freezes (which also kept it from
         // dismissing on outside clicks).
         Task.detached(priority: .utility) {
-            let summary = provider.usage(for: tool)
+            let summary = provider.usage(for: tool.kind, baseURL: tool.logDirectoryURL)
             await MainActor.run {
                 state.tokenUsageSummary = summary
                 state.isFetchingTokenUsage = false
@@ -536,7 +684,7 @@ final class AppState: ObservableObject {
     func applyRefreshInterval() {
         startQuotaRefreshTimer()
         startUIRefreshTimer()
-        for tool in ToolID.allCases where state(for: tool).isMonitored {
+        for tool in providers where state(for: tool).isMonitored {
             state(for: tool).nextRefreshAt = Date().addingTimeInterval(refreshInterval)
         }
     }
@@ -675,7 +823,7 @@ final class AppState: ObservableObject {
         DiagnosticLogger.append("morning_warm_running source=\(String(describing: source))")
 
         var caughtUpSuccessfully = false
-        for tool in ToolID.allCases where state(for: tool).isAutoWarmEnabled {
+        for tool in providers where state(for: tool).isAutoWarmEnabled {
             let state = state(for: tool)
             guard canAttemptManagedWarmup(for: tool) else {
                 logMorningSkip(tool: tool, reason: "managedWarmupBlocked", source: source)
@@ -725,7 +873,7 @@ final class AppState: ObservableObject {
         scheduleMorningTimer()
     }
 
-    private func logMorningSkip(tool: ToolID, reason: String, source: ScheduledMorningSource) {
+    private func logMorningSkip(tool: ProviderID, reason: String, source: ScheduledMorningSource) {
         DiagnosticLogger.append(
             "morning_warm_skipped tool=\(tool.rawValue) reason=\(reason) source=\(String(describing: source))"
         )
@@ -774,7 +922,7 @@ final class AppState: ObservableObject {
     private var morningMinute: Int { UserDefaults.standard.object(forKey: "morningPrewarmMinute") as? Int ?? 0 }
     private var morningWeekdaysOnly: Bool { UserDefaults.standard.object(forKey: "morningPrewarmWeekdaysOnly") as? Bool ?? true }
 
-    private func lastMorningWarmDay(for tool: ToolID, todayKey: String) -> String? {
+    private func lastMorningWarmDay(for tool: ProviderID, todayKey: String) -> String? {
         let perToolDay = UserDefaults.standard.string(forKey: "lastMorningWarmDay.\(tool.rawValue)")
         let legacyDay = UserDefaults.standard.string(forKey: "lastMorningWarmDay")
         let resolved = MorningWarmupPolicy.resolvedLastSuccessfulDay(
@@ -788,7 +936,7 @@ final class AppState: ObservableObject {
         return resolved
     }
 
-    private func rememberMorningWarmSuccess(for tool: ToolID, dayKey: String) {
+    private func rememberMorningWarmSuccess(for tool: ProviderID, dayKey: String) {
         UserDefaults.standard.set(dayKey, forKey: "lastMorningWarmDay.\(tool.rawValue)")
     }
 
@@ -802,7 +950,7 @@ final class AppState: ObservableObject {
         addHistory(tool: nil, kind: .updateCheck, title: "Update checked", detail: updateInfo == nil ? "No update found" : "Update available")
     }
 
-    private func attemptAutomaticWarmup(tool: ToolID, reason: String) async {
+    private func attemptAutomaticWarmup(tool: ProviderID, reason: String) async {
         let state = state(for: tool)
         guard canAttemptManagedWarmup(for: tool) else { return }
 
@@ -852,7 +1000,7 @@ final class AppState: ObservableObject {
         }
     }
 
-    private func canAttemptManagedWarmup(for tool: ToolID) -> Bool {
+    private func canAttemptManagedWarmup(for tool: ProviderID) -> Bool {
         let state = state(for: tool)
         guard state.isAutoWarmEnabled, !globalPassive, !state.isWarming else { return false }
         guard state.authStatus != .failed, state.authStatus != .missing else { return false }
@@ -864,7 +1012,7 @@ final class AppState: ObservableObject {
         return true
     }
 
-    private func claimAutoWindowFromPostWarmQuota(for tool: ToolID, previousFetchedAt: Date?) {
+    private func claimAutoWindowFromPostWarmQuota(for tool: ProviderID, previousFetchedAt: Date?) {
         let state = state(for: tool)
         guard let snapshot = state.quotaSnapshot,
               // If the post-warm quota still reads idle (e.g. the API hasn't caught
@@ -878,14 +1026,14 @@ final class AppState: ObservableObject {
         state.rememberAutoWindow(snapshot.rawWindowKey)
     }
 
-    private func refreshQuotaForAutomaticDecision(tool: ToolID) async {
+    private func refreshQuotaForAutomaticDecision(tool: ProviderID) async {
         let state = state(for: tool)
         if state.freshness == .fresh, state.sourceHealth != .rateLimited { return }
         await refreshQuota(for: tool, allowAutomaticWarmup: false)
     }
 
     @discardableResult
-    private func triggerWarmup(tool: ToolID, mode: String) async -> Bool {
+    private func triggerWarmup(tool: ProviderID, mode: String) async -> Bool {
         let state = state(for: tool)
         guard !state.isWarming else { return false }
 
@@ -961,7 +1109,7 @@ final class AppState: ObservableObject {
     /// Evaluates the live (post-warm) snapshot: marks the window confirmed, or
     /// schedules a bounded grace re-check, or — once attempts are exhausted —
     /// confirms against the completed command's expected (assumed) window.
-    private func evaluateWarmupClaim(for tool: ToolID, sentAt: Date, attempt: Int) {
+    private func evaluateWarmupClaim(for tool: ProviderID, sentAt: Date, attempt: Int) {
         let state = state(for: tool)
         if state.quotaSnapshot?.showsActiveWindow() == true {
             state.claimVerifyTask?.cancel(); state.claimVerifyTask = nil
@@ -1043,7 +1191,7 @@ final class AppState: ObservableObject {
         }
     }
 
-    private func runClaimVerification(tool: ToolID, sentAt: Date, attempt: Int) async {
+    private func runClaimVerification(tool: ProviderID, sentAt: Date, attempt: Int) async {
         let state = state(for: tool)
         guard state.claimVerifyTask != nil else { return }
         state.claimVerifyTask = nil
@@ -1058,7 +1206,7 @@ final class AppState: ObservableObject {
     /// confirmation) — this exists purely to settle the displayed *quota*.
     private let settleRepollDelays: [TimeInterval] = [20, 45, 90]
 
-    private func scheduleSettleRepoll(for tool: ToolID, attempt: Int = 0) {
+    private func scheduleSettleRepoll(for tool: ProviderID, attempt: Int = 0) {
         let state = state(for: tool)
         guard state.sessionSettling, attempt < settleRepollDelays.count else {
             state.settleRepollTask?.cancel(); state.settleRepollTask = nil
@@ -1131,8 +1279,8 @@ final class AppState: ObservableObject {
         state.authRetryScheduledAt = nil
     }
 
-    private func applyCLIAuthenticationStatusIfNeeded(for tool: ToolID, to state: ToolState) async -> Bool {
-        guard tool == .claude else { return true }
+    private func applyCLIAuthenticationStatusIfNeeded(for tool: ProviderID, to state: ToolState) async -> Bool {
+        guard tool.kind == .claude else { return true }
 
         switch await runner.cliAuthenticationStatus(for: tool) {
         case .authenticated:
@@ -1173,7 +1321,7 @@ final class AppState: ObservableObject {
         }
     }
 
-    private func scheduleQuotaRefresh(for tool: ToolID, at date: Date) {
+    private func scheduleQuotaRefresh(for tool: ProviderID, at date: Date) {
         guard state(for: tool).isMonitored, !globalPassive else { return }
         scheduler.schedule(tool: tool, at: date)
     }
@@ -1257,7 +1405,7 @@ final class AppState: ObservableObject {
     }
 
     private func scheduleClaudeAuthRecheckIfNeeded(for state: ToolState, reason: String) {
-        guard state.tool == .claude, state.isMonitored, !globalPassive else { return }
+        guard state.tool.kind == .claude, state.isMonitored, !globalPassive else { return }
         guard state.authRetryAttempts < claudeAuthRetryDelays.count else {
             DiagnosticLogger.append(
                 "auth_recheck_exhausted tool=\(state.tool.rawValue) attempts=\(state.authRetryAttempts) reason=\(reason)"
@@ -1286,21 +1434,21 @@ final class AppState: ObservableObject {
         state.authRetryTask = Task { [weak self] in
             try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
             guard !Task.isCancelled else { return }
-            await self?.runClaudeAuthRecheck(attempt: attempt)
+            await self?.runClaudeAuthRecheck(for: state.tool, attempt: attempt)
         }
     }
 
-    private func runClaudeAuthRecheck(attempt: Int) async {
-        let state = state(for: .claude)
+    private func runClaudeAuthRecheck(for tool: ProviderID, attempt: Int) async {
+        guard let state = toolStates[tool] else { return }
         guard state.authRetryAttempts == attempt else { return }
         state.authRetryTask = nil
         state.authRetryScheduledAt = nil
-        DiagnosticLogger.append("auth_recheck_running tool=claude attempt=\(attempt)")
-        guard await applyCLIAuthenticationStatusIfNeeded(for: .claude, to: state) else { return }
-        await refreshQuota(for: .claude, allowAutomaticWarmup: false)
+        DiagnosticLogger.append("auth_recheck_running tool=\(tool.rawValue) attempt=\(attempt)")
+        guard await applyCLIAuthenticationStatusIfNeeded(for: tool, to: state) else { return }
+        await refreshQuota(for: tool, allowAutomaticWarmup: false)
     }
 
-    private func rescheduleRefresh(for tool: ToolID) {
+    private func rescheduleRefresh(for tool: ProviderID) {
         let state = state(for: tool)
         guard state.isMonitored, !globalPassive else {
             scheduler.invalidate(tool: tool)
@@ -1358,7 +1506,15 @@ final class AppState: ObservableObject {
     @Published var panelContentHeight: CGFloat = 0
 
     static func panelHeight(forMeasured measured: CGFloat) -> CGFloat {
-        measured > 0 ? min(max(measured, 300), 640) : DS.totalHeight
+        measured > 0 ? min(max(measured, 300), maxPanelHeight) : DS.totalHeight
+    }
+
+    /// Tallest unscaled panel that still fits under the menu bar on the
+    /// current screen (with a small margin), so a long tab such as History is
+    /// shown whole instead of being clipped at a fixed cap.
+    static var maxPanelHeight: CGFloat {
+        let visible = NSScreen.main?.visibleFrame.height ?? 800
+        return max(400, (visible - 24) / DS.panelScale)
     }
     /// Menu-bar refresh for the 1 s tick while the panel is closed.
     var onUITick: (() -> Void)?
@@ -1368,7 +1524,7 @@ final class AppState: ObservableObject {
         return TimeInterval(stored.nonZero ?? 300)
     }
 
-    private func addHistory(tool: ToolID?, kind: HistoryKind, title: String, detail: String) {
+    private func addHistory(tool: ProviderID?, kind: HistoryKind, title: String, detail: String) {
         let event = HistoryEvent(timestamp: Date(), tool: tool, kind: kind, title: title, detail: detail)
         history.insert(event, at: 0)
         if history.count > 10 { history.removeLast(history.count - 10) }

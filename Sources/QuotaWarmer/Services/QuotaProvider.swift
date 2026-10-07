@@ -1,14 +1,14 @@
 import Foundation
 
 protocol QuotaProviding {
-    func fetchQuota(for tool: ToolID, allowsCredentialInteraction: Bool) async throws -> QuotaSnapshot
+    func fetchQuota(for provider: ProviderID, allowsCredentialInteraction: Bool) async throws -> QuotaSnapshot
     /// Redeems one banked Codex rate-limit reset. Returns the number of windows reset.
-    func consumeCodexResetCredit(id: String) async throws -> Int
+    func consumeCodexResetCredit(id: String, provider: ProviderID) async throws -> Int
 }
 
 extension QuotaProviding {
-    func fetchQuota(for tool: ToolID) async throws -> QuotaSnapshot {
-        try await fetchQuota(for: tool, allowsCredentialInteraction: false)
+    func fetchQuota(for provider: ProviderID) async throws -> QuotaSnapshot {
+        try await fetchQuota(for: provider, allowsCredentialInteraction: false)
     }
 }
 
@@ -20,18 +20,18 @@ final class QuotaProvider: QuotaProviding {
         self.session = session
     }
 
-    func fetchQuota(for tool: ToolID, allowsCredentialInteraction: Bool = false) async throws -> QuotaSnapshot {
-        switch tool {
-        case .claude: return try await fetchClaudeQuota(allowsCredentialInteraction: allowsCredentialInteraction)
-        case .codex: return try await fetchCodexQuota()
+    func fetchQuota(for provider: ProviderID, allowsCredentialInteraction: Bool = false) async throws -> QuotaSnapshot {
+        switch provider.kind {
+        case .claude: return try await fetchClaudeQuota(provider, allowsCredentialInteraction: allowsCredentialInteraction)
+        case .codex: return try await fetchCodexQuota(provider)
         }
     }
 
-    private func fetchClaudeQuota(allowsCredentialInteraction: Bool) async throws -> QuotaSnapshot {
+    private func fetchClaudeQuota(_ provider: ProviderID, allowsCredentialInteraction: Bool) async throws -> QuotaSnapshot {
         let credential: Credential
         do {
             credential = try await credentialStore.credential(
-                for: .claude,
+                for: provider,
                 allowsUserInteraction: allowsCredentialInteraction
             )
         } catch CredentialError.interactionRequired(_) {
@@ -40,14 +40,14 @@ final class QuotaProvider: QuotaProviding {
             )
         } catch {
             throw QuotaProviderError.missingCredentials(
-                "Claude credentials not found; checked \(credentialStore.credentialSourceSummary(for: .claude))"
+                "Claude credentials not found; checked \(credentialStore.credentialSourceSummary(for: provider))"
             )
         }
 
         if credential.isExpired {
             // The mirrored copy aged out; the CLI's item is the only place a
             // newer token can appear, so stop trusting the mirror.
-            credentialStore.invalidateCachedClaudeCredential()
+            credentialStore.invalidateCachedClaudeCredential(for: provider)
             throw QuotaProviderError.cliRefreshRequired(
                 "Claude is signed in, but its quota credential needs a CLI refresh."
             )
@@ -63,20 +63,20 @@ final class QuotaProvider: QuotaProviding {
             // Do not consume a potentially rotating refresh token here. Claude
             // Code refreshes and persists its own credential when it next runs.
             // Drop the mirror so the retry reads Claude Code's item directly.
-            credentialStore.invalidateCachedClaudeCredential()
+            credentialStore.invalidateCachedClaudeCredential(for: provider)
             throw QuotaProviderError.cliRefreshRequired(
                 "Claude is signed in, but its quota credential needs a CLI refresh."
             )
         }
     }
 
-    private func fetchCodexQuota() async throws -> QuotaSnapshot {
+    private func fetchCodexQuota(_ provider: ProviderID) async throws -> QuotaSnapshot {
         let credential: Credential
         do {
-            credential = try await credentialStore.credential(for: .codex)
+            credential = try await credentialStore.credential(for: provider)
         } catch {
             throw QuotaProviderError.missingCredentials(
-                "Codex credentials not found; checked \(credentialStore.credentialSourceSummary(for: .codex))"
+                "Codex credentials not found; checked \(credentialStore.credentialSourceSummary(for: provider))"
             )
         }
 
@@ -118,10 +118,10 @@ final class QuotaProvider: QuotaProviding {
     /// POST `wham/rate-limit-reset-credits/consume` (shape taken from the Codex CLI:
     /// `credit_id` + an idempotency `redeem_request_id`). A real redeem is
     /// irreversible, so this is only ever called from an explicit, confirmed tap.
-    func consumeCodexResetCredit(id: String) async throws -> Int {
+    func consumeCodexResetCredit(id: String, provider: ProviderID) async throws -> Int {
         let credential: Credential
         do {
-            credential = try await credentialStore.credential(for: .codex)
+            credential = try await credentialStore.credential(for: provider)
         } catch {
             throw QuotaProviderError.missingCredentials("Codex credentials not found")
         }

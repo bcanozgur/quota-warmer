@@ -1,4 +1,3 @@
-import CryptoKit
 import Foundation
 import Security
 
@@ -6,26 +5,26 @@ final class CredentialStore {
     private let fileManager = FileManager.default
 
     func credential(
-        for tool: ToolID,
+        for provider: ProviderID,
         allowsUserInteraction: Bool = false
     ) async throws -> Credential {
-        switch tool {
+        switch provider.kind {
         case .claude:
-            return try claudeCredential(allowsUserInteraction: allowsUserInteraction)
-        case .codex: return try codexCredential()
+            return try claudeCredential(for: provider, allowsUserInteraction: allowsUserInteraction)
+        case .codex: return try codexCredential(for: provider)
         }
     }
 
-    private func claudeCredential(allowsUserInteraction: Bool) throws -> Credential {
+    private func claudeCredential(for provider: ProviderID, allowsUserInteraction: Bool) throws -> Credential {
         // Claude Code owns its Keychain item and rotates the access token inside
         // it roughly every 8 hours. Mirror the still-valid token into an item
         // QuotaWarmer itself owns so the common path touches nothing foreign.
-        if let cached = cachedClaudeCredential(), !cached.isExpired {
+        if let cached = cachedClaudeCredential(for: provider), !cached.isExpired {
             DiagnosticLogger.append("claude_credential_source=mirror prompt=no")
             return cached
         }
 
-        let services = claudeKeychainServices()
+        let services = claudeKeychainServices(for: provider)
 
         // The mirror aged out with the token, so a fresh one has to come from
         // Claude Code's own item. Read it the way Claude Code wrote it — see
@@ -34,7 +33,7 @@ final class CredentialStore {
             guard let data = securityToolPassword(service: service),
                   let credential = parseClaudeCredential(data, source: "Keychain \(service)") else { continue }
             DiagnosticLogger.append("claude_credential_source=security-tool prompt=no")
-            storeCachedClaudeCredential(credential)
+            storeCachedClaudeCredential(credential, for: provider)
             return credential
         }
 
@@ -44,7 +43,7 @@ final class CredentialStore {
             switch claudeKeychainPassword(service: service, allowsUserInteraction: allowsUserInteraction) {
             case .data(let data):
                 if let credential = parseClaudeCredential(data, source: "Keychain \(service)") {
-                    storeCachedClaudeCredential(credential)
+                    storeCachedClaudeCredential(credential, for: provider)
                     return credential
                 }
             case .interactionRequired:
@@ -54,7 +53,10 @@ final class CredentialStore {
             }
         }
 
-        if let token = ProcessInfo.processInfo.environment["CLAUDE_CODE_OAUTH_TOKEN"]?
+        // The env token belongs to whatever account the app was launched with,
+        // so only the default account may fall back to it.
+        if provider.isDefault,
+           let token = ProcessInfo.processInfo.environment["CLAUDE_CODE_OAUTH_TOKEN"]?
             .trimmingCharacters(in: .whitespacesAndNewlines),
            !token.isEmpty {
             return Credential(
@@ -66,10 +68,9 @@ final class CredentialStore {
             )
         }
 
-        let url = fileManager.homeDirectoryForCurrentUser
-            .appendingPathComponent(".claude/.credentials.json")
+        let url = claudeCredentialsFileURL(for: provider)
         if let data = try? Data(contentsOf: url),
-           let credential = parseClaudeCredential(data, source: "~/.claude/.credentials.json") {
+           let credential = parseClaudeCredential(data, source: displayPath(url)) {
             return credential
         }
 
@@ -87,12 +88,8 @@ final class CredentialStore {
         throw CredentialError.missing("Claude")
     }
 
-    private func codexCredential() throws -> Credential {
-        let paths = [
-            ProcessInfo.processInfo.environment["CODEX_HOME"].map { URL(fileURLWithPath: $0).appendingPathComponent("auth.json") },
-            fileManager.homeDirectoryForCurrentUser.appendingPathComponent(".config/codex/auth.json"),
-            fileManager.homeDirectoryForCurrentUser.appendingPathComponent(".codex/auth.json")
-        ].compactMap { $0 }
+    private func codexCredential(for provider: ProviderID) throws -> Credential {
+        let paths = codexAuthFileURLs(for: provider)
 
         for url in paths {
             if let data = try? Data(contentsOf: url),
@@ -101,7 +98,10 @@ final class CredentialStore {
             }
         }
 
-        if let data = keychainPassword(service: "Codex Auth"),
+        // Codex's Keychain item has one fixed name, so it can only belong to
+        // the default home; an added account must come from its own auth.json.
+        if provider.isDefault,
+           let data = keychainPassword(service: "Codex Auth"),
            let credential = parseCodexCredential(data, source: "Keychain Codex Auth") {
             return credential
         }
@@ -109,33 +109,50 @@ final class CredentialStore {
         throw CredentialError.missing("Codex")
     }
 
-    func credentialSourceSummary(for tool: ToolID) -> String {
-        switch tool {
+    func credentialSourceSummary(for provider: ProviderID) -> String {
+        switch provider.kind {
         case .claude:
-            return (claudeKeychainServices().map { "Keychain \($0)" } + [
-                "env CLAUDE_CODE_OAUTH_TOKEN",
-                "~/.claude/.credentials.json"
-            ]).joined(separator: ", ")
+            var sources = claudeKeychainServices(for: provider).map { "Keychain \($0)" }
+            if provider.isDefault { sources.append("env CLAUDE_CODE_OAUTH_TOKEN") }
+            sources.append(displayPath(claudeCredentialsFileURL(for: provider)))
+            return sources.joined(separator: ", ")
         case .codex:
-            return [
-                "$CODEX_HOME/auth.json",
-                "~/.config/codex/auth.json",
-                "~/.codex/auth.json",
-                "Keychain Codex Auth"
-            ].joined(separator: ", ")
+            var sources = codexAuthFileURLs(for: provider).map(displayPath)
+            if provider.isDefault { sources.append("Keychain Codex Auth") }
+            return sources.joined(separator: ", ")
         }
     }
 
-    private func claudeKeychainServices() -> [String] {
-        var services = ["Claude Code-credentials"]
+    /// Claude Code's own Keychain item names for this account. The default
+    /// account also honours a `CLAUDE_CONFIG_DIR` the app itself was launched
+    /// with, after the plain item.
+    private func claudeKeychainServices(for provider: ProviderID) -> [String] {
+        if let home = provider.home {
+            return ProviderID.claudeKeychainServices(configDir: home)
+        }
+        var services = ProviderID.claudeKeychainServices(configDir: nil)
         if let configDir = ProcessInfo.processInfo.environment["CLAUDE_CONFIG_DIR"], !configDir.isEmpty {
-            let hash = SHA256.hash(data: Data(configDir.utf8))
-                .map { String(format: "%02x", $0) }
-                .joined()
-            services.append("Claude Code-credentials-\(hash)")
-            services.append("Claude Code-credentials-\(String(hash.prefix(16)))")
+            services += ProviderID.claudeKeychainServices(configDir: configDir)
         }
         return services
+    }
+
+    private func claudeCredentialsFileURL(for provider: ProviderID) -> URL {
+        if let home = provider.home {
+            return URL(fileURLWithPath: home, isDirectory: true).appendingPathComponent(".credentials.json")
+        }
+        return fileManager.homeDirectoryForCurrentUser.appendingPathComponent(".claude/.credentials.json")
+    }
+
+    private func codexAuthFileURLs(for provider: ProviderID) -> [URL] {
+        if let home = provider.home {
+            return [URL(fileURLWithPath: home, isDirectory: true).appendingPathComponent("auth.json")]
+        }
+        return [
+            ProcessInfo.processInfo.environment["CODEX_HOME"].map { URL(fileURLWithPath: $0).appendingPathComponent("auth.json") },
+            fileManager.homeDirectoryForCurrentUser.appendingPathComponent(".config/codex/auth.json"),
+            fileManager.homeDirectoryForCurrentUser.appendingPathComponent(".codex/auth.json")
+        ].compactMap { $0 }
     }
 
     private func keychainPassword(service: String) -> Data? {
@@ -160,6 +177,12 @@ final class CredentialStore {
     /// dialog, which is the whole point of mirroring the token here.
     private static let claudeCacheService = "com.quotawarmer.app.claude-oauth-cache"
 
+    /// One mirror per account; the default keeps the original name so an
+    /// existing mirror stays valid across the upgrade.
+    private static func claudeCacheService(for provider: ProviderID) -> String {
+        provider.isDefault ? claudeCacheService : "\(claudeCacheService).\(provider.accountID)"
+    }
+
     private struct CachedClaudeCredential: Codable {
         let accessToken: String
         let expiresAt: Date?
@@ -168,10 +191,10 @@ final class CredentialStore {
 
     /// Returns the mirrored credential, or nil when absent/unreadable/malformed.
     /// Never throws: a bad cache must always fall through to the real source.
-    private func cachedClaudeCredential() -> Credential? {
+    private func cachedClaudeCredential(for provider: ProviderID) -> Credential? {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: Self.claudeCacheService,
+            kSecAttrService as String: Self.claudeCacheService(for: provider),
             kSecReturnData as String: true,
             kSecMatchLimit as String: kSecMatchLimitOne
         ]
@@ -201,7 +224,7 @@ final class CredentialStore {
         )
     }
 
-    private func storeCachedClaudeCredential(_ credential: Credential) {
+    private func storeCachedClaudeCredential(_ credential: Credential, for provider: ProviderID) {
         // An access token with no known expiry can never be aged out, so it is
         // not safe to mirror — always re-read those from the owning source.
         guard credential.expiresAt != nil else { return }
@@ -214,7 +237,7 @@ final class CredentialStore {
 
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: Self.claudeCacheService
+            kSecAttrService as String: Self.claudeCacheService(for: provider)
         ]
         let attributes: [String: Any] = [
             kSecValueData as String: data,
@@ -232,10 +255,10 @@ final class CredentialStore {
 
     /// Drops the mirror so the next read goes back to Claude Code's own item.
     /// Used when the mirrored token is rejected by the API.
-    func invalidateCachedClaudeCredential() {
+    func invalidateCachedClaudeCredential(for provider: ProviderID) {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: Self.claudeCacheService
+            kSecAttrService as String: Self.claudeCacheService(for: provider)
         ]
         SecItemDelete(query as CFDictionary)
     }

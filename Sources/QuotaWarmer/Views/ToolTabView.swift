@@ -37,7 +37,7 @@ struct ToolTabView: View {
 
     private var header: some View {
         PanelHeader(title: toolState.tool.shortName,
-                    glyph: toolState.tool == .claude ? "ClaudeCode" : "Codex") {
+                    glyph: toolState.tool.kind.glyphAssetName) {
             if toolState.isFetchingQuota {
                 Image(systemName: "hourglass")
                     .font(.system(size: 11, weight: .medium))
@@ -69,7 +69,7 @@ struct ToolTabView: View {
                 Rectangle()
                     .fill(DS.C.borderSoft)
                     .frame(height: 1)
-                ResetCreditsRow(credits: credits, now: now) { await appState.useResetCredit($0) }
+                ResetCreditsRow(credits: credits, now: now) { await appState.useResetCredit($0, for: toolState.tool) }
             }
         }
         .padding(DS.Page.cardPadding)
@@ -140,11 +140,15 @@ struct ToolTabView: View {
 
     private func tokenUsageValue(_ usage: TokenUsageDay?) -> String {
         guard let usage else { return "--" }
-        return "\(formatCost(usage.costUSD)) · \(formatTokenCount(usage.totalTokens))"
+        return "\(formatCost(usage.costUSD, partial: usage.partialCostUSD)) · \(formatTokenCount(usage.totalTokens))"
     }
 
-    private func formatCost(_ value: Double?) -> String {
-        guard let value else { return "Unavailable" }
+    private func formatCost(_ value: Double?, partial: Double? = nil) -> String {
+        guard let value else {
+            // Some usage used an unpriced model: show the priced part as a floor.
+            guard let partial else { return "Unavailable" }
+            return String(format: "$%.2f+", partial)
+        }
         return String(format: "$%.2f", value)
     }
 

@@ -182,7 +182,7 @@ enum AutoWarmDedup {
 struct HistoryEvent: Identifiable {
     let id = UUID()
     let timestamp: Date
-    let tool: ToolID?
+    let tool: ProviderID?
     let kind: HistoryKind
     let title: String
     let detail: String
@@ -255,8 +255,19 @@ struct TokenUsageDay: Identifiable, Equatable {
     let date: Date
     let totalTokens: Int
     let costUSD: Double?
+    /// Cost of the priced part when `costUSD` is nil because some usage used an
+    /// unpriced model; nil when nothing in the period could be priced.
+    var partialCostUSD: Double? = nil
 
     var id: Date { date }
+}
+
+/// Tokens used within one clock hour (`hour` is the hour's start).
+struct TokenUsageHour: Equatable {
+    let hour: Date
+    let tokens: Int
+    /// API-equivalent cost; nil when part of it used an unpriced model.
+    var costUSD: Double? = 0
 }
 
 struct TokenUsageSummary: Equatable {
@@ -265,6 +276,9 @@ struct TokenUsageSummary: Equatable {
     let today: TokenUsageDay
     let yesterday: TokenUsageDay
     let last30Days: TokenUsageDay
+    /// Tokens per clock hour over the scanned 30 days, oldest first; hours
+    /// without usage are omitted. See `UsageHistory` for the busy-hours views.
+    var hourly: [TokenUsageHour] = []
 
     var hasUsage: Bool {
         today.totalTokens > 0 || yesterday.totalTokens > 0 || last30Days.totalTokens > 0

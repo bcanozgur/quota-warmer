@@ -33,9 +33,9 @@ enum MenuBarStatus {
     }
 
     /// Tools the user has pinned to the menu bar, shown side by side. Order
-    /// follows `ToolID.allCases` so the layout is stable.
-    private static func visibleTools(_ appState: AppState) -> [ToolID] {
-        ToolID.allCases.filter { appState.state(for: $0).menuBarVisible }
+    /// follows `AppState.providers` so the layout is stable.
+    private static func visibleTools(_ appState: AppState) -> [ProviderID] {
+        appState.providers.filter { appState.state(for: $0).menuBarVisible }
     }
 
     private static func composeItems(_ appState: AppState) -> [MenuBarComposer.Item] {
@@ -63,9 +63,10 @@ enum MenuBarStatus {
             )
 
             return MenuBarComposer.Item(
-                assetName: tool == .claude ? "ClaudeCode" : "Codex",
+                assetName: tool.kind.glyphAssetName,
                 dotColor: nsStatusColor(for: st, appState: appState),
-                text: text,
+                // An added account is told apart from the default by its initial.
+                text: tool.badge.map { "\($0) \(text)" } ?? text,
                 // Neutral menu-bar-white text (the colored status dot conveys
                 // state), not a saturated color.
                 textColor: .white,

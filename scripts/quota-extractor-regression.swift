@@ -898,15 +898,15 @@ access_token=private-value
             )
         }
         require(
-            appStateSource.contains("guard tool != .claude || !state.isFetchingQuota else { return }"),
+            appStateSource.contains("guard tool.kind != .claude || !state.isFetchingQuota else { return }"),
             "Concurrent Claude refresh triggers must collapse to a single in-flight request chain"
         )
         require(
-            appStateSource.contains("let shouldAutoWarm = tool == .claude && state(for: tool).isAutoWarmEnabled"),
+            appStateSource.contains("let shouldAutoWarm = tool.kind == .claude && state(for: tool).isAutoWarmEnabled"),
             "A manual Claude refresh must immediately resume an opted-in auto-warm after credential approval"
         )
         require(
-            appStateSource.contains("if tool == .claude { state.isFetchingQuota = false }"),
+            appStateSource.contains("if tool.kind == .claude { state.isFetchingQuota = false }"),
             "Claude auto-warm must release the outer fetch before post-warm verification"
         )
         let quotaProviderSource = readSource("Sources/QuotaWarmer/Services/QuotaProvider.swift")
@@ -916,7 +916,7 @@ access_token=private-value
         )
         require(
             quotaProviderSource.contains("QuotaProviderError.cliRefreshRequired")
-                && quotaProviderSource.contains("credentialStore.invalidateCachedClaudeCredential()")
+                && quotaProviderSource.contains("credentialStore.invalidateCachedClaudeCredential(for: provider)")
                 && !quotaProviderSource.contains("/v1/oauth/token"),
             "Expired Claude credentials must defer refresh-token rotation to Claude Code and re-read its fresh credential"
         )
@@ -1007,10 +1007,11 @@ access_token=private-value
             ("claude-mythos-5-1", 92.75),
             ("claude-mythos-5", 93.50),
             ("claude-opus-5", 46.75),
-            ("claude-sonnet-5-5", 18.70),
+            ("claude-sonnet-5-5", 18.60),
             ("claude-opus-5-5", 37.20),
             ("claude-sonnet-5", 18.70),
-            ("claude-haiku-4-5", 9.35)
+            ("claude-haiku-4-5", 9.35),
+            ("claude-haiku-5-5", 0.935)
         ]
 
         for (index, entry) in cases.enumerated() {
@@ -1210,6 +1211,7 @@ access_token=private-value
         let summary = provider.usage(for: .claude, baseURL: root, now: isoDate("2026-06-15T12:00:00Z"))
         require(summary.today.totalTokens == 200, "Unpriced Claude model tokens should still be counted")
         require(summary.today.costUSD == nil, "Unpriced Claude model should report cost as unavailable")
+        require(summary.today.partialCostUSD == nil, "A day with nothing priced has no partial cost")
 
         // A price edit in a newer catalog revision reprices without a release.
         let repriced = LocalUsageProvider(
@@ -1342,6 +1344,9 @@ access_token=private-value
         require(summary.today.costUSD == nil, "Codex local usage with a priced and unpriced model must not report a partial cost")
         requireClose(summary.yesterday.costUSD, 0.00355, "Codex local usage should price yesterday's turn")
         require(summary.last30Days.costUSD == nil, "Codex aggregate cost must remain unavailable when any included model is unpriced")
+        require((summary.today.partialCostUSD ?? 0) > 0, "A mixed day exposes its priced share as a partial cost")
+        require((summary.last30Days.partialCostUSD ?? 0) >= (summary.today.partialCostUSD ?? 0), "The aggregate partial cost includes every priced share")
+        require(summary.yesterday.partialCostUSD == nil, "A fully priced day has no partial cost")
     }
 
     private static func testCurrentCodexPricingAndUnknownModels() {

@@ -2,12 +2,14 @@ import Foundation
 import AppKit
 
 class Scheduler {
-    var onFire: ((ToolID) -> Void)?
+    var onFire: ((ProviderID) -> Void)?
+    /// Every watched account, fired once each on system wake.
+    var providers: (() -> [ProviderID])?
     /// Called once each time the system wakes from sleep, before the per-tool
     /// fires. Used for morning pre-warm bookkeeping / catch-up.
     var onWake: (() -> Void)?
 
-    private var timers: [ToolID: DispatchSourceTimer] = [:]
+    private var timers: [ProviderID: DispatchSourceTimer] = [:]
     private var morningTimer: DispatchSourceTimer?
     private let queue = DispatchQueue(label: "com.quotawarmer.scheduler")
     private var observers: [NSObjectProtocol] = []
@@ -21,7 +23,7 @@ class Scheduler {
             guard let self else { return }
             self.onWake?()
             if let fire = self.onFire {
-                ToolID.allCases.forEach { fire($0) }
+                (self.providers?() ?? []).forEach { fire($0) }
             }
         }
         observers.append(wakeObserver)
@@ -32,7 +34,7 @@ class Scheduler {
         invalidateAll()
     }
 
-    func schedule(tool: ToolID, at fireDate: Date) {
+    func schedule(tool: ProviderID, at fireDate: Date) {
         cancelTimer(for: tool)
 
         let timer = DispatchSource.makeTimerSource(queue: queue)
@@ -82,9 +84,9 @@ class Scheduler {
         return DispatchWallTime(timespec: timespec(tv_sec: Int(seconds), tv_nsec: nanos))
     }
 
-    func invalidate(tool: ToolID) { cancelTimer(for: tool) }
+    func invalidate(tool: ProviderID) { cancelTimer(for: tool) }
 
-    private func cancelTimer(for tool: ToolID) {
+    private func cancelTimer(for tool: ProviderID) {
         timers[tool]?.cancel()
         timers.removeValue(forKey: tool)
     }

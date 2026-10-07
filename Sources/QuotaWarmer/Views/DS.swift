@@ -92,9 +92,13 @@ enum DS {
 
         /// Per-tool brand accent. Dark variants are muted like the status colors;
         /// Codex indigo is lifted so the pin stays legible on graphite.
+        static func accent(_ tool: ProviderID) -> Color { accent(tool.kind) }
+
         static func accent(_ tool: ToolID) -> Color {
             tool == .claude ? claudeAccent : codexAccent
         }
+        /// Busy hours used by both Claude and Codex: between the two accents.
+        static let bothAccent = Color(light: 0xC2408A, dark: 0xB0588E)
         private static let claudeAccent = Color(light: 0xE6610D, dark: 0xCB6A2F)   // Anthropic orange
         private static let codexAccent  = Color(light: 0x613DE6, dark: 0x7F6CD0)   // OpenAI indigo
     }

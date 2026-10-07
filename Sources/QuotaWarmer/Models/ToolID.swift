@@ -28,6 +28,14 @@ enum ToolID: String, CaseIterable, Identifiable, Codable {
         }
     }
 
+    /// Template image asset for the provider glyph.
+    var glyphAssetName: String {
+        switch self {
+        case .claude: return "ClaudeCode"
+        case .codex:  return "Codex"
+        }
+    }
+
     var accentColor: String {
         switch self {
         case .claude: return "orange"

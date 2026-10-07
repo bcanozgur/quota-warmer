@@ -8,7 +8,7 @@ import Foundation
 /// Not safe for concurrent `usage` calls on one instance (AppState single-
 /// flights each tool's scan).
 final class LocalUsageProvider: @unchecked Sendable {
-    private struct UsageRecord {
+    struct UsageRecord {
         let date: Date
         let model: String?
         let inputTokens: Int
@@ -33,6 +33,18 @@ final class LocalUsageProvider: @unchecked Sendable {
                 return
             }
             self.costUSD = (self.costUSD ?? 0) + cost
+        }
+
+        /// Priced share of a bucket whose total cost is unavailable.
+        var partialCostUSD: Double? {
+            guard hasUnpricedUsage, let costUSD, costUSD > 0 else { return nil }
+            return costUSD
+        }
+
+        mutating func merge(_ other: UsageBucket) {
+            tokens += other.tokens
+            if let cost = other.costUSD { costUSD = (costUSD ?? 0) + cost }
+            if other.hasUnpricedUsage { hasUnpricedUsage = true }
         }
 
         var estimatedCostUSD: Double? {
@@ -137,41 +149,65 @@ final class LocalUsageProvider: @unchecked Sendable {
         let root = baseURL ?? tool.logDirectoryURL
 
         let buckets: [Date: UsageBucket]
+        let records: [CachedRecord]
         if let root, fileManager.fileExists(atPath: root.path) {
             switch tool {
             case .claude:
                 unpricedModels.removeAll()
                 entryCache.removeAll()
-                buckets = claudeBuckets(in: root, since: since)
+                records = claudeRecords(in: root, since: since)
+                buckets = self.buckets(from: records, pricing: claudeCost)
                 if !unpricedModels.isEmpty { claudeCatalog.reportUnpricedModels(unpricedModels) }
             case .codex:
                 unpricedModels.removeAll()
                 entryCache.removeAll()
-                buckets = codexBuckets(in: root, since: since)
+                records = codexRecords(in: root, since: since)
+                buckets = self.buckets(from: records, pricing: codexCost)
                 if !unpricedModels.isEmpty { codexCatalog.reportUnpricedModels(unpricedModels) }
             }
         } else {
             buckets = [:]
+            records = []
         }
 
         let todayBucket = buckets[today] ?? UsageBucket()
         let yesterdayBucket = buckets[yesterday] ?? UsageBucket()
         let last30Bucket = buckets
             .filter { $0.key >= since && $0.key <= today }
-            .reduce(into: UsageBucket()) { aggregate, entry in
-                aggregate.add(tokens: entry.value.tokens, cost: entry.value.estimatedCostUSD)
-            }
+            .reduce(into: UsageBucket()) { aggregate, entry in aggregate.merge(entry.value) }
 
         return TokenUsageSummary(
             fetchedAt: now,
             source: tool == .claude ? "Claude local usage" : "Codex local usage",
-            today: TokenUsageDay(date: today, totalTokens: todayBucket.tokens, costUSD: todayBucket.estimatedCostUSD),
-            yesterday: TokenUsageDay(date: yesterday, totalTokens: yesterdayBucket.tokens, costUSD: yesterdayBucket.estimatedCostUSD),
-            last30Days: TokenUsageDay(date: since, totalTokens: last30Bucket.tokens, costUSD: last30Bucket.estimatedCostUSD)
+            today: TokenUsageDay(date: today, totalTokens: todayBucket.tokens, costUSD: todayBucket.estimatedCostUSD, partialCostUSD: todayBucket.partialCostUSD),
+            yesterday: TokenUsageDay(date: yesterday, totalTokens: yesterdayBucket.tokens, costUSD: yesterdayBucket.estimatedCostUSD, partialCostUSD: yesterdayBucket.partialCostUSD),
+            last30Days: TokenUsageDay(date: since, totalTokens: last30Bucket.tokens, costUSD: last30Bucket.estimatedCostUSD, partialCostUSD: last30Bucket.partialCostUSD),
+            hourly: Self.hourly(
+                records.map(\.record),
+                calendar: hourCalendar,
+                cost: tool == .claude ? claudeCost : codexCost
+            )
         )
     }
 
-    private func claudeBuckets(in root: URL, since: Date) -> [Date: UsageBucket] {
+    /// Calendar for the History buckets: the user's local time, since "when
+    /// do I work" is a local-clock question (today/yesterday stay UTC days).
+    var hourCalendar: Calendar = .current
+
+    /// Tokens and cost per clock hour (start of the hour in `calendar`),
+    /// oldest first; the History charts build every range from these.
+    static func hourly(_ records: [UsageRecord], calendar: Calendar, cost: (UsageRecord) -> Double?) -> [TokenUsageHour] {
+        var buckets: [Date: UsageBucket] = [:]
+        for record in records where record.totalTokens > 0 {
+            guard let start = calendar.dateInterval(of: .hour, for: record.date)?.start else { continue }
+            buckets[start, default: UsageBucket()].add(tokens: record.totalTokens, cost: record.explicitCostUSD ?? cost(record))
+        }
+        return buckets
+            .map { TokenUsageHour(hour: $0.key, tokens: $0.value.tokens, costUSD: $0.value.estimatedCostUSD) }
+            .sorted { $0.hour < $1.hour }
+    }
+
+    private func claudeRecords(in root: URL, since: Date) -> [CachedRecord] {
         var recordsByID: [String: CachedRecord] = [:]
         for scan in scanFiles(in: root, tool: .claude, since: since) {
             for cached in scan.allRecords where cached.record.date >= since {
@@ -180,14 +216,13 @@ final class LocalUsageProvider: @unchecked Sendable {
                 recordsByID[id] = cached
             }
         }
-        return buckets(from: Array(recordsByID.values), pricing: claudeCost)
+        return Array(recordsByID.values)
     }
 
-    private func codexBuckets(in root: URL, since: Date) -> [Date: UsageBucket] {
-        let records = scanFiles(in: root, tool: .codex, since: since)
+    private func codexRecords(in root: URL, since: Date) -> [CachedRecord] {
+        scanFiles(in: root, tool: .codex, since: since)
             .flatMap(\.allRecords)
             .filter { $0.record.date >= since }
-        return buckets(from: records, pricing: codexCost)
     }
 
     /// Up-to-date scans of every log file touched since `since`, in enumeration
