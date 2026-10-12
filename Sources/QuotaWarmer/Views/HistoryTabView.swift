@@ -407,8 +407,9 @@ private struct HistoryContent: View {
                 let barStart = max(window.startAt, start)
                 let barEnd = min(window.resetAt, end)
                 guard barEnd > barStart else { continue }
-                // Accounts overlap in time, so combined bars are see-through.
-                let color: Color = combined ? lineColor(entry).opacity(0.6) : barColor(window.peakUsed)
+                // One fixed color per account, never by level: height already
+                // shows the peak. Accounts overlap, so combined bars are see-through.
+                let color: Color = combined ? lineColor(entry).opacity(0.6) : lineColor(entry)
                 visible.append(WindowBar(
                     id: "\(entry.id)-\(window.resetAt.timeIntervalSince1970)",
                     window: window,
@@ -419,9 +420,7 @@ private struct HistoryContent: View {
             }
         }
         var info = "One bar per 5-hour window, spanning the hours it was open; its height is the most of the window that was used before it reset."
-        info += combined
-            ? " Each account is drawn in its own color, see-through where windows overlap."
-            : " Blue under 50%, orange from 50%, red from 80% used."
+        if combined { info += " Each account is drawn in its own color, see-through where windows overlap." }
         return card(title: "Peak per 5h window", info: info) {
             if visible.isEmpty {
                 Text("No opened windows in this range.")
@@ -590,11 +589,6 @@ private struct HistoryContent: View {
 
     private func tokenColor(_ entry: HistorySeries) -> Color {
         DS.C.accent(entry.tool).opacity(entry.tool.isDefault ? 0.85 : 0.5)
-    }
-
-    private func barColor(_ used: Double) -> Color {
-        guard colorfulBars else { return DS.C.barPlain }
-        return DS.C.usage(QuotaUsageLevel(remainingFraction: 1 - used))
     }
 
     @AxisContentBuilder
