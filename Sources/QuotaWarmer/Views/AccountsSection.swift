@@ -345,7 +345,7 @@ struct SmallButton: View {
             }
             .padding(.horizontal, 10)
             .frame(height: 24)
-            .foregroundStyle(prominent == nil ? DS.C.textSub : .white)
+            .foregroundStyle(prominent == nil ? DS.C.textSub : DS.C.onAccent)
             .background(prominent ?? DS.C.surfaceHigh, in: Capsule())
             .overlay(Capsule().stroke(prominent == nil ? DS.C.border : .clear, lineWidth: 1))
             .fixedSize()

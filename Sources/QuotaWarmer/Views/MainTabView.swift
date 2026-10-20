@@ -272,7 +272,7 @@ struct MainTabView: View {
                         .padding(.horizontal, 12)
                         .frame(height: 24)
                         .background(DS.C.accent(tool), in: Capsule())
-                        .foregroundStyle(.white)
+                        .foregroundStyle(DS.C.onAccent)
                 }
                 .buttonStyle(PressableButtonStyle())
                 .disabled(state.isWarming)

@@ -50,6 +50,9 @@ enum DS {
         static let surfaceHigh = Color(light: 0xF1F5F9, dark: 0x2F3036)   // quiet button / segmented fill
         static let track       = Color(light: 0xE9EDF2, dark: 0x34363D)   // progress track (no data)
         static let ink         = Color(light: 0x0F172A, dark: 0xF1F3F6)   // selected indicator
+        /// Label on a filled accent/danger surface (Warm, prominent buttons).
+        /// White reads only 2.9:1 on the muted dark accents, so dark text is used there.
+        static let onAccent    = Color(light: 0xFFFFFF, dark: 0x101216)
         /// Pace knob: stays bright on any bar color in both themes.
         static let knob        = Color(light: 0xFFFFFF, dark: 0xE8EAEE)
 
@@ -68,7 +71,7 @@ enum DS {
         // a label or symbol, never by color alone.
         static let green  = Color(light: 0x11813A, dark: 0x53A96A)
         static let yellow = Color(light: 0xA95D05, dark: 0xCA8B3A)
-        static let red    = Color(light: 0xDC2626, dark: 0xD5817E)
+        static let red    = Color(light: 0xD92525, dark: 0xD5817E)
         static let blue   = Color(light: 0x2563EB, dark: 0x709AD0)
 
         // Usage bars — claude.ai's light-theme tokens. In dark they are toned
@@ -76,7 +79,7 @@ enum DS {
         // glare against the graphite panel.
         // Each fill keeps >= 3:1 against its own track (WCAG 1.4.11).
         static let usageBlue   = Color(light: 0x2C84DB, dark: 0x5082BD)   // --accent-secondary-100
-        static let usageOrange = Color(light: 0xCA6F51, dark: 0xBA6E55)   // --accent-main-100
+        static let usageOrange = Color(light: 0xC96E51, dark: 0xBA6E55)   // --accent-main-100
         static let usageRed    = Color(light: 0xB53333, dark: 0xC16565)   // --danger-100
         /// Colored track tint behind a usage bar (a touch lighter in dark).
         static let usageTrackOpacity: Double = 0.16

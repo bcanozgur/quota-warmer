@@ -210,7 +210,7 @@ struct ToolTabView: View {
                     .font(.system(size: 12, weight: .semibold))
                     .frame(height: 30)
                     .padding(.horizontal, 14)
-                    .foregroundStyle(.white)
+                    .foregroundStyle(DS.C.onAccent)
                     .background(DS.C.accent(toolState.tool), in: Capsule())
             }
             .buttonStyle(PressableButtonStyle())

@@ -268,7 +268,7 @@ struct AccountBadge: View {
     var body: some View {
         Text(text)
             .font(.system(size: 8, weight: .heavy, design: .rounded))
-            .foregroundStyle(.white)
+            .foregroundStyle(DS.C.onAccent)
             .frame(minWidth: 12, minHeight: 12)
             .background(color, in: Circle())
             .overlay(Circle().stroke(DS.C.sidebar, lineWidth: 1.5))
