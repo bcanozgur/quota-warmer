@@ -1,11 +1,11 @@
 import Foundation
+@testable import QuotaWarmerCore
 
 /// Regression suite for multi-account identity (`Models/ProviderAccount.swift`)
 /// and quota history (`Models/UsageHistory.swift`, the daily/hourly token data
 /// from `LocalUsageProvider`) and the `status.json` export
 /// (`Models/QuotaStatus.swift`). Compiled standalone like the other regression
 /// scripts (see .github/workflows/ci.yml).
-@main
 struct AccountsHistoryRegression {
     nonisolated(unsafe) static var failures: [String] = []
     nonisolated(unsafe) static var checks = 0

@@ -707,7 +707,8 @@ struct MetricExtractor {
     /// fractional seconds — "2026-06-04T11:10:00.973380+00:00" — which a default
     /// `ISO8601DateFormatter` rejects. Try the fractional-seconds variant first,
     /// then fall back to the plain internet date-time format.
-    private static let isoFormatters: [ISO8601DateFormatter] = {
+    // Thread-safe formatters, never mutated after creation.
+    nonisolated(unsafe) private static let isoFormatters: [ISO8601DateFormatter] = {
         let withFractional = ISO8601DateFormatter()
         withFractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         let plain = ISO8601DateFormatter()

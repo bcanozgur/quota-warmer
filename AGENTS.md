@@ -9,15 +9,15 @@ QuotaWarmer is a macOS SwiftUI menu bar app generated with XcodeGen. Source live
 - `rtk xcodegen generate` regenerates `QuotaWarmer.xcodeproj` after source or project config changes.
 - `rtk xcodebuild -project QuotaWarmer.xcodeproj -scheme QuotaWarmer -configuration Debug -derivedDataPath /tmp/QuotaWarmerDerivedData -destination 'generic/platform=macOS' CODE_SIGNING_ALLOWED=NO build` builds the app locally without signing.
 - `rtk scripts/local-package.command` builds a local Release app, installs it to `/Applications`, clears quarantine, and launches it.
-- `rtk swiftc -module-cache-path /tmp/QuotaWarmerQuotaModuleCache -parse-as-library Sources/QuotaWarmer/Models/ToolID.swift Sources/QuotaWarmer/Models/QuotaModels.swift Sources/QuotaWarmer/Models/AutoWarmDecision.swift Sources/QuotaWarmer/Models/AutoWarmExplanation.swift Sources/QuotaWarmer/Models/ProviderAccount.swift Sources/QuotaWarmer/Models/UsageHistory.swift Sources/QuotaWarmer/Models/EventLog.swift Sources/QuotaWarmer/Models/ImpactReport.swift Sources/QuotaWarmer/Services/DiagnosticLogger.swift Sources/QuotaWarmer/Services/ModelCatalog.swift Sources/QuotaWarmer/Services/CredentialStore.swift Sources/QuotaWarmer/Services/WarmupRunner.swift Sources/QuotaWarmer/Services/QuotaProvider.swift Sources/QuotaWarmer/Services/LocalUsageProvider.swift scripts/quota-extractor-regression.swift -o /tmp/quota-extractor-regression` compiles the parser regression executable; run it with `rtk /tmp/quota-extractor-regression`.
+- `rtk swift test` runs all three regression suites (`Package.swift` compiles the app's Models/Services in place; add new files to `QuotaWarmerCore.sources` there). `rtk swift test --filter quotaExtractor` runs one.
 
 ## Coding Style & Naming Conventions
 
-Use Swift 5.9 conventions: 4-space indentation, `PascalCase` for types, `camelCase` for methods and properties, and small focused SwiftUI views. Prefer existing service boundaries over new globals. Keep comments short and only where behavior is non-obvious, especially around quota-source semantics and warm-up safety.
+Use Swift 5.9 language-mode conventions: 4-space indentation, `PascalCase` for types, `camelCase` for methods and properties, and small focused SwiftUI views. Prefer existing service boundaries over new globals. Keep comments short and only where behavior is non-obvious, especially around quota-source semantics and warm-up safety.
 
 ## Testing Guidelines
 
-There is no standalone XCTest target. The primary regression gate is `scripts/quota-extractor-regression.swift`, which protects live quota payload parsing, fallback behavior, and warm-up command assumptions. `scripts/quota-display-regression.swift` also pins the `quotawarmer://` URL parser (`Models/IntegrationCommand.swift`): the URL scheme is read/open/refresh only, so keep dangerous URLs rejected. Add payload-shaped cases whenever changing `QuotaProvider`, `MetricExtractor`, `ToolID`, `CredentialStore`, or `WarmupRunner`. It also covers every auto-warm gating rule in `Models/AutoWarmDecision.swift`; add a case whenever a warm-up rule changes. `Models/AutoWarmExplanation.swift` (the user-facing "why no warm-up" text) is covered by `scripts/quota-display-regression.swift`.
+Regression suites run under `swift test` (Swift Testing, `Tests/RegressionTests/`). The primary regression gate is `Tests/RegressionTests/quota-extractor-regression.swift`, which protects live quota payload parsing, fallback behavior, and warm-up command assumptions. `Tests/RegressionTests/quota-display-regression.swift` also pins the `quotawarmer://` URL parser (`Models/IntegrationCommand.swift`): the URL scheme is read/open/refresh only, so keep dangerous URLs rejected. Add payload-shaped cases whenever changing `QuotaProvider`, `MetricExtractor`, `ToolID`, `CredentialStore`, or `WarmupRunner`. It also covers every auto-warm gating rule in `Models/AutoWarmDecision.swift`; add a case whenever a warm-up rule changes. `Models/AutoWarmExplanation.swift` (the user-facing "why no warm-up" text) is covered by `Tests/RegressionTests/quota-display-regression.swift`.
 
 ## Commit & Pull Request Guidelines
 
@@ -33,4 +33,4 @@ Use project skills under `.agents/skills/` for non-trivial work: `quotawarmer-qu
 
 Project agents live under `.agents/agents/`. Use `quotawarmer-quota-engineer` for quota and warm-up fixes, and `quotawarmer-runtime-verifier` for independent proof that a user-visible macOS fix is installed and running.
 
-`scripts/quota-display-regression.swift` also compiles `Models/OnboardingFlow.swift` (first-run guide eligibility: first launch, upgrade, missing CLI, completed); add a case whenever that logic changes. See CLAUDE.md for the full compile list.
+`Tests/RegressionTests/quota-display-regression.swift` also compiles `Models/OnboardingFlow.swift` (first-run guide eligibility: first launch, upgrade, missing CLI, completed); add a case whenever that logic changes.

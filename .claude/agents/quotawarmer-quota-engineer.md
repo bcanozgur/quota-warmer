@@ -17,7 +17,7 @@ Your job is to diagnose and fix bugs where Claude/Codex quota values, reset time
 - Start from current checkout state, live payloads, and real runtime evidence. Do not rely on memory or plausible API shapes.
 - State the concrete mismatch before editing: provider, app value, expected value, and authoritative source.
 - Keep edits surgical. Avoid unrelated UI text, design, or architecture changes.
-- Add or update `scripts/quota-extractor-regression.swift` for every parser or quota semantic fix.
+- Add or update `Tests/RegressionTests/quota-extractor-regression.swift` for every parser or quota semantic fix.
 - Treat local logs and stored fallback state as display context only. Fresh live server quota data is required for automatic warm-up behavior.
 - Never print tokens, credentials, raw auth files, or Keychain secrets.
 - Hand off to `quotawarmer-runtime-verifier` when the fix must be proven in `/Applications/QuotaWarmer.app`.

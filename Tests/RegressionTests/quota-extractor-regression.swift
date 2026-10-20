@@ -1,6 +1,6 @@
 import Foundation
+@testable import QuotaWarmerCore
 
-@main
 struct QuotaExtractorRegression {
     static func main() async {
         // Keep fixture events out of the app's /tmp diagnostics log. This only

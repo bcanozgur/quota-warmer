@@ -31,13 +31,15 @@ enum DiagnosticLogger {
     }()
     static let fileURL = directory.appendingPathComponent("diagnostics.log")
     private static let writeLock = NSLock()
-    private static var directoryReady = false
+    /// Only read and written while holding `writeLock`.
+    nonisolated(unsafe) private static var directoryReady = false
 
     /// Rotation: `diagnostics.log` plus `diagnostics.1.log` … up to `maxFiles` files.
     static let maxBytes: UInt64 = 2 * 1024 * 1024
     static let maxFiles = 3
 
-    private static let formatter: ISO8601DateFormatter = {
+    /// `ISO8601DateFormatter` is thread-safe; it is never mutated after creation.
+    nonisolated(unsafe) private static let formatter: ISO8601DateFormatter = {
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         return formatter

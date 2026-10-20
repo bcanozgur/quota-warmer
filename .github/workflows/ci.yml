@@ -38,85 +38,10 @@ jobs:
       - name: Generate Xcode project
         run: xcodegen generate
 
-      - name: Run quota extractor regressions
-        run: |
-          swiftc \
-            -module-cache-path /tmp/QuotaWarmerQuotaModuleCache \
-            -parse-as-library \
-            Sources/QuotaWarmer/Models/AppSettings.swift \
-            Sources/QuotaWarmer/Models/ToolID.swift \
-            Sources/QuotaWarmer/Models/QuotaModels.swift \
-            Sources/QuotaWarmer/Models/AutoWarmDecision.swift \
-            Sources/QuotaWarmer/Models/AutoWarmExplanation.swift \
-            Sources/QuotaWarmer/Models/ProviderAccount.swift \
-            Sources/QuotaWarmer/Models/UsageHistory.swift \
-            Sources/QuotaWarmer/Models/EventLog.swift \
-            Sources/QuotaWarmer/Models/ImpactReport.swift \
-            Sources/QuotaWarmer/Services/DiagnosticLogger.swift \
-            Sources/QuotaWarmer/Services/ModelCatalog.swift \
-            Sources/QuotaWarmer/Services/CredentialStore.swift \
-            Sources/QuotaWarmer/Services/WarmupRunner.swift \
-            Sources/QuotaWarmer/Services/QuotaProvider.swift \
-            Sources/QuotaWarmer/Services/LocalUsageProvider.swift \
-            scripts/quota-extractor-regression.swift \
-            -o /tmp/quota-extractor-regression
-          /tmp/quota-extractor-regression
-
-      - name: Run quota display regressions
-        run: |
-          swiftc \
-            -module-cache-path /tmp/QuotaWarmerQuotaModuleCache \
-            -parse-as-library \
-            Sources/QuotaWarmer/Models/AppSettings.swift \
-            Sources/QuotaWarmer/Models/ToolID.swift \
-            Sources/QuotaWarmer/Models/QuotaModels.swift \
-            Sources/QuotaWarmer/Models/AutoWarmDecision.swift \
-            Sources/QuotaWarmer/Models/AutoWarmExplanation.swift \
-            Sources/QuotaWarmer/Models/ProviderAccount.swift \
-            Sources/QuotaWarmer/Models/UsageHistory.swift \
-            Sources/QuotaWarmer/Models/EventLog.swift \
-            Sources/QuotaWarmer/Models/ImpactReport.swift \
-            Sources/QuotaWarmer/Models/QuotaDisplay.swift \
-            Sources/QuotaWarmer/Models/QuotaAlerts.swift \
-            Sources/QuotaWarmer/Models/AppearanceMode.swift \
-            Sources/QuotaWarmer/Models/TimeInput.swift \
-            Sources/QuotaWarmer/Models/OnboardingFlow.swift \
-            Sources/QuotaWarmer/Models/IntegrationCommand.swift \
-            Sources/QuotaWarmer/Services/DiagnosticLogger.swift \
-            Sources/QuotaWarmer/Services/ModelCatalog.swift \
-            Sources/QuotaWarmer/Services/CredentialStore.swift \
-            Sources/QuotaWarmer/Services/WarmupRunner.swift \
-            Sources/QuotaWarmer/Services/QuotaProvider.swift \
-            Sources/QuotaWarmer/Services/LocalUsageProvider.swift \
-            scripts/quota-display-regression.swift \
-            -o /tmp/quota-display-regression
-          /tmp/quota-display-regression
-
-      - name: Run accounts and history regressions
-        run: |
-          swiftc \
-            -module-cache-path /tmp/QuotaWarmerQuotaModuleCache \
-            -parse-as-library \
-            Sources/QuotaWarmer/Models/AppSettings.swift \
-            Sources/QuotaWarmer/Models/ToolID.swift \
-            Sources/QuotaWarmer/Models/QuotaModels.swift \
-            Sources/QuotaWarmer/Models/AutoWarmDecision.swift \
-            Sources/QuotaWarmer/Models/AutoWarmExplanation.swift \
-            Sources/QuotaWarmer/Models/ProviderAccount.swift \
-            Sources/QuotaWarmer/Models/UsageHistory.swift \
-            Sources/QuotaWarmer/Models/EventLog.swift \
-            Sources/QuotaWarmer/Models/ImpactReport.swift \
-            Sources/QuotaWarmer/Models/QuotaDisplay.swift \
-            Sources/QuotaWarmer/Models/QuotaStatus.swift \
-            Sources/QuotaWarmer/Services/DiagnosticLogger.swift \
-            Sources/QuotaWarmer/Services/ModelCatalog.swift \
-            Sources/QuotaWarmer/Services/CredentialStore.swift \
-            Sources/QuotaWarmer/Services/WarmupRunner.swift \
-            Sources/QuotaWarmer/Services/QuotaProvider.swift \
-            Sources/QuotaWarmer/Services/LocalUsageProvider.swift \
-            scripts/accounts-history-regression.swift \
-            -o /tmp/accounts-history-regression
-          /tmp/accounts-history-regression
+      - name: Run regression suites
+        # Package.swift compiles the app's Models/Services in place; the three
+        # suites in Tests/RegressionTests run as one serialized Swift Testing suite.
+        run: swift test
 
       - name: Build Debug
         run: |

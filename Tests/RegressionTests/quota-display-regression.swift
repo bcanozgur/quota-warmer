@@ -1,11 +1,11 @@
 import Foundation
+@testable import QuotaWarmerCore
 
 /// Regression suite for quota *presentation*: remaining-vs-used display mode,
 /// Claude-style bar colors, bar/knob geometry and the menu-bar text. Compiled
 /// standalone like quota-extractor-regression.swift (see .github/workflows/ci.yml)
 /// and runs every percent through the real Claude/Codex parsers, so what the
 /// user sees is checked against what the providers actually report.
-@main
 struct QuotaDisplayRegression {
     nonisolated(unsafe) static var failures: [String] = []
     nonisolated(unsafe) static var checks = 0

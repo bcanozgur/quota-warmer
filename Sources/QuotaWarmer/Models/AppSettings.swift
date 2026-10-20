@@ -5,9 +5,12 @@ import Foundation
 /// in the Settings views, the Keychain-free account cleanup in `removeAccount`)
 /// and must never change; `scripts/accounts-history-regression.swift` pins them.
 ///
-/// Self-contained on purpose: it is compiled into the standalone regression
-/// suites, so it must not depend on app-only code.
-struct AppSettings {
+/// Self-contained on purpose: it is compiled into the regression suites
+/// (`QuotaWarmerCore` in Package.swift), so it must not depend on app-only code.
+///
+/// `@unchecked Sendable`: the only stored property is a `UserDefaults`, which
+/// is documented as thread-safe.
+struct AppSettings: @unchecked Sendable {
     /// Bump when a stored value needs rewriting; `migrateIfNeeded()` runs the
     /// steps between the stored version and this one.
     static let currentSchemaVersion = 1

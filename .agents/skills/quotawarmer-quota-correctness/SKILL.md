@@ -1,6 +1,6 @@
 ---
 name: quotawarmer-quota-correctness
-description: Use for QuotaWarmer Claude/Codex quota parsing, warm-up timing, web-vs-app quota mismatches, credential/source-health bugs, and any change touching QuotaProvider, MetricExtractor, QuotaMetric, ToolID warmup commands, CredentialStore, WarmupRunner, or scripts/quota-extractor-regression.swift.
+description: Use for QuotaWarmer Claude/Codex quota parsing, warm-up timing, web-vs-app quota mismatches, credential/source-health bugs, and any change touching QuotaProvider, MetricExtractor, QuotaMetric, ToolID warmup commands, CredentialStore, WarmupRunner, or Tests/RegressionTests/quota-extractor-regression.swift.
 ---
 
 # QuotaWarmer Quota Correctness
@@ -28,7 +28,7 @@ Inspect these first:
 - `Sources/QuotaWarmer/Services/CredentialStore.swift`
 - `Sources/QuotaWarmer/Services/WarmupRunner.swift`
 - `Sources/QuotaWarmer/AppState.swift`
-- `scripts/quota-extractor-regression.swift`
+- `Tests/RegressionTests/quota-extractor-regression.swift`
 
 Use `codegraph_context` first for flow questions, then read only the specific files needed.
 
@@ -37,7 +37,7 @@ Use `codegraph_context` first for flow questions, then read only the specific fi
 1. State the concrete mismatch: provider, shown app value, expected web/API value, and exact reset/percentage.
 2. Identify the authoritative source: Claude OAuth usage, Codex `wham/usage`, Keychain/file credential source, or local log display context.
 3. Inspect the current payload parser path and selection scoring; check zero values, numeric scale, reset date parsing, and weekly-vs-5h classification.
-4. Add or update a regression in `scripts/quota-extractor-regression.swift` using the smallest representative payload.
+4. Add or update a regression in `Tests/RegressionTests/quota-extractor-regression.swift` using the smallest representative payload.
 5. Patch parser/state behavior narrowly. Avoid changing UI copy or warm-up policy unless the evidence requires it.
 
 ## Verification Commands
@@ -45,8 +45,7 @@ Use `codegraph_context` first for flow questions, then read only the specific fi
 Compile and run the regression gate:
 
 ```bash
-rtk swiftc -module-cache-path /tmp/QuotaWarmerQuotaModuleCache -parse-as-library Sources/QuotaWarmer/Models/ToolID.swift Sources/QuotaWarmer/Models/QuotaModels.swift Sources/QuotaWarmer/Services/DiagnosticLogger.swift Sources/QuotaWarmer/Services/ModelCatalog.swift Sources/QuotaWarmer/Services/CredentialStore.swift Sources/QuotaWarmer/Services/WarmupRunner.swift Sources/QuotaWarmer/Services/QuotaProvider.swift Sources/QuotaWarmer/Services/LocalUsageProvider.swift scripts/quota-extractor-regression.swift -o /tmp/quota-extractor-regression
-rtk /tmp/quota-extractor-regression
+rtk swift test --filter quotaExtractor   # or `rtk swift test` for all three suites
 ```
 
 If app code changed, also run the Debug build:

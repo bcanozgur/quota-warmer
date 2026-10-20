@@ -211,11 +211,17 @@ Build a local Release app, replace any existing `/Applications/QuotaWarmer.app`,
 scripts/local-package.command
 ```
 
-Run the regression suites (standalone `swiftc` builds — the same ones CI runs; see `.github/workflows/ci.yml` for the exact file lists):
+Run the regression suites (the same command CI runs):
 
-- `scripts/quota-extractor-regression.swift` — quota parsing, warm-up commands, cost estimates
-- `scripts/quota-display-regression.swift` — left/used display, bar colors, menu-bar text, theme cycle, wake-time input, `quotawarmer://` URL parsing, hotkey spec
-- `scripts/accounts-history-regression.swift` — multi-account identity, quota history, the `status.json` export
+```bash
+swift test
+```
+
+The suites live in `Tests/RegressionTests/`:
+
+- `Tests/RegressionTests/quota-extractor-regression.swift` — quota parsing, warm-up commands, cost estimates
+- `Tests/RegressionTests/quota-display-regression.swift` — left/used display, bar colors, menu-bar text, theme cycle, wake-time input, `quotawarmer://` URL parsing, hotkey spec
+- `Tests/RegressionTests/accounts-history-regression.swift` — multi-account identity, quota history, the `status.json` export
 
 ## Project Structure
 
@@ -226,14 +232,15 @@ Sources/QuotaWarmer/
   Views/        SwiftUI menu bar label, popover, provider, and settings screens
   Assets.xcassets/
 project.yml     XcodeGen project definition
-scripts/        Packaging helpers, regression suites, model-catalog checker
+Tests/         Regression suites (run with `swift test`; Package.swift is test-only)
+scripts/       Packaging helpers, statusline script, model-catalog checker
 ```
 
 ## Release Process
 
-Releases are built by GitHub Actions from `vMAJOR.MINOR.PATCH` tags. The release workflow validates the tag against `project.yml`, builds the macOS app, signs and notarizes the DMG, uploads `latest.json`, and verifies release assets.
+Releases are cut automatically once CI is green on `main` (`auto-release.yml` bumps the version from commit subjects, tags, and runs `release-unsigned.yml`). Pushing a `vMAJOR.MINOR.PATCH` tag also runs `release-unsigned.yml`, which builds an ad-hoc signed (not notarized) DMG, publishes the GitHub Release with `latest.json`, and updates the Homebrew cask.
 
-Required repository secrets:
+A signed + notarized build (`release.yml`) is manual-only and needs these repository secrets:
 
 | Secret | Purpose |
 | --- | --- |
