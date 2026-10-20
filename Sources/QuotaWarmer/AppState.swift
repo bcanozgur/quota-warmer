@@ -454,7 +454,24 @@ final class AppState: ObservableObject {
         toolStates[tool] = nil
         usageProviders[tool] = nil
         tokenUsageScannedAt[tool] = nil
+        exportStatus()
         addHistory(tool: nil, kind: .quotaFetch, title: "Account removed", detail: tool.displayName)
+    }
+
+    /// Rewrites `status.json` (see `QuotaStatusExport`) from every watched
+    /// account's latest snapshot, for the statusline script and other tools.
+    private func exportStatus() {
+        let entries = providers.compactMap { provider -> QuotaStatusExport.Entry? in
+            guard let state = toolStates[provider] else { return nil }
+            return QuotaStatusExport.Entry(
+                provider: state.tool,
+                mode: state.mode,
+                displayMode: state.displayMode,
+                pinned: state.menuBarVisible,
+                snapshot: state.quotaSnapshot
+            )
+        }
+        QuotaStatusExport.write(QuotaStatusExport.make(entries))
     }
 
     private func usageProvider(for tool: ProviderID) -> LocalUsageProvider {
@@ -622,6 +639,7 @@ final class AppState: ObservableObject {
             state.quotaSnapshot = snapshot
             // Removed mid-fetch: don't recreate the deleted history file.
             if toolStates[tool] != nil { UsageHistoryStore.shared.record(snapshot, for: tool) }
+            exportStatus()
             state.sourceHealth = snapshot.freshness() == .fresh ? .healthy : .stale
             state.authStatus = .available
             state.healthMessage = snapshot.message ?? snapshot.primarySource

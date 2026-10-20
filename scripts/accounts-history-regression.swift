@@ -2,7 +2,8 @@ import Foundation
 
 /// Regression suite for multi-account identity (`Models/ProviderAccount.swift`)
 /// and quota history (`Models/UsageHistory.swift`, the daily/hourly token data
-/// from `LocalUsageProvider`). Compiled standalone like the other regression
+/// from `LocalUsageProvider`) and the `status.json` export
+/// (`Models/QuotaStatus.swift`). Compiled standalone like the other regression
 /// scripts (see .github/workflows/ci.yml).
 @main
 struct AccountsHistoryRegression {
@@ -29,6 +30,7 @@ struct AccountsHistoryRegression {
         testChartSegments()
         testHistoryStore()
         testDailyAndHourlyTokens()
+        testStatusExport()
 
         if failures.isEmpty {
             print("Accounts & history regressions passed (\(checks) checks)")
@@ -370,6 +372,98 @@ struct AccountsHistoryRegression {
 
         let missing = LocalUsageProvider(calendar: utc).usage(for: .claude, baseURL: root.appendingPathComponent("nope"), now: now)
         check(missing.hourly.isEmpty, "and no hourly usage")
+    }
+
+    // MARK: - Status export
+
+    static func testStatusExport() {
+        let now = Date(timeIntervalSince1970: 1_800_000_000) // 2027-01-15T08:00:00Z
+        let work = ProviderID(kind: .claude, accountID: "work", home: "/tmp/.claude-work", name: "Work")
+        let file = QuotaStatusExport.make([
+            QuotaStatusExport.Entry(
+                provider: .default(.claude), mode: .autoWarm, displayMode: .remaining, pinned: true,
+                snapshot: snapshot(at: now.addingTimeInterval(-60), sessionUsed: 0.42, weeklyUsed: 0.105,
+                                   resetAt: now.addingTimeInterval(2 * 3600 + 13 * 60))
+            ),
+            QuotaStatusExport.Entry(provider: work, mode: .monitor, displayMode: .used, pinned: false, snapshot: nil),
+            QuotaStatusExport.Entry(
+                provider: .default(.codex), mode: .off, displayMode: .remaining, pinned: false,
+                snapshot: snapshot(at: now.addingTimeInterval(-10 * 60), sessionUsed: 0, weeklyUsed: nil,
+                                   resetAt: now.addingTimeInterval(5 * 3600), idle: true)
+            ),
+        ], now: now)
+
+        let expected = """
+        {
+          "generatedAt" : "2027-01-15T08:00:00Z",
+          "providers" : [
+            {
+              "account" : "default",
+              "displayMode" : "remaining",
+              "fetchedAt" : "2027-01-15T07:59:00Z",
+              "freshness" : "fresh",
+              "id" : "claude",
+              "mode" : "autoWarm",
+              "name" : "Claude",
+              "pinned" : true,
+              "session" : {
+                "idle" : false,
+                "remainingPercent" : 58,
+                "resetAt" : "2027-01-15T10:13:00Z",
+                "settling" : false,
+                "usedPercent" : 42
+              },
+              "tool" : "claude",
+              "weekly" : {
+                "idle" : false,
+                "remainingPercent" : 89,
+                "settling" : false,
+                "usedPercent" : 11
+              }
+            },
+            {
+              "account" : "work",
+              "displayMode" : "used",
+              "freshness" : "unknown",
+              "id" : "claude.work",
+              "mode" : "monitor",
+              "name" : "Claude · Work",
+              "pinned" : false,
+              "tool" : "claude"
+            },
+            {
+              "account" : "default",
+              "displayMode" : "remaining",
+              "fetchedAt" : "2027-01-15T07:50:00Z",
+              "freshness" : "stale",
+              "id" : "codex",
+              "mode" : "off",
+              "name" : "Codex",
+              "pinned" : false,
+              "session" : {
+                "idle" : true,
+                "remainingPercent" : 100,
+                "resetAt" : "2027-01-15T13:00:00Z",
+                "settling" : false,
+                "usedPercent" : 0
+              },
+              "tool" : "codex"
+            }
+          ],
+          "schemaVersion" : 1
+        }
+
+        """
+        let data = try? QuotaStatusExport.encode(file)
+        expect(data.flatMap { String(data: $0, encoding: .utf8) }, expected, "status.json encodes the documented schema")
+        expect(data.flatMap { try? QuotaStatusExport.decode($0) }, file, "status.json round-trips")
+
+        let settling = QuotaStatusExport.provider(QuotaStatusExport.Entry(
+            provider: .default(.claude), mode: .monitor, displayMode: .remaining, pinned: true,
+            snapshot: snapshot(at: now, sessionUsed: 0.9, weeklyUsed: nil, resetAt: now.addingTimeInterval(5 * 3600 - 60))
+        ), now: now)
+        expect(settling.session?.settling, true, "a just-rolled-over reading is marked settling")
+        expect(settling.session?.usedPercent, 90, "and still carries the reported percent")
     }
 
     // MARK: - Harness
