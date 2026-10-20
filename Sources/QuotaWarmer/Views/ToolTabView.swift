@@ -23,6 +23,7 @@ struct ToolTabView: View {
                     .foregroundStyle(DS.C.red)
                     .fixedSize(horizontal: false, vertical: true)
             }
+            AutoWarmStatusLine(toolState: toolState, now: now)
             tokenUsageSection
             actions
         }

@@ -23,6 +23,7 @@ struct QuotaDisplayRegression {
         testTimeInput()
         testColorfulSetting()
         testQuotaAlerts()
+        testAutoWarmExplanation()
 
         if failures.isEmpty {
             print("Quota display regressions passed (\(checks) checks)")
@@ -513,6 +514,104 @@ struct QuotaDisplayRegression {
         expect(kinds(result), [.session], "Claude 96% used: one 5h alert, weekly under threshold")
         expect(result.alerts.map(\.usedPercent), [96], "Claude 96% used alerts with the displayed percent")
         expect(result.marks["session"]?.windowKey, claude.rawWindowKey, "5h mark keyed on rawWindowKey")
+    }
+
+    // MARK: - Auto-warm explanation
+
+    static func testAutoWarmExplanation() {
+        var cal = Calendar(identifier: .gregorian)
+        cal.timeZone = TimeZone(identifier: "UTC")!
+        let now = Date(timeIntervalSince1970: 1_790_000_000) // fixed clock
+        func at(_ minutes: Double) -> Date { now.addingTimeInterval(minutes * 60) }
+        func explain(_ skip: AutoWarmSkipReason?, mode: ToolMode = .autoWarm, decided: Date? = nil,
+                     next: Date? = nil, reset: Date? = nil, fetched: Date? = nil) -> AutoWarmExplanation {
+            AutoWarmExplanation.make(
+                .init(mode: mode, skip: skip, decidedAt: decided ?? now, nextCheckAt: next,
+                      windowResetAt: reset, snapshotFetchedAt: fetched),
+                now: now, calendar: cal)
+        }
+        func hm(_ d: Date) -> String { AutoWarmExplanation.formatTime(d, now: now, calendar: cal) }
+
+        // Time formatting: same day is bare HH:mm, other days carry a weekday.
+        let sameDay = cal.date(bySettingHour: 14, minute: 5, second: 0, of: now)!
+        expect(hm(sameDay), "14:05", "same-day time is zero-padded HH:mm")
+        let tomorrow = cal.date(byAdding: .day, value: 1, to: sameDay)!
+        check(hm(tomorrow).hasSuffix(" 14:05") && hm(tomorrow).count == 9, "other-day time has weekday prefix")
+
+        // Modes.
+        let off = explain(nil, mode: .off)
+        check(off.isSubtle && off.status == "Off", "Off is a subtle line")
+        let monitor = explain(nil, mode: .monitor)
+        expect(monitor.status, "Monitor mode — warm-ups are never sent", "Monitor text")
+        check(monitor.isSubtle && monitor.action != nil, "Monitor is subtle and suggests Auto-warm")
+
+        // Auto-warm, no decision yet / warmed.
+        let none = AutoWarmExplanation.make(.init(mode: .autoWarm, skip: nil, decidedAt: nil), now: now, calendar: cal)
+        expect(none.status, "Waiting for the first check", "no decision yet")
+        let warmed = explain(nil, reset: at(300))
+        check(warmed.status.hasPrefix("Warmed at ") && warmed.tone == .good, "warmed is good")
+        expect(warmed.nextEligibleAt, at(300), "warmed next eligible is the window reset")
+
+        // Every skip reason maps to a non-empty status and detail.
+        let reasons: [AutoWarmSkipReason] = [
+            .autoWarmOff, .paused, .warmupInProgress, .authUnavailable(.missing), .authUnavailable(.failed),
+            .backoff(until: at(10)), .sourceUnhealthy(.stale), .sourceUnhealthy(.rateLimited), .noQuotaReading,
+            .snapshotNotFresh(.stale), .snapshotNotFresh(.expired), .windowInUse(remaining: 0.42),
+            .windowNotJustOpened, .reservedForMorning(at: at(30)), .alreadyWarmedWindow,
+            .warmedWindowActive(until: at(120)),
+            .morning(.alreadySucceeded), .morning(.beforeScheduledTime), .morning(.outsideCatchUpHorizon),
+            .morning(.activeWindowInProgress), .morning(.quotaSourceUnavailable),
+        ]
+        for reason in reasons {
+            let e = explain(reason)
+            check(!e.status.isEmpty && !e.detail.isEmpty, "explanation text for \(reason.label)")
+            check(!e.popoverLines(now: now, calendar: cal).isEmpty, "popover lines for \(reason.label)")
+        }
+
+        // Specific texts and next-eligible computation.
+        expect(explain(.paused).status, "Paused globally", "paused text")
+        expect(explain(.backoff(until: at(10))).status,
+               "Backing off after a failed warm-up until \(hm(at(10)))", "backoff text")
+        expect(explain(.backoff(until: at(10))).nextEligibleAt, at(10), "backoff next eligible")
+        expect(explain(.warmedWindowActive(until: at(120))).status,
+               "Already warmed this window (resets \(hm(at(120))))", "warmed-window text")
+        expect(explain(.warmedWindowActive(until: at(120))).nextEligibleAt, at(120), "warmed-window next eligible")
+        expect(explain(.alreadyWarmedWindow, reset: at(200)).status,
+               "Already warmed this window (resets \(hm(at(200))))", "already-warmed shows reset")
+        expect(explain(.alreadyWarmedWindow).status, "Already warmed this window", "already-warmed without reset")
+        expect(explain(.windowInUse(remaining: 0.42), reset: at(90)).status, "Window in use (42% left)", "in-use text")
+        expect(explain(.windowInUse(remaining: 0.42), reset: at(90)).nextEligibleAt, at(90), "in-use next eligible")
+        expect(explain(.reservedForMorning(at: at(30))).nextEligibleAt, at(30), "morning reservation next eligible")
+        expect(explain(.snapshotNotFresh(.stale), next: at(3), fetched: at(-12)).status,
+               "Snapshot is 12 min old — waiting for a fresh check", "stale snapshot age text")
+        expect(explain(.snapshotNotFresh(.stale), next: at(3), fetched: at(-12)).nextEligibleAt, at(3), "stale next check")
+        expect(explain(.snapshotNotFresh(.expired)).status,
+               "Quota reading expired — waiting for a fresh check", "no snapshot age falls back to freshness")
+        expect(explain(.authUnavailable(.missing)).status, "Sign-in missing", "auth missing text")
+        expect(explain(.sourceUnhealthy(.rateLimited), next: at(5)).nextEligibleAt, at(5), "source next check")
+
+        // Popover lines carry next-eligible only when it is still ahead.
+        check(explain(.backoff(until: at(10))).popoverLines(now: now, calendar: cal)
+                .contains("Next eligible: \(hm(at(10)))"), "popover lists next eligible")
+        check(!explain(.backoff(until: at(-10))).popoverLines(now: now, calendar: cal)
+                .contains { $0.hasPrefix("Next eligible") }, "past next-eligible is omitted")
+        check(explain(.paused).popoverLines(now: now, calendar: cal).last == "Last checked \(hm(now))", "popover ends with decision time")
+
+        // History: only user-relevant reasons, only on change.
+        func entry(_ p: AutoWarmSkipReason?, _ n: AutoWarmSkipReason?) -> Bool {
+            AutoWarmExplanation.historyEntry(previous: p, new: n, now: now, calendar: cal) != nil
+        }
+        check(entry(nil, .backoff(until: at(5))), "backoff appearing is recorded")
+        check(!entry(.backoff(until: at(5)), .backoff(until: at(9))), "drifting backoff deadline is not re-recorded")
+        check(entry(.windowInUse(remaining: 0.5), .authUnavailable(.failed)), "auth failure is recorded")
+        check(!entry(.authUnavailable(.failed), .authUnavailable(.failed)), "unchanged auth failure is not re-recorded")
+        check(entry(.authUnavailable(.missing), .authUnavailable(.failed)), "auth missing -> failed is recorded")
+        check(!entry(nil, .windowInUse(remaining: 0.3)), "routine window-in-use is not recorded")
+        check(!entry(nil, .paused), "pause is not recorded")
+        check(!entry(.backoff(until: at(5)), nil), "recovery to warm is not a skip event")
+        check(entry(nil, .sourceUnhealthy(.authFailure)), "unhealthy source is recorded")
+        check(!entry(.sourceUnhealthy(.stale), .sourceUnhealthy(.stale)), "unchanged source health is not re-recorded")
+        check(entry(.morning(.beforeScheduledTime), .morning(.quotaSourceUnavailable)), "morning quota-unavailable is recorded")
     }
 
     // MARK: - Helpers
