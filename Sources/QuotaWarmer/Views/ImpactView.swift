@@ -14,7 +14,7 @@ struct HistoryModeToggle: View {
         .background(DS.C.surfaceHigh, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
     }
 
-    private func segment(_ title: String, selected: Bool, action: @escaping () -> Void) -> some View {
+    private func segment(_ title: LocalizedStringKey, selected: Bool, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Text(title)
                 .font(.system(size: 10, weight: .semibold))
@@ -24,6 +24,8 @@ struct HistoryModeToggle: View {
                 .foregroundStyle(selected ? DS.C.text : DS.C.textMuted)
         }
         .buttonStyle(PressableButtonStyle())
+        .accessibilityLabel(Text(title))
+        .accessibilityAddTraits(selected ? .isSelected : [])
     }
 }
 
@@ -106,6 +108,8 @@ struct ImpactView: View {
                         .foregroundStyle(selected ? DS.C.text : DS.C.textMuted)
                 }
                 .buttonStyle(PressableButtonStyle())
+                .accessibilityLabel(Text(option.spokenName))
+                .accessibilityAddTraits(selected ? .isSelected : [])
             }
         }
         .padding(2)
@@ -136,14 +140,15 @@ struct ImpactView: View {
     private func claimsCard(_ report: ImpactReport) -> some View {
         let claims = report.claims
         var parts: [String] = []
-        if claims.auto > 0 { parts.append("\(claims.auto) auto") }
-        if claims.morning > 0 { parts.append("\(claims.morning) morning") }
-        if claims.manual > 0 { parts.append("\(claims.manual) manual") }
-        if claims.intent > 0 { parts.append("\(claims.intent) shortcut") }
-        if claims.unattributed > 0 { parts.append("\(claims.unattributed) earlier") }
+        if claims.auto > 0 { parts.append(String(localized: "\(claims.auto) auto")) }
+        if claims.morning > 0 { parts.append(String(localized: "\(claims.morning) morning")) }
+        if claims.manual > 0 { parts.append(String(localized: "\(claims.manual) manual")) }
+        if claims.intent > 0 { parts.append(String(localized: "\(claims.intent) shortcut")) }
+        if claims.unattributed > 0 { parts.append(String(localized: "\(claims.unattributed) earlier")) }
+        let period: LocalizedStringKey = range == .all ? "week" : "day"
         return card(
             title: "Windows claimed",
-            info: "How many windows were opened by a warm-up each \(range == .all ? "week" : "day"). Auto = fresh window detected; morning = the daily pre-warm; manual = you pressed Warm up.",
+            info: "How many windows were opened by a warm-up each \(period). Auto = fresh window detected; morning = the daily pre-warm; manual = you pressed Warm up.",
             trailing: Text(parts.joined(separator: " · "))
                 .font(.system(size: 9, weight: .medium)).foregroundStyle(DS.C.textMuted).lineLimit(1)
         ) {
@@ -183,17 +188,17 @@ struct ImpactView: View {
                     row("Claimed, unused", "\(head.unusedWindows)",
                         help: "Claimed windows that ended with no local CLI usage, so no head start was measured.")
                 }
-                row("Warm-up cost", report.cost.displayText + (report.cost.warmups > 0 ? " · est." : ""),
+                row("Warm-up cost", report.cost.displayText + (report.cost.warmups > 0 ? String(localized: " · est.") : ""),
                     help: "\(report.cost.warmups) warm-ups × about 15K input and 100 output tokens at the catalog price of the model used. An estimate, not billing data; \"unpriced\" means the model is not in the price catalog yet.")
-                row("Windows ≥ 80% used", util.highUseShare.map { "\(Self.percent($0)) of \(util.windows)" } ?? "–",
+                row("Windows ≥ 80% used", util.highUseShare.map { String(localized: "\(Self.percent($0)) of \(util.windows)") } ?? "–",
                     help: "Share of observed 5-hour windows whose peak use reached 80%. Low means quota went unused.")
-                row("Weeks at weekly limit", util.weeks == 0 ? "–" : "\(util.weeksAtLimit) of \(util.weeks)",
+                row("Weeks at weekly limit", util.weeks == 0 ? "–" : String(localized: "\(util.weeksAtLimit) of \(util.weeks)"),
                     help: "Calendar weeks where the weekly quota reached 95%.")
             }
         }
     }
 
-    private func row(_ title: String, _ value: String, help: String) -> some View {
+    private func row(_ title: LocalizedStringKey, _ value: String, help: LocalizedStringKey) -> some View {
         HStack(spacing: 6) {
             Text(title).font(.system(size: 11)).foregroundStyle(DS.C.textSub)
             Spacer(minLength: 6)
@@ -202,7 +207,7 @@ struct ImpactView: View {
         }
     }
 
-    private func tile(_ title: String, value: String, info: String) -> some View {
+    private func tile(_ title: LocalizedStringKey, value: String, info: LocalizedStringKey) -> some View {
         VStack(alignment: .leading, spacing: 3) {
             Text(title).dsSectionLabel().lineLimit(1).fixedSize()
             HStack(spacing: 2) {
@@ -222,12 +227,12 @@ struct ImpactView: View {
         .dsCard(radius: DS.R.md)
     }
 
-    private func card<Content: View>(title: String, info: String, @ViewBuilder content: () -> Content) -> some View {
+    private func card<Content: View>(title: LocalizedStringKey, info: LocalizedStringKey, @ViewBuilder content: () -> Content) -> some View {
         card(title: title, info: info, trailing: EmptyView(), content: content)
     }
 
     private func card<Trailing: View, Content: View>(
-        title: String, info: String, trailing: Trailing, @ViewBuilder content: () -> Content
+        title: LocalizedStringKey, info: LocalizedStringKey, trailing: Trailing, @ViewBuilder content: () -> Content
     ) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 6) {
@@ -245,16 +250,20 @@ struct ImpactView: View {
 
     // MARK: - Text
 
-    static let overviewInfo = "What QuotaWarmer has done for you, from its own event log, your quota history and the CLI's local logs on this Mac."
-    static let headStartInfo = "How much earlier your windows reset than if each had started at your first real use. A warm-up opens the window before you work, so the quota refreshes sooner. Measured from the window's start to your first local CLI activity, at most one full window per claim."
+    static let overviewInfo: LocalizedStringKey = "What QuotaWarmer has done for you, from its own event log, your quota history and the CLI's local logs on this Mac."
+    static let headStartInfo: LocalizedStringKey = "How much earlier your windows reset than if each had started at your first real use. A warm-up opens the window before you work, so the quota refreshes sooner. Measured from the window's start to your first local CLI activity, at most one full window per claim."
 
     static func percent(_ fraction: Double) -> String { "\(Int((fraction * 100).rounded()))%" }
 
     static func duration(_ seconds: TimeInterval) -> String {
         let minutes = Int((seconds / 60).rounded())
-        if minutes < 60 { return "\(minutes)m" }
+        if minutes < 60 { return String(localized: "\(minutes)m") }
         let hours = minutes / 60
-        if hours < 48 { return minutes % 60 == 0 ? "\(hours)h" : "\(hours)h \(minutes % 60)m" }
-        return "\(hours / 24)d \(hours % 24)h"
+        if hours < 48 {
+            return minutes % 60 == 0
+                ? String(localized: "\(hours)h")
+                : String(localized: "\(hours)h \(minutes % 60)m")
+        }
+        return String(localized: "\(hours / 24)d \(hours % 24)h")
     }
 }

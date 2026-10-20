@@ -14,6 +14,15 @@ enum ImpactRange: String, CaseIterable, Identifiable {
         }
     }
 
+    /// Full phrase for VoiceOver ("last 7 days"), as opposed to the short chip label.
+    var spokenName: String {
+        switch self {
+        case .week: return String(localized: "last 7 days")
+        case .month: return String(localized: "last 30 days")
+        case .all: return String(localized: "all time")
+        }
+    }
+
     /// nil = everything that is stored.
     var interval: TimeInterval? {
         switch self {

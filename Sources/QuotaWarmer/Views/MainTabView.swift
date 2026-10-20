@@ -37,7 +37,7 @@ struct MainTabView: View {
 
     private var automationControl: some View {
         let paused = appState.globalPassive
-        let helpText = paused ? "Resume automatic warmups" : "Pause all automatic warmups"
+        let helpText: LocalizedStringKey = paused ? "Resume automatic warmups" : "Pause all automatic warmups"
         let stateColor = paused ? DS.C.red : DS.C.green
 
         let fetching = appState.providers.contains { appState.state(for: $0).isFetchingQuota }
@@ -48,7 +48,8 @@ struct MainTabView: View {
                 systemName: "arrow.triangle.2.circlepath",
                 help: "Refresh every account's quota now",
                 size: 26,
-                isDisabled: fetching
+                isDisabled: fetching,
+                shortcut: "r"
             ) {
                 Task {
                     await withTaskGroup(of: Void.self) { group in
@@ -135,13 +136,13 @@ struct MainTabView: View {
                         .fixedSize(horizontal: false, vertical: true)
                 }
 
-                windowRow(state, title: "Session", metric: state.primaryMetric,
+                windowRow(state, title: String(localized: "Session"), name: String(localized: "\(tool.shortName) 5-hour window"), metric: state.primaryMetric,
                           resetAt: state.resetAt, windowDuration: tool.windowDuration,
                           settling: state.sessionSettling)
                 Rectangle()
                     .fill(DS.C.borderSoft)
                     .frame(height: 1)
-                windowRow(state, title: "Weekly", metric: state.weeklyMetric,
+                windowRow(state, title: String(localized: "Weekly"), name: String(localized: "\(tool.shortName) weekly window"), metric: state.weeklyMetric,
                           resetAt: state.weeklyMetric?.resetAt, windowDuration: tool.weeklyWindowDuration)
                 if let credits = state.quotaSnapshot?.resetCredits, !credits.isEmpty {
                     Rectangle()
@@ -166,7 +167,7 @@ struct MainTabView: View {
         }
     }
 
-    private func windowRow(_ state: ToolState, title: String, metric: QuotaMetric?, resetAt: Date?, windowDuration: TimeInterval, settling: Bool = false) -> some View {
+    private func windowRow(_ state: ToolState, title: String, name: String, metric: QuotaMetric?, resetAt: Date?, windowDuration: TimeInterval, settling: Bool = false) -> some View {
         let quotaLeft = metric?.remainingFraction ?? 0
         // A just-opened window the provider transiently reports as near-empty:
         // show the reset countdown but neither the bogus "0% left" nor the
@@ -187,6 +188,7 @@ struct MainTabView: View {
         )
         return QuotaWindowRow(
             title: title,
+            accessibilityName: name,
             hasMetric: metric != nil,
             quotaLeft: settlingActive ? (pace.timeLeftFraction ?? quotaLeft) : quotaLeft,
             leftText: leftText,
@@ -282,26 +284,26 @@ struct MainTabView: View {
         switch outcome {
         case .none:
             if mode == .autoWarm {
-                return (DS.C.green, "Auto-warm on — the next fresh window will be claimed automatically.", false)
+                return (DS.C.green, String(localized: "Auto-warm on — the next fresh window will be claimed automatically."), false)
             }
-            return (DS.C.textMuted, "No warm-up yet.", false)
+            return (DS.C.textMuted, String(localized: "No warm-up yet."), false)
         case .pending:
-            return (DS.C.yellow, "Warm-up sent — verifying the window opened…", false)
+            return (DS.C.yellow, String(localized: "Warm-up sent — verifying the window opened…"), false)
         case .confirmed(let at, let resetAt):
-            var message = "Window claimed at \(shortClock(at))"
+            var message = String(localized: "Window claimed at \(shortClock(at))")
             if let resetAt, resetAt > Date() {
-                let seconds = Int(resetAt.timeIntervalSinceNow)
-                message += " · resets in \(seconds / 3600)h \((seconds % 3600) / 60)m"
+                let remaining = quotaDurationText(Int(resetAt.timeIntervalSinceNow))
+                message += " · " + String(localized: "resets in \(remaining)")
             }
             return (DS.C.green, message, false)
         case .unverified(let sentAt, _):
             return (
                 DS.C.yellow,
-                "Command sent at \(shortClock(sentAt)), but live quota did not confirm that the window opened.",
+                String(localized: "Command sent at \(shortClock(sentAt)), but live quota did not confirm that the window opened."),
                 true
             )
         case .failed(_, let reason):
-            return (DS.C.red, "Warm-up failed: \(reason)", true)
+            return (DS.C.red, String(localized: "Warm-up failed: \(reason)"), true)
         }
     }
 

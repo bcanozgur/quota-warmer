@@ -406,7 +406,7 @@ struct SettingsTabView: View {
                 get: { historyFilter.group },
                 set: { historyFilter.group = $0; historyVisible = 25 }
             )) {
-                ForEach(EventFilter.Group.allCases, id: \.self) { Text($0.rawValue).tag($0) }
+                ForEach(EventFilter.Group.allCases, id: \.self) { Text($0.title).tag($0) }
             }
         }
         .labelsHidden()

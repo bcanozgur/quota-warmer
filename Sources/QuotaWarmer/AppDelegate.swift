@@ -32,7 +32,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             button.action = #selector(statusItemClicked)
             button.sendAction(on: [.leftMouseUp, .rightMouseUp])
             button.imagePosition = .imageOnly
-            button.toolTip = "QuotaWarmer — left-click for stats, right-click for menu"
+            button.toolTip = String(localized: "QuotaWarmer — left-click for stats, right-click for menu")
         }
         statusItem = item
         refreshButtonImage()
@@ -80,6 +80,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard key != lastImageKey else { return }
         lastImageKey = key
         statusItem?.button?.image = MenuBarStatus.image(for: appState)
+        statusItem?.button?.setAccessibilityLabel(MenuBarStatus.accessibilityLabel(for: appState))
     }
 
     // MARK: - Click routing
@@ -181,10 +182,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func showMenu() {
         guard let button = statusItem?.button else { return }
         let menu = NSMenu()
-        menu.addItem(makeItem("Show Stats", #selector(showStats)))
-        menu.addItem(makeItem("Go to Settings", #selector(goToSettings)))
+        menu.addItem(makeItem(String(localized: "Show Stats"), #selector(showStats)))
+        menu.addItem(makeItem(String(localized: "Go to Settings"), #selector(goToSettings)))
 
-        let debug = NSMenuItem(title: "Debug Level", action: nil, keyEquivalent: "")
+        let debug = NSMenuItem(title: String(localized: "Debug Level"), action: nil, keyEquivalent: "")
         let submenu = NSMenu()
         for level in DebugLevel.allCases {
             let entry = makeItem(level.title, #selector(setDebugLevel(_:)))
@@ -196,8 +197,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(debug)
 
         menu.addItem(.separator())
-        menu.addItem(makeItem("About QuotaWarmer", #selector(showAbout)))
-        menu.addItem(makeItem("Quit", #selector(quit), key: "q"))
+        menu.addItem(makeItem(String(localized: "About QuotaWarmer"), #selector(showAbout)))
+        menu.addItem(makeItem(String(localized: "Quit"), #selector(quit), key: "q"))
 
         menu.popUp(positioning: nil, at: NSPoint(x: 0, y: button.bounds.maxY + 6), in: button)
     }

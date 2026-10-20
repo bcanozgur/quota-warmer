@@ -63,7 +63,7 @@ struct AccountsSection: View {
                 .foregroundStyle(DS.C.text)
             Spacer()
             ForEach(ToolID.allCases) { kind in
-                SmallButton(title: kind.shortName, systemImage: "plus") { startAdding(kind) }
+                SmallButton(title: LocalizedStringKey(kind.shortName), systemImage: "plus") { startAdding(kind) }
             }
         }
         .padding(.horizontal, DS.Space.md)
@@ -109,7 +109,7 @@ struct AccountsSection: View {
         .padding(.vertical, DS.Space.sm + 2)
     }
 
-    private func labeledField<Field: View>(_ label: String, @ViewBuilder field: () -> Field) -> some View {
+    private func labeledField<Field: View>(_ label: LocalizedStringKey, @ViewBuilder field: () -> Field) -> some View {
         HStack(spacing: 8) {
             Text(label)
                 .font(.system(size: 10.5, weight: .medium))
@@ -157,7 +157,7 @@ struct AccountsSection: View {
         panel.canCreateDirectories = true
         panel.showsHiddenFiles = true
         panel.directoryURL = URL(fileURLWithPath: NSHomeDirectory())
-        panel.prompt = "Use Folder"
+        panel.prompt = String(localized: "Use Folder")
         NSApp.activate(ignoringOtherApps: true)
         if panel.runModal() == .OK, let url = panel.url {
             draftHome = url.path.replacingOccurrences(of: NSHomeDirectory(), with: "~")
@@ -252,7 +252,7 @@ private struct AccountRow: View {
     }
 
     private var statusBadge: some View {
-        let (text, color): (String, Color) = {
+        let (text, color): (LocalizedStringKey, Color) = {
             if toolState.isFetchingQuota { return ("Checking", DS.C.textMuted) }
             if toolState.quotaSnapshot != nil, toolState.sourceHealth == .healthy { return ("Signed in", DS.C.green) }
             if needsSignIn { return ("Not signed in", DS.C.yellow) }
@@ -304,13 +304,13 @@ enum AccountLogin {
         let script = """
         #!/bin/zsh -l
         clear
-        echo "QuotaWarmer — sign in \(tool.displayName)"
-        echo "Log in with the account you want QuotaWarmer to watch here."
+        echo "\(String(localized: "QuotaWarmer — sign in \(tool.displayName)"))"
+        echo "\(String(localized: "Log in with the account you want QuotaWarmer to watch here."))"
         echo
         \(tool.loginCommand)
         echo
-        echo "Done. QuotaWarmer will pick this account up on its next check (or press Refresh)."
-        echo "To use this account yourself, add to ~/.zshrc:"
+        echo "\(String(localized: "Done. QuotaWarmer will pick this account up on its next check (or press Refresh)."))"
+        echo "\(String(localized: "To use this account yourself, add to ~/.zshrc:"))"
         echo
         echo \(ProviderID.shellQuoted("  " + cliAlias(for: tool)))
         echo
@@ -330,7 +330,7 @@ enum AccountLogin {
 
 /// Compact capsule button used in the Accounts section.
 struct SmallButton: View {
-    let title: String
+    let title: LocalizedStringKey
     let systemImage: String?
     var prominent: Color? = nil
     let action: () -> Void
@@ -357,7 +357,7 @@ struct SmallButton: View {
 /// Plain single-line text field in the DS look (see `WakeTimeField` for why
 /// AppKit-styled fields are avoided in this scaled panel).
 struct DSTextField: View {
-    let placeholder: String
+    let placeholder: LocalizedStringKey
     @Binding var text: String
     var onSubmit: () -> Void = {}
     @FocusState private var focused: Bool

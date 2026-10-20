@@ -28,6 +28,7 @@ struct UsageBar: View {
             bar(fillOpacity: refreshing ? pulseOpacity(at: context.date) : 1)
         }
         .frame(height: height)
+        .accessibilityHidden(true)
     }
 
     /// 1 → 0.7 → 1 every 1.6 s.
@@ -125,7 +126,7 @@ struct ResetCreditsRow: View {
                 }
             }
         } label: {
-            Text(busy ? "Using…" : armed ? "Sure?" : "Use")
+            Text(busy ? String(localized: "Using…") : armed ? String(localized: "Sure?") : String(localized: "Use"))
                 .font(.system(size: 11, weight: .semibold))
                 .foregroundStyle(armed ? DS.C.red : DS.C.text)
                 .frame(minWidth: 52)
@@ -135,14 +136,14 @@ struct ResetCreditsRow: View {
         }
         .buttonStyle(PressableButtonStyle())
         .disabled(busyID != nil)
-        .help(armed ? "Click again to use this reset now" : "Use this banked reset (asks to confirm)")
+        .help(armed ? String(localized: "Click again to use this reset now") : String(localized: "Use this banked reset (asks to confirm)"))
     }
 }
 
 @MainActor
 enum ToolStatusCopy {
     static func quotaLeftText(for state: ToolState, metric: QuotaMetric?, settling: Bool = false) -> String {
-        if settling { return "Updating..." }
+        if settling { return String(localized: "Updating...") }
         return QuotaDisplay.quotaText(
             remainingFraction: metric?.remainingFraction,
             isLive: isLive(state),
@@ -152,27 +153,28 @@ enum ToolStatusCopy {
 
     static func resetFallback(for state: ToolState, metric: QuotaMetric?) -> String {
         guard let metric else {
-            if state.isFetchingQuota { return "Updating..." }
-            return authBlocked(state) ? "Connect to update" : "No live quota"
+            if state.isFetchingQuota { return String(localized: "Updating...") }
+            return authBlocked(state) ? String(localized: "Connect to update") : String(localized: "No live quota")
         }
         if metric.isIdleFiveHourWindow {
             // The window hasn't opened yet — its quota is full and the only reset
             // is a sliding projection. Say so plainly instead of faking a countdown.
-            return "Not started yet"
+            return String(localized: "Not started yet")
         }
         if authBlocked(state) {
-            return state.lastSuccessfulFetch == nil ? "Connect to update" : "Reconnect to update"
+            return state.lastSuccessfulFetch == nil
+                ? String(localized: "Connect to update") : String(localized: "Reconnect to update")
         }
         switch state.freshness {
         case .fresh:
-            return "Fresh"
+            return String(localized: "Fresh")
         case .stale, .expired:
             if let fetched = state.lastSuccessfulFetch {
-                return "Last checked \(shortClock(fetched))"
+                return String(localized: "Last checked \(shortClock(fetched))")
             }
-            return "Last known"
+            return String(localized: "Last known")
         case .unknown:
-            return "No live quota"
+            return String(localized: "No live quota")
         }
     }
 
@@ -180,28 +182,28 @@ enum ToolStatusCopy {
         if authBlocked(state) {
             var message = authActionText(for: state)
             if let retryAt = state.authRetryScheduledAt, retryAt > Date() {
-                message += " Auto-check at \(shortClock(retryAt))."
+                message += " " + String(localized: "Auto-check at \(shortClock(retryAt)).")
             }
             if state.lastSuccessfulFetch != nil {
-                message += " Last quota is shown for context."
+                message += " " + String(localized: "Last quota is shown for context.")
             }
             return message
         }
         if state.quotaBackoffActive, let until = state.quotaBackoffUntil {
-            return "Quota source is rate-limited. Retrying at \(shortClock(until))."
+            return String(localized: "Quota source is rate-limited. Retrying at \(shortClock(until)).")
         }
         if state.tool.kind == .claude,
            state.healthMessage.contains("quota credential needs a CLI refresh") {
-            return "Claude is signed in. Its quota will refresh when Claude runs; the last known reading is shown for context."
+            return String(localized: "Claude is signed in. Its quota will refresh when Claude runs; the last known reading is shown for context.")
         }
         if state.freshness == .expired, let fetched = state.lastSuccessfulFetch {
-            return "Live quota has not updated since \(shortClock(fetched)). Showing the last known reading."
+            return String(localized: "Live quota has not updated since \(shortClock(fetched)). Showing the last known reading.")
         }
         if state.sourceHealth == .unavailable {
             if state.lastSuccessfulFetch != nil {
-                return "Quota source is temporarily unavailable. Showing the last known reading."
+                return String(localized: "Quota source is temporarily unavailable. Showing the last known reading.")
             }
-            return "Quota source is temporarily unavailable."
+            return String(localized: "Quota source is temporarily unavailable.")
         }
         return nil
     }
@@ -222,16 +224,16 @@ enum ToolStatusCopy {
 
     private static func authActionText(for state: ToolState) -> String {
         if !state.tool.isDefault {
-            return "\(state.tool.shortName) needs signing in. Use Sign in under Settings › Accounts, then Refresh."
+            return String(localized: "\(state.tool.shortName) needs signing in. Use Sign in under Settings › Accounts, then Refresh.")
         }
         switch state.tool.kind {
         case .claude:
             if state.healthMessage.contains("access needs approval") {
-                return "Claude access is paused. Click Refresh to approve Keychain access."
+                return String(localized: "Claude access is paused. Click Refresh to approve Keychain access.")
             }
-            return "Claude needs reconnecting. Run claude auth login in Terminal, then Refresh."
+            return String(localized: "Claude needs reconnecting. Run claude auth login in Terminal, then Refresh.")
         case .codex:
-            return "Codex needs reconnecting. Sign in again, then Refresh."
+            return String(localized: "Codex needs reconnecting. Sign in again, then Refresh.")
         }
     }
 
@@ -248,6 +250,8 @@ enum ToolStatusCopy {
 /// (`X% left` / `Resets in …`, plus `N% short` / `Runs out in …` when behind).
 struct QuotaWindowRow: View {
     let title: String
+    /// Name read by VoiceOver before the numbers, e.g. "Claude 5-hour window". Defaults to `title`.
+    var accessibilityName: String? = nil
     let hasMetric: Bool
     let quotaLeft: Double
     let leftText: String
@@ -264,7 +268,35 @@ struct QuotaWindowRow: View {
     var settling: Bool = false
 
     var body: some View {
-        if compact { compactBody } else { fullBody }
+        Group {
+            if compact { compactBody } else { fullBody }
+        }
+        // Color is never the only signal: the row reads as one element with the
+        // status in words, the percent, and the reset/pace line.
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(Text(accessibilityName ?? title))
+        .accessibilityValue(Text(accessibilityValue))
+    }
+
+    /// Spoken status words mirror `dotColor` / `statusColor` so the dot's meaning is in text.
+    private var accessibilityStatus: String {
+        guard hasMetric else { return String(localized: "no live quota") }
+        if statusColor != nil { return String(localized: "not live") }
+        if pace.timeLeftFraction != nil {
+            return pace.isBehind ? String(localized: "behind pace") : String(localized: "on pace")
+        }
+        if quotaLeft >= 0.5 { return String(localized: "healthy") }
+        if quotaLeft >= 0.25 { return String(localized: "running low") }
+        return String(localized: "very low")
+    }
+
+    private var accessibilityValue: String {
+        var parts = [accessibilityStatus, leftText, pace.resetText]
+        if let shortPercent = pace.shortPercent {
+            parts.append(String(localized: "\(shortPercent)% short"))
+            if let runsOut = pace.runsOutText { parts.append(runsOut) }
+        }
+        return parts.joined(separator: ", ")
     }
 
     @AppStorage(QuotaDisplay.colorfulBarsKey) private var colorfulBars = true
@@ -319,7 +351,7 @@ struct QuotaWindowRow: View {
                     .foregroundStyle(DS.C.textMuted)
                 Spacer(minLength: 6)
                 if let shortPercent = pace.shortPercent {
-                    Text([ "\(shortPercent)% short", pace.runsOutText ]
+                    Text([ String(localized: "\(shortPercent)% short"), pace.runsOutText ]
                         .compactMap { $0 }
                         .joined(separator: " · "))
                         .foregroundStyle(DS.C.textSub)
@@ -344,7 +376,7 @@ struct QuotaWindowRow: View {
             VStack(spacing: 3) {
                 metaLine(left: leftText, right: pace.resetText)
                 if let shortPercent = pace.shortPercent {
-                    metaLine(left: "\(shortPercent)% short", right: pace.runsOutText ?? "")
+                    metaLine(left: String(localized: "\(shortPercent)% short"), right: pace.runsOutText ?? "")
                 }
             }
         }
@@ -383,12 +415,13 @@ struct StatusDot: View {
 
     var body: some View {
         Circle().fill(color).frame(width: size, height: size)
+            .accessibilityHidden(true)
     }
 }
 
 /// Pill status badge: colored dot + label, white background, colored border.
 struct StatusBadge: View {
-    var text: String
+    var text: LocalizedStringKey
     var color: Color
 
     var body: some View {
@@ -409,12 +442,14 @@ struct StatusBadge: View {
 /// Quiet, icon-only button with a hairline border and accessible label.
 struct IconButton: View {
     let systemName: String
-    let help: String
+    let help: LocalizedStringKey
     var tint: Color = DS.C.textSub
     var border: Color = DS.C.border
     var fill: Color = DS.C.surfaceHigh
     var size: CGFloat = 28
     var isDisabled: Bool = false
+    /// Optional ⌘-letter that presses this button while the panel is focused.
+    var shortcut: KeyEquivalent? = nil
     let action: () -> Void
 
     @State private var hovering = false
@@ -436,9 +471,23 @@ struct IconButton: View {
         }
         .buttonStyle(PressableButtonStyle())
         .disabled(isDisabled)
+        .modifier(OptionalKeyboardShortcut(key: shortcut))
         .onHover { hovering = $0 }
         .help(help)
         .accessibilityLabel(Text(help))
+    }
+}
+
+/// Applies ⌘<key> only when one is given.
+struct OptionalKeyboardShortcut: ViewModifier {
+    let key: KeyEquivalent?
+
+    func body(content: Content) -> some View {
+        if let key {
+            content.keyboardShortcut(key, modifiers: .command)
+        } else {
+            content
+        }
     }
 }
 
@@ -454,7 +503,7 @@ struct PressableButtonStyle: ButtonStyle {
 /// Page title row shared by every tab: optional provider glyph + bold title on
 /// the left, controls on the right, fixed height so tabs line up exactly.
 struct PanelHeader<Trailing: View>: View {
-    let title: String
+    let title: LocalizedStringKey
     var glyph: String? = nil
     @ViewBuilder var trailing: () -> Trailing
 
@@ -504,10 +553,10 @@ struct QuotaDisplayModeToggle: View {
         }
         .buttonStyle(PressableButtonStyle())
         .help(mode == .remaining
-              ? "Showing \(toolName) quota left (counts down from 100%). Click to show quota used."
-              : "Showing \(toolName) quota used (counts up from 0%). Click to show quota left.")
+              ? String(localized: "Showing \(toolName) quota left (counts down from 100%). Click to show quota used.")
+              : String(localized: "Showing \(toolName) quota used (counts up from 0%). Click to show quota left."))
         .accessibilityLabel(Text(mode == .remaining
-              ? "\(toolName) quota shown as percent left. Activate to show percent used."
-              : "\(toolName) quota shown as percent used. Activate to show percent left."))
+              ? String(localized: "\(toolName) quota shown as percent left. Activate to show percent used.")
+              : String(localized: "\(toolName) quota shown as percent used. Activate to show percent left.")))
     }
 }

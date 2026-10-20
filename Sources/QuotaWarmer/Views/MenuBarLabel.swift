@@ -24,6 +24,18 @@ enum MenuBarStatus {
         }.joined(separator: "||")
     }
 
+    /// Spoken summary for the status item: the drawn image has no accessibility
+    /// of its own, and the status dots are color-only without these words.
+    static func accessibilityLabel(for appState: AppState) -> String {
+        let items = composeItems(appState)
+        guard !items.isEmpty else {
+            let summary = isHealthy(appState)
+                ? String(localized: "all healthy") : String(localized: "needs attention")
+            return "QuotaWarmer, \(summary)"
+        }
+        return "QuotaWarmer, " + items.map(\.spoken).joined(separator: "; ")
+    }
+
     private static func isHealthy(_ appState: AppState) -> Bool {
         guard !appState.globalPassive, !appState.watcherStale else { return false }
         return appState.toolStates.values.allSatisfy { state in
@@ -67,12 +79,26 @@ enum MenuBarStatus {
                 dotColor: nsStatusColor(for: st, appState: appState),
                 // An added account is told apart from the default by its initial.
                 text: tool.badge.map { "\($0) \(text)" } ?? text,
+                spoken: "\(tool.shortName) \(text), \(spokenStatus(st, appState: appState))",
                 // Neutral menu-bar-white text (the colored status dot conveys
                 // state), not a saturated color.
                 textColor: .white,
                 dimmed: !prominent
             )
         }
+    }
+
+    /// Words for the state the dot color shows (same branches as `nsStatusColor`).
+    private static func spokenStatus(_ state: ToolState, appState: AppState) -> String {
+        if appState.globalPassive { return String(localized: "paused") }
+        if !state.isMonitored { return String(localized: "off") }
+        if state.sourceHealth == .healthy && state.freshness == .fresh {
+            return state.mode == .monitor ? String(localized: "monitoring") : String(localized: "healthy")
+        }
+        if state.sourceHealth == .authFailure || state.sourceHealth == .unavailable {
+            return String(localized: "needs attention")
+        }
+        return String(localized: "stale")
     }
 
     private static func nsStatusColor(for state: ToolState, appState: AppState) -> NSColor {
@@ -117,6 +143,8 @@ private enum MenuBarComposer {
         let assetName: String
         let dotColor: NSColor
         let text: String
+        /// Words for VoiceOver, e.g. "Claude 46% left, healthy".
+        let spoken: String
         let textColor: NSColor
         let dimmed: Bool
     }
