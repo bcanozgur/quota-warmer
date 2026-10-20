@@ -31,6 +31,7 @@
 		737C077D9B36EB603128B662 /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2BD69A6F289B09B5A2712134 /* AppDelegate.swift */; };
 		790C57D3B366DA66EB4464E7 /* SettingsTabView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D76B9243E050B459482C242A /* SettingsTabView.swift */; };
 		79B2AB603B32FA480DB5D162 /* Scheduler.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2C0FFA24004A3B12BB624E6F /* Scheduler.swift */; };
+		7D1816BE8B891904307D8D86 /* ImpactReport.swift in Sources */ = {isa = PBXBuildFile; fileRef = A8043604CEC5B92D776515A5 /* ImpactReport.swift */; };
 		85F055597B6499A00DD4D7A8 /* QuotaDisplay.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1577681C89107051CD944BCA /* QuotaDisplay.swift */; };
 		87AB46923736BB0CD28FC099 /* AppState+Ext.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3739BD62D7E5AAF6EB84DC3C /* AppState+Ext.swift */; };
 		895F8C76D3B791F771C366F8 /* IntegrationBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC9C567F97BC3165ECDD14DF /* IntegrationBridge.swift */; };
@@ -42,6 +43,7 @@
 		AF4A75FD5837B3CE14D9654D /* SleepGuard.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5671B1D539CA7F63B3146770 /* SleepGuard.swift */; };
 		B26ECE071262E827974ADF29 /* ModelCatalog.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2ED6A0B93CBD320D269C645 /* ModelCatalog.swift */; };
 		B64C10EDD08BE7058842D94F /* QuotaAlerts.swift in Sources */ = {isa = PBXBuildFile; fileRef = 627C4B1A863EBEBCD11D305E /* QuotaAlerts.swift */; };
+		B6ACD3A2C56F9AF6057A208A /* ImpactView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1857AA6C7EAEF8C2733A4D6 /* ImpactView.swift */; };
 		B730490266D6FDC9861E25AA /* AutoWarmStatusLine.swift in Sources */ = {isa = PBXBuildFile; fileRef = 56056D4E38842329A4C4BC71 /* AutoWarmStatusLine.swift */; };
 		BC7CE657053CA306D4E89A3A /* AppState+Integrations.swift in Sources */ = {isa = PBXBuildFile; fileRef = A82BB79EBF4FE4EA736C95AB /* AppState+Integrations.swift */; };
 		C5A94740BD8B9C128E344EFB /* WarmupRunner.swift in Sources */ = {isa = PBXBuildFile; fileRef = F4D8BDF7070D1A323481D7BE /* WarmupRunner.swift */; };
@@ -97,10 +99,12 @@
 		9ECB196FCE1063660355BE22 /* ToolID.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ToolID.swift; sourceTree = "<group>"; };
 		A2ED6A0B93CBD320D269C645 /* ModelCatalog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModelCatalog.swift; sourceTree = "<group>"; };
 		A35CF633BB5E17AEED13D11A /* AccountsSection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AccountsSection.swift; sourceTree = "<group>"; };
+		A8043604CEC5B92D776515A5 /* ImpactReport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImpactReport.swift; sourceTree = "<group>"; };
 		A82BB79EBF4FE4EA736C95AB /* AppState+Integrations.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "AppState+Integrations.swift"; sourceTree = "<group>"; };
 		A9538D4356A015407DACDA16 /* ToolTabView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ToolTabView.swift; sourceTree = "<group>"; };
 		AB074D737482A5E4EA69E4E1 /* QuotaModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuotaModels.swift; sourceTree = "<group>"; };
 		AF63A150FD6571486EE0C5B5 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
+		B1857AA6C7EAEF8C2733A4D6 /* ImpactView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImpactView.swift; sourceTree = "<group>"; };
 		BE11F8E7A811FB7969882E5E /* QuotaIntents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuotaIntents.swift; sourceTree = "<group>"; };
 		CC9C567F97BC3165ECDD14DF /* IntegrationBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IntegrationBridge.swift; sourceTree = "<group>"; };
 		D3DA1F125BB5FC372931F4D9 /* HotKeySettingsSection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HotKeySettingsSection.swift; sourceTree = "<group>"; };
@@ -152,6 +156,7 @@
 				7D95C8268ED2E35DCC765A35 /* AutoWarmDecision.swift */,
 				64FA897739194FEFD2084730 /* AutoWarmExplanation.swift */,
 				1DCBDB4DB1F1C51C1F117DCD /* EventLog.swift */,
+				A8043604CEC5B92D776515A5 /* ImpactReport.swift */,
 				929031B3AE0ABEF7C233528B /* IntegrationCommand.swift */,
 				D7D2041414DD952EC90B55D4 /* OnboardingFlow.swift */,
 				49B746DCC20AD7D805F1500B /* ProviderAccount.swift */,
@@ -193,6 +198,7 @@
 				4DD0A6F158460741008A6DC8 /* Components.swift */,
 				EA95269FE22AE9471F2D23BA /* DS.swift */,
 				0DAD2E902DEC69C426FAA6FE /* HistoryTabView.swift */,
+				B1857AA6C7EAEF8C2733A4D6 /* ImpactView.swift */,
 				6F3B64B4293CFBD14217DA2B /* MainTabView.swift */,
 				E94AAC800581DE96B2F6ED29 /* MenuBarLabel.swift */,
 				98917F67C6611F34831F684C /* MenuContent.swift */,
@@ -323,6 +329,8 @@
 				103A59655BD42DA5CF63C789 /* GlobalHotKey.swift in Sources */,
 				728E8DC487C694B419BEFEB4 /* HistoryTabView.swift in Sources */,
 				1C9C2D379D7822D424749A8B /* HotKeySettingsSection.swift in Sources */,
+				7D1816BE8B891904307D8D86 /* ImpactReport.swift in Sources */,
+				B6ACD3A2C56F9AF6057A208A /* ImpactView.swift in Sources */,
 				895F8C76D3B791F771C366F8 /* IntegrationBridge.swift in Sources */,
 				E91C0B2EF6591FEC0F0D0148 /* IntegrationCommand.swift in Sources */,
 				068693CB3F2B32934A68EDFD /* IntegrationURLHandler.swift in Sources */,

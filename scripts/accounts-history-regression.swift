@@ -32,6 +32,7 @@ struct AccountsHistoryRegression {
         testDailyAndHourlyTokens()
         testStatusExport()
         await testEventLog()
+        testImpactReport()
         testDiagnosticRotation()
 
         if failures.isEmpty {
@@ -538,6 +539,142 @@ struct AccountsHistoryRegression {
         expect(names, ["diagnostics.1.log", "diagnostics.2.log"], "rotation keeps a bounded set of files")
         expect(try? String(contentsOf: dir.appendingPathComponent("diagnostics.1.log"), encoding: .utf8), "gen4", "newest rotated file is .1")
         expect(DiagnosticLogger.redacted("Authorization: Bearer abcdefghijklmnop1234").contains("abcdefghij"), false, "redaction strips bearer tokens")
+    }
+
+    // MARK: - Impact report
+
+    static func testImpactReport() {
+        var cal = Calendar(identifier: .gregorian)
+        cal.timeZone = TimeZone(identifier: "UTC")!
+        let now = Date(timeIntervalSince1970: 1_800_000_000)   // on the hour
+        let day: TimeInterval = 86_400
+        let hour: TimeInterval = 3_600
+        let claude = ProviderID.default(.claude)
+        let fake = ModelCatalog.Model(id: "m", name: nil, aliases: nil, match: nil,
+                                      input: 1, cacheWrite5m: 0, cacheWrite1h: 0, cacheRead: 0, output: 5)
+        let price: (ToolID, String?) -> ModelCatalog.Model? = { _, model in model == "haiku" ? fake : nil }
+
+        func sent(_ t: Date, _ source: WarmupSource?, model: String = "haiku") -> HistoryEvent {
+            HistoryEvent(timestamp: t, tool: claude, kind: source == .manual ? .manualWarmup : .autoWarmup,
+                         title: "sent", detail: "", outcome: .sent, model: model, source: source)
+        }
+        func confirmed(_ t: Date, key: String, start: Date, source: WarmupSource? = nil) -> HistoryEvent {
+            HistoryEvent(timestamp: t, tool: claude, kind: .resetDetected, title: "confirmed", detail: "",
+                         outcome: .confirmed, windowKey: key, windowResetAt: start.addingTimeInterval(5 * hour),
+                         source: source)
+        }
+        func outcome(_ t: Date, _ o: EventOutcome) -> HistoryEvent {
+            HistoryEvent(timestamp: t, tool: claude, kind: .pollingError, title: "x", detail: "", outcome: o)
+        }
+
+        let a = now - 3 * day, b = now - 2 * day, c = now - day, d = now - 10 * day, e = now - 5 * day
+        var events: [HistoryEvent] = []
+        // A: auto, user starts working 2h in (a noise-sized warm-up bucket precedes it).
+        events += [sent(a + 60, .auto), confirmed(a + 120, key: "kA", start: a + 60)]
+        // B: morning claim, never used. The confirmation carries no source: traced via its warm-up.
+        events += [sent(b + 60, .morning), confirmed(b + 120, key: "kB", start: b + 60)]
+        // C: manual claim, used immediately.
+        events += [sent(c + 60, .manual), confirmed(c + 120, key: "kC", start: c + 60)]
+        // E: first reported missed, then healed into a confirmation, plus a duplicate receipt.
+        events += [sent(e + 60, .auto), outcome(e + 100, .missed), confirmed(e + 200, key: "kE", start: e + 60),
+                   confirmed(e + 260, key: "kE", start: e + 60)]
+        // D: only in the 30d range.
+        events += [sent(d + 60, .auto), confirmed(d + 120, key: "kD", start: d + 60)]
+        // F: a genuine miss with an unpriced model, and a failed command.
+        events += [sent(now - 4 * hour, .auto, model: "mystery"), outcome(now - 4 * hour + 200, .missed),
+                   outcome(now - 6 * hour, .failed)]
+        // Skips are not warm-ups.
+        events.append(HistoryEvent(timestamp: now - hour, tool: claude, kind: .autoWarmup, title: "skip", detail: "",
+                                   outcome: .skipped, source: .auto))
+
+        let hourly = [
+            TokenUsageHour(hour: a, tokens: 5_000),                 // the warm-up itself
+            TokenUsageHour(hour: a + 2 * hour, tokens: 1_000),      // first real use
+            TokenUsageHour(hour: c, tokens: 500_000),               // immediate use
+        ]
+        let samples: [QuotaSample] = [
+            QuotaSample(t: now - 3 * day, s: 0.5, w: 0.97, r: now - 3 * day + hour),
+            QuotaSample(t: now - 3 * day + 600, s: 0.9, w: 0.97, r: now - 3 * day + hour),
+            QuotaSample(t: now - 2 * day, s: 0.5, w: 0.4, r: now - 2 * day + hour),
+            QuotaSample(t: now - 12 * day, s: 0.2, w: 0.4, r: now - 12 * day + hour),
+        ]
+        let input = ImpactInput(provider: claude, events: events, samples: samples, hourly: hourly, windowDuration: 5 * hour)
+
+        let week = ImpactReport.make(inputs: [input], range: .week, now: now, calendar: cal, price: price)
+        expect(week.claims.claimed, 4, "7d: four distinct windows claimed (duplicate receipt counted once)")
+        expect(week.claims.auto, 2, "7d: auto claims include the one traced through its warm-up")
+        expect(week.claims.morning, 1, "7d: morning claim traced from its warm-up")
+        expect(week.claims.manual, 1, "7d: manual claim")
+        expect(week.claims.missed, 1, "7d: a miss later healed is not a miss")
+        expect(week.claims.failed, 1, "7d: failed command counted")
+        check(abs((week.claims.successRate ?? 0) - 4.0 / 6.0) < 0.0001, "7d: success rate = claimed / resolved")
+        expect(week.headStart.measuredWindows, 2, "7d: head start measured for the two windows with usage")
+        expect(week.headStart.unusedWindows, 2, "7d: claimed-but-unused windows (B, E) are reported, not averaged")
+        expect(week.headStart.total, 2 * hour - 60, "7d: head start = window start to first real use; warm-up bucket ignored")
+        check(abs((week.headStart.average ?? 0) - (2 * hour - 60) / 2) < 0.001, "7d: average head start")
+        expect(week.cost.warmups, 5, "7d: skips are not warm-ups")
+        expect(week.cost.pricedWarmups, 4, "7d: unpriced model not counted as priced")
+        check(abs(week.cost.usd - 4 * 0.0155) < 1e-9, "7d: estimated cost = tokens x catalog price")
+        expect(week.cost.displayText, "$0.06+", "7d: partial cost shows a floor")
+        expect(week.utilization.windows, 2, "7d: windows observed")
+        expect(week.utilization.highUseWindows, 1, "7d: one window reached 80%")
+        expect(week.buckets.count, 7, "7d chart has one bucket per day")
+        expect(week.buckets.reduce(0) { $0 + $1.total }, 4, "7d chart buckets sum to claimed")
+        expect(week.isEmpty, false, "report with claims is not empty")
+
+        let month = ImpactReport.make(inputs: [input], range: .month, now: now, calendar: cal, price: price)
+        expect(month.claims.claimed, 5, "30d includes the older claim")
+        expect(month.utilization.windows, 3, "30d windows")
+        expect(month.utilization.weeks >= 2, true, "30d weeks observed")
+        expect(month.utilization.weeksAtLimit, 1, "one week hit the weekly limit")
+        expect(month.buckets.count, 30, "30d chart has one bucket per day")
+
+        let all = ImpactReport.make(inputs: [input], range: .all, now: now, calendar: cal, price: price)
+        expect(all.claims.claimed, 5, "all-time claims")
+
+        // A window that starts before the first bucket and ends before usage: nothing measured.
+        let late = ImpactInput(
+            provider: claude,
+            events: [sent(d + 60, .auto), confirmed(d + 120, key: "kD", start: d + 60)],
+            samples: [], hourly: [TokenUsageHour(hour: d + 8 * hour, tokens: 9_000)], windowDuration: 5 * hour)
+        let lateReport = ImpactReport.make(inputs: [late], range: .all, now: now, calendar: cal, price: price)
+        expect(lateReport.headStart.measuredWindows, 0, "usage after the window ended is not a head start")
+        check(lateReport.headStart.average == nil, "no average without measured windows")
+        let started = d + 60
+        expect(ImpactReport.firstUsage(in: [TokenUsageHour(hour: d, tokens: 100_000)],
+                                       from: started, to: started + 5 * hour, warmupAt: started, calendar: cal),
+               started, "usage in the hour the window opened counts from the window start (zero head start)")
+
+        // Unpriced model never reads as $0.00.
+        let unpriced = ImpactReport.make(
+            inputs: [ImpactInput(provider: claude, events: [sent(a, .auto, model: "mystery")], samples: [], hourly: [], windowDuration: 5 * hour)],
+            range: .week, now: now, calendar: cal, price: price)
+        expect(unpriced.cost.displayText, "unpriced", "unpriced model is labelled, not $0.00")
+        expect(week.cost.warmups > 0 && ImpactCost().displayText == "–", true, "no warm-ups shows a dash")
+
+        // Another account's events are not mixed in.
+        let other = ImpactInput(provider: ProviderID(kind: .claude, accountID: "work"), events: events, samples: [], hourly: [], windowDuration: 5 * hour)
+        expect(ImpactReport.make(inputs: [other], range: .all, now: now, calendar: cal, price: price).claims.attempts, 0,
+               "events of other accounts are ignored")
+
+        // Empty / sparse data.
+        let none = ImpactReport.make(inputs: [], range: .month, now: now, calendar: cal, price: price)
+        check(none.isEmpty && none.claims.successRate == nil && none.utilization.highUseShare == nil, "no data is empty, with no rates")
+        let bare = ImpactReport.make(inputs: [ImpactInput(provider: claude, events: [], samples: [], hourly: [], windowDuration: 5 * hour)],
+                                     range: .all, now: now, calendar: cal, price: price)
+        check(bare.isEmpty && bare.buckets.isEmpty, "empty account is empty")
+
+        // Event lines.
+        let oldLine = #"{"id":"6F9619FF-8B86-D011-B42D-00C04FC964FF","t":1799990000,"provider":"claude","kind":"autoWarmup","title":"Auto warmup sent","detail":"Command completed","outcome":"sent"}"#
+        let old = try? JSONDecoder().decode(HistoryEvent.self, from: Data(oldLine.utf8))
+        check(old != nil && old?.source == nil && old?.outcome == .sent, "event lines written before `source` still decode")
+        let weird = oldLine.dropLast() + #","source":"from-the-future"}"#
+        check((try? JSONDecoder().decode(HistoryEvent.self, from: Data(weird.utf8))) != nil, "an unknown source value does not drop the event")
+        let roundTrip = (try? JSONEncoder().encode(sent(now, .morning))).flatMap { try? JSONDecoder().decode(HistoryEvent.self, from: $0) }
+        expect(roundTrip?.source, .morning, "source round-trips")
+        expect(WarmupSource(mode: "scheduled-catchup"), .morning, "catch-up warm-up is a morning warm-up")
+        expect(WarmupSource(mode: "auto"), .auto, "auto mode")
+        expect(WarmupSource(mode: "manual"), .manual, "manual mode")
     }
 
     // MARK: - Harness

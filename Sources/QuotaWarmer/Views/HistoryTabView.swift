@@ -14,6 +14,7 @@ struct HistoryTabView: View {
     @AppStorage("historyProvider") private var providerKey = HistoryTabView.allKey
     @State private var samplesByKey: [String: [QuotaSample]] = [:]
     @State private var loaded = false
+    @State private var showImpact = false
 
     private var range: HistoryRange { HistoryRange(rawValue: rangeRaw) ?? .week }
 
@@ -52,14 +53,21 @@ struct HistoryTabView: View {
     var body: some View {
         ScrollView(.vertical, showsIndicators: false) {
             VStack(alignment: .leading, spacing: DS.Page.spacing) {
-                PanelHeader(title: "History") { rangePicker }
+                PanelHeader(title: showImpact ? "Impact" : "History") {
+                    if showImpact { EmptyView() } else { rangePicker }
+                }
+                HistoryModeToggle(showImpact: $showImpact)
                 providerPicker
-                HistoryContent(
-                    series: series,
-                    combined: selectedProvider == nil,
-                    range: range,
-                    loaded: loaded
-                )
+                if showImpact {
+                    ImpactView(providers: selectedProviders)
+                } else {
+                    HistoryContent(
+                        series: series,
+                        combined: selectedProvider == nil,
+                        range: range,
+                        loaded: loaded
+                    )
+                }
             }
             .padding(.horizontal, DS.Page.side)
             .padding(.top, DS.Page.top)

@@ -1136,7 +1136,8 @@ final class AppState: ObservableObject {
                 title: historyTitle(forWarmupMode: mode),
                 detail: "Command completed",
                 outcome: .sent,
-                model: WarmupRunner.modelArgument(in: result.command)
+                model: WarmupRunner.modelArgument(in: result.command),
+                source: WarmupSource(mode: mode)
             )
             state.lastWarmupModel = WarmupRunner.modelArgument(in: result.command)
             notifications.notifyWarmupCommandSent(tool: tool)
@@ -1623,7 +1624,7 @@ final class AppState: ObservableObject {
     private func noteAutoWarmDecision(_ state: ToolState, _ decision: AutoWarmDecision) {
         let previous = state.recordAutoWarmDecision(decision)
         if let entry = AutoWarmExplanation.historyEntry(previous: previous, new: decision.skipReason, now: Date()) {
-            addHistory(tool: state.tool, kind: .autoWarmup, title: entry.title, detail: entry.detail, outcome: .skipped)
+            addHistory(tool: state.tool, kind: .autoWarmup, title: entry.title, detail: entry.detail, outcome: .skipped, source: .auto)
         }
     }
 
@@ -1632,13 +1633,14 @@ final class AppState: ObservableObject {
 
     private func addHistory(
         tool: ProviderID?, kind: HistoryKind, title: String, detail: String,
-        outcome: EventOutcome? = nil, windowKey: String? = nil, windowResetAt: Date? = nil, model: String? = nil
+        outcome: EventOutcome? = nil, windowKey: String? = nil, windowResetAt: Date? = nil, model: String? = nil,
+        source: WarmupSource? = nil
     ) {
         // An in-flight task for a just-removed account must not resurrect its events.
         if let tool, toolStates[tool] == nil { return }
         let event = HistoryEvent(
             tool: tool, kind: kind, title: title, detail: detail,
-            outcome: outcome, windowKey: windowKey, windowResetAt: windowResetAt, model: model
+            outcome: outcome, windowKey: windowKey, windowResetAt: windowResetAt, model: model, source: source
         )
         history.insert(event, at: 0)
         if history.count > Self.historyInMemory { history.removeLast(history.count - Self.historyInMemory) }
@@ -1660,7 +1662,8 @@ final class AppState: ObservableObject {
                 return HistoryEvent(
                     id: event.id, timestamp: event.timestamp, tool: provider, kind: event.kind,
                     title: event.title, detail: event.detail, outcome: event.outcome,
-                    windowKey: event.windowKey, windowResetAt: event.windowResetAt, model: event.model
+                    windowKey: event.windowKey, windowResetAt: event.windowResetAt, model: event.model,
+                    source: event.source
                 )
             }
             let fresh = Set(self.history.map(\.id))
