@@ -61,6 +61,8 @@ final class ToolState: ObservableObject {
     /// Why the last automatic or morning warm-up evaluation didn't warm; nil
     /// after one that did (or before any ran). Display-only.
     @Published private(set) var lastAutoWarmSkip: AutoWarmSkipReason?
+    /// When that evaluation ran (display-only, for the status line).
+    @Published private(set) var lastAutoWarmDecisionAt: Date?
     @Published var lastWarmupOutcome: WarmupOutcome = .none
     @Published var warmupLogs: [WarmupLog] = []
     @Published var isLogExpanded = false
@@ -206,9 +208,15 @@ final class ToolState: ObservableObject {
         quotaBackoffUntil.map { $0 > Date() } ?? false
     }
 
-    func recordAutoWarmDecision(_ decision: AutoWarmDecision) {
+    /// Stores the decision and returns the previous skip reason (nil if it warmed
+    /// or none ran) so the caller can record a history event on a change.
+    @discardableResult
+    func recordAutoWarmDecision(_ decision: AutoWarmDecision) -> AutoWarmSkipReason? {
         let reason = decision.skipReason
+        let previous = lastAutoWarmSkip
         if lastAutoWarmSkip != reason { lastAutoWarmSkip = reason }
+        lastAutoWarmDecisionAt = Date()
+        return previous
     }
 
     func rememberAutoWindow(_ key: String) {
@@ -876,7 +884,7 @@ final class AppState: ObservableObject {
             let state = state(for: tool)
             let gate = managedWarmupGate(for: tool)
             guard gate == .warm else {
-                state.recordAutoWarmDecision(gate)
+                noteAutoWarmDecision(state, gate)
                 logMorningSkip(tool: tool, reason: "managedWarmupBlocked", source: source)
                 continue
             }
@@ -901,12 +909,12 @@ final class AppState: ObservableObject {
 
             guard case .run(let caughtUp) = decision else {
                 if case .skip(let reason) = decision {
-                    state.recordAutoWarmDecision(.skip(.morning(reason)))
+                    noteAutoWarmDecision(state, .skip(.morning(reason)))
                     logMorningSkip(tool: tool, reason: reason.rawValue, source: source)
                 }
                 continue
             }
-            state.recordAutoWarmDecision(.warm)
+            noteAutoWarmDecision(state, .warm)
 
             let previousQuotaFetchedAt = state.quotaSnapshot?.fetchedAt
             let succeeded = await triggerWarmup(
@@ -1007,7 +1015,7 @@ final class AppState: ObservableObject {
         let state = state(for: tool)
         let gate = managedWarmupGate(for: tool)
         guard gate == .warm else {
-            state.recordAutoWarmDecision(gate)
+            noteAutoWarmDecision(state, gate)
             return
         }
 
@@ -1024,7 +1032,7 @@ final class AppState: ObservableObject {
             ),
             now: now
         )
-        state.recordAutoWarmDecision(decision)
+        noteAutoWarmDecision(state, decision)
         guard decision == .warm, let snapshot = state.quotaSnapshot else {
             switch decision.skipReason {
             case .reservedForMorning(let scheduledAt):
@@ -1580,6 +1588,15 @@ final class AppState: ObservableObject {
     private var refreshInterval: TimeInterval {
         let stored = UserDefaults.standard.integer(forKey: "refreshInterval")
         return TimeInterval(stored.nonZero ?? 300)
+    }
+
+    /// Records the decision on the tool and, only when the skip reason changed
+    /// to a user-relevant one, a single history event (not one per poll).
+    private func noteAutoWarmDecision(_ state: ToolState, _ decision: AutoWarmDecision) {
+        let previous = state.recordAutoWarmDecision(decision)
+        if let entry = AutoWarmExplanation.historyEntry(previous: previous, new: decision.skipReason, now: Date()) {
+            addHistory(tool: state.tool, kind: .autoWarmup, title: entry.title, detail: entry.detail)
+        }
     }
 
     private func addHistory(tool: ProviderID?, kind: HistoryKind, title: String, detail: String) {

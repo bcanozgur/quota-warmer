@@ -46,6 +46,7 @@ jobs:
             Sources/QuotaWarmer/Models/ToolID.swift \
             Sources/QuotaWarmer/Models/QuotaModels.swift \
             Sources/QuotaWarmer/Models/AutoWarmDecision.swift \
+            Sources/QuotaWarmer/Models/AutoWarmExplanation.swift \
             Sources/QuotaWarmer/Models/ProviderAccount.swift \
             Sources/QuotaWarmer/Models/UsageHistory.swift \
             Sources/QuotaWarmer/Services/DiagnosticLogger.swift \
@@ -66,6 +67,7 @@ jobs:
             Sources/QuotaWarmer/Models/ToolID.swift \
             Sources/QuotaWarmer/Models/QuotaModels.swift \
             Sources/QuotaWarmer/Models/AutoWarmDecision.swift \
+            Sources/QuotaWarmer/Models/AutoWarmExplanation.swift \
             Sources/QuotaWarmer/Models/ProviderAccount.swift \
             Sources/QuotaWarmer/Models/UsageHistory.swift \
             Sources/QuotaWarmer/Models/QuotaDisplay.swift \
@@ -90,6 +92,7 @@ jobs:
             Sources/QuotaWarmer/Models/ToolID.swift \
             Sources/QuotaWarmer/Models/QuotaModels.swift \
             Sources/QuotaWarmer/Models/AutoWarmDecision.swift \
+            Sources/QuotaWarmer/Models/AutoWarmExplanation.swift \
             Sources/QuotaWarmer/Models/ProviderAccount.swift \
             Sources/QuotaWarmer/Models/UsageHistory.swift \
             Sources/QuotaWarmer/Models/QuotaDisplay.swift \

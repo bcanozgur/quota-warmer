@@ -149,6 +149,9 @@ struct MainTabView: View {
                         .frame(height: 1)
                     ResetCreditsRow(credits: credits, now: Date()) { await appState.useResetCredit($0, for: tool) }
                 }
+                if state.mode == .autoWarm {
+                    AutoWarmStatusLine(toolState: state)
+                }
             }
         }
         .padding(.horizontal, 12)
