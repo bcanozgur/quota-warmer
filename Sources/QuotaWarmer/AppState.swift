@@ -258,6 +258,11 @@ final class ToolState: ObservableObject {
 @MainActor
 final class AppState: ObservableObject {
     @Published var showOnboarding = false
+    /// Full first-run guide (see `OnboardingFlow`); separate from the missing-CLI banner above.
+    @Published var showWelcomeGuide = false
+    /// Captured before init writes any default, so a fresh install is distinguishable from an upgrade.
+    private let hadPriorSettings = OnboardingFlow.hasPriorSettings(
+        keys: Array(UserDefaults.standard.persistentDomain(forName: Bundle.main.bundleIdentifier ?? "")?.keys ?? [:].keys))
     @Published var isRefreshing = false
     /// Which tab the panel shows. Lifted out of `MenuContent` so the menu-bar
     /// right-click menu ("Show Stats" / "Go to Settings") can drive it.
@@ -1681,9 +1686,26 @@ final class AppState: ObservableObject {
         for tool in ToolID.allCases {
             if await runner.cliMissing(tool) { anyMissing = true }
         }
-        if anyMissing && !UserDefaults.standard.bool(forKey: "onboardingDismissed") {
-            showOnboarding = true
-        }
+        let defaults = UserDefaults.standard
+        let decision = OnboardingFlow.launchDecision(
+            completedVersion: defaults.object(forKey: "onboardingCompletedVersion") as? Int,
+            hadPriorSettings: hadPriorSettings,
+            anyCLIMissing: anyMissing,
+            bannerDismissed: defaults.bool(forKey: "onboardingDismissed"))
+        if decision.markCompleted { defaults.set(OnboardingFlow.currentVersion, forKey: "onboardingCompletedVersion") }
+        if decision.showGuide { openWelcomeGuide() }
+        if decision.showMissingCLIBanner { showOnboarding = true }
+    }
+
+    /// First launch, and Settings → "Show Welcome Guide".
+    func openWelcomeGuide() {
+        showWelcomeGuide = true
+        selectedTab = .main
+    }
+
+    func finishWelcomeGuide() {
+        UserDefaults.standard.set(OnboardingFlow.currentVersion, forKey: "onboardingCompletedVersion")
+        showWelcomeGuide = false
     }
 }
 
