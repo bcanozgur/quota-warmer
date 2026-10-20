@@ -10,6 +10,22 @@ enum EventOutcome: String, Codable {
     case skipped     // a warm-up was deliberately not run
 }
 
+/// What triggered a warm-up. Stored on the warm-up's events so the Impact panel
+/// can split claimed windows without parsing titles.
+enum WarmupSource: String, Codable, CaseIterable {
+    case auto, morning, manual, intent
+
+    /// Maps `AppState.triggerWarmup`'s `mode` string.
+    init(mode: String) {
+        switch mode {
+        case "auto": self = .auto
+        case "scheduled", "scheduled-catchup": self = .morning
+        case "intent": self = .intent
+        default: self = .manual
+        }
+    }
+}
+
 struct HistoryEvent: Identifiable, Codable, Equatable {
     let id: UUID
     let timestamp: Date
@@ -23,11 +39,14 @@ struct HistoryEvent: Identifiable, Codable, Equatable {
     var windowKey: String?
     var windowResetAt: Date?
     var model: String?
+    /// What triggered the warm-up; nil on older lines and non-warm-up events.
+    var source: WarmupSource?
 
     init(
         id: UUID = UUID(), timestamp: Date = Date(), tool: ProviderID?, kind: HistoryKind,
         title: String, detail: String, outcome: EventOutcome? = nil,
-        windowKey: String? = nil, windowResetAt: Date? = nil, model: String? = nil
+        windowKey: String? = nil, windowResetAt: Date? = nil, model: String? = nil,
+        source: WarmupSource? = nil
     ) {
         self.id = id
         self.timestamp = timestamp
@@ -39,11 +58,12 @@ struct HistoryEvent: Identifiable, Codable, Equatable {
         self.windowKey = windowKey
         self.windowResetAt = windowResetAt
         self.model = model
+        self.source = source
     }
 
     // Stable on-disk schema: the provider is its storageKey string.
     private enum CodingKeys: String, CodingKey {
-        case id, t, provider, kind, title, detail, outcome, windowKey, resetAt, model
+        case id, t, provider, kind, title, detail, outcome, windowKey, resetAt, model, source
     }
 
     init(from decoder: Decoder) throws {
@@ -58,6 +78,8 @@ struct HistoryEvent: Identifiable, Codable, Equatable {
         windowKey = try c.decodeIfPresent(String.self, forKey: .windowKey)
         windowResetAt = try c.decodeIfPresent(TimeInterval.self, forKey: .resetAt).map(Date.init(timeIntervalSince1970:))
         model = try c.decodeIfPresent(String.self, forKey: .model)
+        // An unknown future source value must not drop the whole event.
+        source = (try? c.decodeIfPresent(WarmupSource.self, forKey: .source)) ?? nil
     }
 
     func encode(to encoder: Encoder) throws {
@@ -72,6 +94,7 @@ struct HistoryEvent: Identifiable, Codable, Equatable {
         try c.encodeIfPresent(windowKey, forKey: .windowKey)
         try c.encodeIfPresent(windowResetAt?.timeIntervalSince1970, forKey: .resetAt)
         try c.encodeIfPresent(model, forKey: .model)
+        try c.encodeIfPresent(source, forKey: .source)
     }
 
     static func == (lhs: HistoryEvent, rhs: HistoryEvent) -> Bool { lhs.id == rhs.id }

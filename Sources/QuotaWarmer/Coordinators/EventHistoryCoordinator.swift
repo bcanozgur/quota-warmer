@@ -16,13 +16,14 @@ final class EventHistoryCoordinator {
 
     func addHistory(
         tool: ProviderID?, kind: HistoryKind, title: String, detail: String,
-        outcome: EventOutcome? = nil, windowKey: String? = nil, windowResetAt: Date? = nil, model: String? = nil
+        outcome: EventOutcome? = nil, windowKey: String? = nil, windowResetAt: Date? = nil, model: String? = nil,
+        source: WarmupSource? = nil
     ) {
         // An in-flight task for a just-removed account must not resurrect its events.
         if let tool, host.toolStates[tool] == nil { return }
         let event = HistoryEvent(
             tool: tool, kind: kind, title: title, detail: detail,
-            outcome: outcome, windowKey: windowKey, windowResetAt: windowResetAt, model: model
+            outcome: outcome, windowKey: windowKey, windowResetAt: windowResetAt, model: model, source: source
         )
         host.history.insert(event, at: 0)
         if host.history.count > Self.historyInMemory { host.history.removeLast(host.history.count - Self.historyInMemory) }
@@ -45,7 +46,8 @@ final class EventHistoryCoordinator {
                 return HistoryEvent(
                     id: event.id, timestamp: event.timestamp, tool: provider, kind: event.kind,
                     title: event.title, detail: event.detail, outcome: event.outcome,
-                    windowKey: event.windowKey, windowResetAt: event.windowResetAt, model: event.model
+                    windowKey: event.windowKey, windowResetAt: event.windowResetAt, model: event.model,
+                    source: event.source
                 )
             }
             let fresh = Set(host.history.map(\.id))

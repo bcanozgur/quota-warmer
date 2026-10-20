@@ -131,7 +131,8 @@ final class WarmupCoordinator {
                 title: historyTitle(forWarmupMode: mode),
                 detail: "Command completed",
                 outcome: .sent,
-                model: WarmupRunner.modelArgument(in: result.command)
+                model: WarmupRunner.modelArgument(in: result.command),
+                source: WarmupSource(mode: mode)
             )
             state.lastWarmupModel = WarmupRunner.modelArgument(in: result.command)
             notifications.notifyWarmupCommandSent(tool: tool)
@@ -345,7 +346,7 @@ final class WarmupCoordinator {
     func noteAutoWarmDecision(_ state: ToolState, _ decision: AutoWarmDecision) {
         let previous = state.recordAutoWarmDecision(decision)
         if let entry = AutoWarmExplanation.historyEntry(previous: previous, new: decision.skipReason, now: Date()) {
-            host.events.addHistory(tool: state.tool, kind: .autoWarmup, title: entry.title, detail: entry.detail, outcome: .skipped)
+            host.events.addHistory(tool: state.tool, kind: .autoWarmup, title: entry.title, detail: entry.detail, outcome: .skipped, source: .auto)
         }
     }
 
