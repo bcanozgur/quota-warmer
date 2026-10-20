@@ -31,6 +31,8 @@ struct AccountsHistoryRegression {
         testHistoryStore()
         testDailyAndHourlyTokens()
         testStatusExport()
+        await testEventLog()
+        testDiagnosticRotation()
 
         if failures.isEmpty {
             print("Accounts & history regressions passed (\(checks) checks)")
@@ -464,6 +466,78 @@ struct AccountsHistoryRegression {
         ), now: now)
         expect(settling.session?.settling, true, "a just-rolled-over reading is marked settling")
         expect(settling.session?.usedPercent, 90, "and still carries the reported percent")
+    }
+
+    // MARK: - Event log
+
+    static func testEventLog() async {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let acct = ProviderID(kind: .claude, accountID: "work")
+        let event = HistoryEvent(
+            timestamp: now, tool: acct, kind: .resetDetected, title: "Window claim confirmed", detail: "d",
+            outcome: .confirmed, windowKey: "k1", windowResetAt: now.addingTimeInterval(3600), model: "m"
+        )
+        let line = try? JSONEncoder().encode(event)
+        let back = line.flatMap { try? JSONDecoder().decode(HistoryEvent.self, from: $0) }
+        expect(back?.id, event.id, "event keeps its stable id")
+        expect(back?.tool?.storageKey, "claude.work", "event provider round-trips by storageKey")
+        expect(back?.outcome, .confirmed, "event outcome round-trips")
+        expect(back?.windowKey, "k1", "event window key round-trips")
+        expect(back?.windowResetAt, now.addingTimeInterval(3600), "event reset time round-trips")
+        expect(back?.model, "m", "event model round-trips")
+        let plain = HistoryEvent(timestamp: now, tool: nil, kind: .updateCheck, title: "t", detail: "d")
+        let plainBack = (try? JSONEncoder().encode(plain)).flatMap { try? JSONDecoder().decode(HistoryEvent.self, from: $0) }
+        check(plainBack != nil && plainBack?.tool == nil && plainBack?.outcome == nil, "unstructured event round-trips with nil fields")
+        expect(ProviderID.fromStorageKey("codex")?.isDefault, true, "default storage key parses")
+        check(ProviderID.fromStorageKey("bogus.x") == nil, "unknown tool key is rejected")
+
+        // Retention and cap.
+        let old = HistoryEvent(timestamp: now.addingTimeInterval(-91 * 86400), tool: nil, kind: .quotaFetch, title: "old", detail: "")
+        let recent = HistoryEvent(timestamp: now.addingTimeInterval(-89 * 86400), tool: nil, kind: .quotaFetch, title: "recent", detail: "")
+        expect(EventLogStore.prune([recent, old], now: now).map(\.title), ["recent"], "events older than 90 days are pruned")
+        let many = (0..<12).map { HistoryEvent(timestamp: now.addingTimeInterval(Double($0)), tool: nil, kind: .quotaFetch, title: "e\($0)", detail: "") }
+        let capped = EventLogStore.prune(many.reversed(), now: now, maxLines: 5)
+        expect(capped.map(\.title), ["e7", "e8", "e9", "e10", "e11"], "cap keeps the newest lines, oldest-first")
+
+        // Corrupt-line tolerance and file round-trip.
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("qw-eventlog-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let store = EventLogStore(directory: dir)
+        let good = String(data: line ?? Data(), encoding: .utf8) ?? ""
+        let oldLine = String(data: (try? JSONEncoder().encode(old)) ?? Data(), encoding: .utf8) ?? ""
+        try? "\(good)\nnot json\n{\"id\":\"x\"}\n\(oldLine)\n".write(to: store.fileURL, atomically: true, encoding: .utf8)
+        let loaded = await store.loadAndPrune(now: now)
+        expect(loaded.count, 1, "corrupt and expired lines are skipped on load")
+        let rewritten = (try? String(contentsOf: store.fileURL, encoding: .utf8)) ?? ""
+        expect(rewritten.split(separator: "\n").count, 1, "the file is rewritten without the bad lines")
+
+        let other = HistoryEvent(timestamp: now, tool: .default(.codex), kind: .quotaFetch, title: "o", detail: "")
+        store.append(other)
+        await store.flush()
+        expect(await store.loadAndPrune(now: now).count, 2, "appended events persist")
+        store.removeAll(for: acct)
+        await store.flush()
+        expect(await store.loadAndPrune(now: now).map(\.title), ["o"], "removing an account drops only its events")
+        expect(await store.recent(limit: 1).count, 1, "recent honours its limit")
+
+        let filter = EventFilter(providerKey: "claude.work", group: .warmups)
+        check(filter.matches(event) && !filter.matches(other), "filter matches provider and kind group")
+    }
+
+    static func testDiagnosticRotation() {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("qw-diag-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        for round in 1...4 {
+            try? "gen\(round)".write(to: dir.appendingPathComponent("diagnostics.log"), atomically: true, encoding: .utf8)
+            DiagnosticLogger.rotate(in: dir, maxFiles: 3)
+        }
+        // After rotation the live file is gone; the three newest generations are .1, .2 only (live is rewritten later).
+        let names = DiagnosticLogger.logFiles(in: dir, maxFiles: 3).map(\.lastPathComponent)
+        expect(names, ["diagnostics.1.log", "diagnostics.2.log"], "rotation keeps a bounded set of files")
+        expect(try? String(contentsOf: dir.appendingPathComponent("diagnostics.1.log"), encoding: .utf8), "gen4", "newest rotated file is .1")
+        expect(DiagnosticLogger.redacted("Authorization: Bearer abcdefghijklmnop1234").contains("abcdefghij"), false, "redaction strips bearer tokens")
     }
 
     // MARK: - Harness

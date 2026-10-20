@@ -23,14 +23,37 @@ enum DebugLevel: Int, CaseIterable {
 }
 
 enum DiagnosticLogger {
-    static let fileURL = URL(fileURLWithPath: "/tmp/quotawarmer-diagnostics.log")
+    /// `~/Library/Logs/QuotaWarmer/` — per-user, not world-readable, survives reboot.
+    static let directory: URL = {
+        let library = FileManager.default.urls(for: .libraryDirectory, in: .userDomainMask).first
+            ?? FileManager.default.temporaryDirectory
+        return library.appendingPathComponent("Logs/QuotaWarmer", isDirectory: true)
+    }()
+    static let fileURL = directory.appendingPathComponent("diagnostics.log")
     private static let writeLock = NSLock()
+    private static var directoryReady = false
+
+    /// Rotation: `diagnostics.log` plus `diagnostics.1.log` … up to `maxFiles` files.
+    static let maxBytes: UInt64 = 2 * 1024 * 1024
+    static let maxFiles = 3
 
     private static let formatter: ISO8601DateFormatter = {
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         return formatter
     }()
+
+    /// Newest first: the live file, then the rotated ones that exist.
+    static var logFiles: [URL] { logFiles(in: directory) }
+
+    static func logFiles(in directory: URL, maxFiles: Int = DiagnosticLogger.maxFiles) -> [URL] {
+        (0..<maxFiles).map { rotatedURL($0, in: directory) }
+            .filter { FileManager.default.fileExists(atPath: $0.path) }
+    }
+
+    private static func rotatedURL(_ index: Int, in directory: URL) -> URL {
+        directory.appendingPathComponent(index == 0 ? "diagnostics.log" : "diagnostics.\(index).log")
+    }
 
     static func appendHistory(_ event: HistoryEvent) {
         let tool = event.tool?.rawValue ?? "app"
@@ -47,35 +70,38 @@ enum DiagnosticLogger {
         // one line silently overwrites the other.
         writeLock.lock()
         defer { writeLock.unlock() }
+        if !directoryReady {
+            try? FileManager.default.createDirectory(
+                at: directory, withIntermediateDirectories: true,
+                attributes: [.posixPermissions: 0o700]
+            )
+            directoryReady = true
+        }
         if FileManager.default.fileExists(atPath: fileURL.path),
            let handle = try? FileHandle(forWritingTo: fileURL) {
             let size = (try? handle.seekToEnd()) ?? 0
             try? handle.write(contentsOf: data)
             try? handle.close()
-            if size + UInt64(data.count) > maxBytes { trim() }
+            if size + UInt64(data.count) > maxBytes { rotate(in: directory, maxFiles: maxFiles) }
         } else {
-            try? data.write(to: fileURL, options: .atomic)
+            FileManager.default.createFile(atPath: fileURL.path, contents: data, attributes: [.posixPermissions: 0o600])
         }
     }
 
-    /// The log gains ~150 KB a day from routine polling; keep it bounded.
-    static let maxBytes: UInt64 = 2 * 1024 * 1024
-    static let keepBytes = 1024 * 1024
-
-    /// Keeps the newest `keepBytes`, starting at a line boundary. Caller holds
-    /// `writeLock`.
-    private static func trim() {
-        guard let handle = try? FileHandle(forReadingFrom: fileURL) else { return }
-        let size = (try? handle.seekToEnd()) ?? 0
-        let start = size > UInt64(keepBytes) ? size - UInt64(keepBytes) : 0
-        try? handle.seek(toOffset: start)
-        let tail = (try? handle.readToEnd()) ?? Data()
-        try? handle.close()
-        let lineStart = tail.firstIndex(of: 0x0A).map { tail.index(after: $0) } ?? tail.startIndex
-        try? Data(tail[lineStart...]).write(to: fileURL, options: .atomic)
+    /// Shifts `diagnostics.N.log` → `N+1`, dropping the oldest, and starts a
+    /// fresh live file. Caller holds `writeLock` (or owns `directory`).
+    static func rotate(in directory: URL, maxFiles: Int) {
+        let fm = FileManager.default
+        try? fm.removeItem(at: rotatedURL(maxFiles - 1, in: directory))
+        for index in stride(from: maxFiles - 2, through: 0, by: -1) {
+            let source = rotatedURL(index, in: directory)
+            if fm.fileExists(atPath: source.path) {
+                try? fm.moveItem(at: source, to: rotatedURL(index + 1, in: directory))
+            }
+        }
     }
 
-    private static func redacted(_ text: String) -> String {
+    static func redacted(_ text: String) -> String {
         var output = text
         let patterns = [
             #"sk-[A-Za-z0-9._-]{12,}"#,

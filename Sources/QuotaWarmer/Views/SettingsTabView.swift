@@ -1,4 +1,6 @@
 import SwiftUI
+import AppKit
+import UniformTypeIdentifiers
 import ServiceManagement
 
 struct SettingsTabView: View {
@@ -17,6 +19,8 @@ struct SettingsTabView: View {
     @State private var launchAtLogin: Bool = SMAppService.mainApp.status == .enabled
     @State private var launchAtLoginError: String?
     @State private var historyExpanded = false
+    @State private var historyFilter = EventFilter()
+    @State private var historyVisible = 25
     @AppStorage("rateLimitGuard")    private var rateLimitGuard: Bool    = true
 
     @AppStorage("morningPrewarmHour")         private var morningHour: Int         = 6
@@ -219,7 +223,7 @@ struct SettingsTabView: View {
                     Divider().background(DS.C.border).padding(.leading, 36)
                     infoRow(
                         title: "Logs",
-                        detail: "History is mirrored to /tmp/quotawarmer-diagnostics.log. Tokens and authorization headers are redacted and are never written to history or warmup logs."
+                        detail: "History is kept in ~/Library/Application Support/QuotaWarmer/events.jsonl and mirrored to ~/Library/Logs/QuotaWarmer/diagnostics.log. Tokens and authorization headers are redacted and are never written to history or warmup logs."
                     )
                 }
 
@@ -338,22 +342,79 @@ struct SettingsTabView: View {
 
             if historyExpanded {
                 Divider().background(DS.C.border).padding(.leading, 36)
-                if appState.history.isEmpty {
-                    Text("No events yet")
+                historyFilterBar
+                let filtered = appState.history.filter { historyFilter.matches($0) }
+                if filtered.isEmpty {
+                    Text(appState.history.isEmpty ? "No events yet" : "No events match this filter")
                         .font(.system(size: 10))
                         .foregroundStyle(DS.C.textMuted)
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, DS.Space.lg)
                 } else {
                     LazyVStack(alignment: .leading, spacing: 7) {
-                        ForEach(appState.history.prefix(10)) { event in
+                        ForEach(filtered.prefix(historyVisible)) { event in
                             HistoryRow(event: event)
+                        }
+                        if filtered.count > historyVisible {
+                            Button("Show more (\(filtered.count - historyVisible) more)") { historyVisible += 25 }
+                                .buttonStyle(.link)
+                                .font(.system(size: 10))
                         }
                     }
                     .padding(.horizontal, DS.Space.md)
                     .padding(.vertical, DS.Space.sm + 2)
                 }
+                HStack(spacing: DS.Space.md) {
+                    Button("Export Diagnostics…") { exportDiagnostics() }
+                    Button("Report an Issue") {
+                        if let url = DiagnosticsExport.issueURL() { NSWorkspace.shared.open(url) }
+                    }
+                    Spacer()
+                }
+                .buttonStyle(.link)
+                .font(.system(size: 10))
+                .padding(.horizontal, DS.Space.md)
+                .padding(.bottom, DS.Space.sm + 2)
             }
+        }
+    }
+
+    private var historyFilterBar: some View {
+        HStack(spacing: DS.Space.sm) {
+            Picker("Provider", selection: Binding(
+                get: { historyFilter.providerKey ?? "" },
+                set: { historyFilter.providerKey = $0.isEmpty ? nil : $0; historyVisible = 25 }
+            )) {
+                Text("All providers").tag("")
+                ForEach(appState.providers, id: \.storageKey) { Text($0.displayName).tag($0.storageKey) }
+            }
+            Picker("Kind", selection: Binding(
+                get: { historyFilter.group },
+                set: { historyFilter.group = $0; historyVisible = 25 }
+            )) {
+                ForEach(EventFilter.Group.allCases, id: \.self) { Text($0.rawValue).tag($0) }
+            }
+        }
+        .labelsHidden()
+        .font(.system(size: 10))
+        .padding(.horizontal, DS.Space.md)
+        .padding(.top, DS.Space.sm)
+    }
+
+    private func exportDiagnostics() {
+        let providers = appState.providers.map { provider -> (String, String) in
+            let state = appState.state(for: provider)
+            return (provider.storageKey, "\(state.mode.rawValue), pinned=\(state.menuBarVisible)")
+        }
+        let stamp = ISO8601DateFormatter().string(from: Date()).replacingOccurrences(of: ":", with: "-")
+        Task { @MainActor in
+            let events = await EventLogStore.shared.recent(limit: 500)
+            let text = DiagnosticsExport.report(events: events, providers: providers)
+            let panel = NSSavePanel()
+            panel.nameFieldStringValue = "quotawarmer-diagnostics-\(stamp).txt"
+            panel.allowedContentTypes = [.plainText]
+            guard panel.runModal() == .OK, let url = panel.url else { return }
+            try? text.write(to: url, atomically: true, encoding: .utf8)
         }
     }
 

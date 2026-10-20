@@ -62,6 +62,8 @@ final class ToolState: ObservableObject {
     /// after one that did (or before any ran). Display-only.
     @Published private(set) var lastAutoWarmSkip: AutoWarmSkipReason?
     @Published var lastWarmupOutcome: WarmupOutcome = .none
+    /// Model the last warm-up command used (for the persisted event log).
+    var lastWarmupModel: String?
     @Published var warmupLogs: [WarmupLog] = []
     @Published var isLogExpanded = false
     var quotaBackoffDelay: TimeInterval = 0
@@ -317,6 +319,7 @@ final class AppState: ObservableObject {
             }
         }
 
+        loadPersistedHistory()
         refreshAllActivity(allowAutomaticWarmup: false)
         startQuotaRefreshTimer()
         startUIRefreshTimer()
@@ -451,6 +454,8 @@ final class AppState: ObservableObject {
             UserDefaults.standard.removeObject(forKey: key)
         }
         UsageHistoryStore.shared.removeAll(for: tool)
+        EventLogStore.shared.removeAll(for: tool)
+        history.removeAll { $0.tool?.storageKey == tool.storageKey }
 
         objectWillChange.send()
         accounts.removeAll { $0.id == tool.accountID }
@@ -1116,8 +1121,11 @@ final class AppState: ObservableObject {
                 tool: tool,
                 kind: historyKind(forWarmupMode: mode),
                 title: historyTitle(forWarmupMode: mode),
-                detail: "Command completed"
+                detail: "Command completed",
+                outcome: .sent,
+                model: WarmupRunner.modelArgument(in: result.command)
             )
+            state.lastWarmupModel = WarmupRunner.modelArgument(in: result.command)
             notifications.notifyWarmupCommandSent(tool: tool)
             state.lastWarmupOutcome = .pending(sentAt: result.date)
             await refreshQuota(
@@ -1147,13 +1155,13 @@ final class AppState: ObservableObject {
             state.authStatus = .failed
             state.backoffUntil = nil
             state.lastWarmupOutcome = .failed(at: Date(), reason: message)
-            addHistory(tool: tool, kind: .authFailure, title: "Warmup blocked", detail: message)
+            addHistory(tool: tool, kind: .authFailure, title: "Warmup blocked", detail: message, outcome: .failed)
             scheduleClaudeAuthRecheckIfNeeded(for: state, reason: message)
         } catch {
             state.errorMessage = error.localizedDescription
             state.backoffUntil = Date().addingTimeInterval(nextBackoff(for: state))
             state.lastWarmupOutcome = .failed(at: Date(), reason: error.localizedDescription)
-            addHistory(tool: tool, kind: .pollingError, title: "Warmup failed", detail: error.localizedDescription)
+            addHistory(tool: tool, kind: .pollingError, title: "Warmup failed", detail: error.localizedDescription, outcome: .failed)
         }
 
         state.isWarming = false
@@ -1172,7 +1180,11 @@ final class AppState: ObservableObject {
         if state.quotaSnapshot?.showsActiveWindow() == true {
             state.claimVerifyTask?.cancel(); state.claimVerifyTask = nil
             state.lastWarmupOutcome = .confirmed(at: Date(), resetAt: state.resetAt)
-            addHistory(tool: tool, kind: .resetDetected, title: "Window claim confirmed", detail: claimConfirmedDetail(state))
+            let fields = claimFields(state)
+            addHistory(
+                tool: tool, kind: .resetDetected, title: "Window claim confirmed", detail: claimConfirmedDetail(state),
+                outcome: .confirmed, windowKey: fields.windowKey, windowResetAt: fields.windowResetAt, model: fields.model
+            )
             DiagnosticLogger.append("warmup_claim_confirmed tool=\(tool.rawValue) attempt=\(attempt)")
             if state.sourceHealth == .healthy {
                 notifications.notifyActivated(tool: tool)
@@ -1192,7 +1204,10 @@ final class AppState: ObservableObject {
                 tool: tool,
                 kind: .pollingError,
                 title: "Window claim unverified",
-                detail: "The command completed, but live quota did not confirm an active window."
+                detail: "The command completed, but live quota did not confirm an active window.",
+                outcome: .missed,
+                windowResetAt: expectedReset,
+                model: state.lastWarmupModel
             )
             DiagnosticLogger.append("warmup_claim_unverified tool=\(tool.rawValue)")
             return
@@ -1222,7 +1237,11 @@ final class AppState: ObservableObject {
             if state.quotaSnapshot?.showsActiveWindow() == true {
                 state.claimVerifyTask?.cancel(); state.claimVerifyTask = nil
                 state.lastWarmupOutcome = .confirmed(at: Date(), resetAt: state.resetAt)
-                addHistory(tool: state.tool, kind: .resetDetected, title: "Window claim confirmed", detail: claimConfirmedDetail(state))
+                let fields = claimFields(state)
+                addHistory(
+                    tool: state.tool, kind: .resetDetected, title: "Window claim confirmed", detail: claimConfirmedDetail(state),
+                    outcome: .confirmed, windowKey: fields.windowKey, windowResetAt: fields.windowResetAt, model: fields.model
+                )
                 DiagnosticLogger.append("warmup_claim_healed tool=\(state.tool.rawValue)")
             } else if Date().timeIntervalSince(sentAt) > state.tool.windowDuration {
                 state.lastWarmupOutcome = .none
@@ -1239,7 +1258,11 @@ final class AppState: ObservableObject {
         case .unverified(_, let expectedResetAt):
             if state.quotaSnapshot?.showsActiveWindow() == true {
                 state.lastWarmupOutcome = .confirmed(at: Date(), resetAt: state.resetAt)
-                addHistory(tool: state.tool, kind: .resetDetected, title: "Window claim confirmed", detail: claimConfirmedDetail(state))
+                let fields = claimFields(state)
+                addHistory(
+                    tool: state.tool, kind: .resetDetected, title: "Window claim confirmed", detail: claimConfirmedDetail(state),
+                    outcome: .confirmed, windowKey: fields.windowKey, windowResetAt: fields.windowResetAt, model: fields.model
+                )
                 DiagnosticLogger.append("warmup_claim_healed tool=\(state.tool.rawValue)")
             } else if let expectedResetAt, expectedResetAt <= Date() {
                 state.lastWarmupOutcome = .none
@@ -1582,11 +1605,51 @@ final class AppState: ObservableObject {
         return TimeInterval(stored.nonZero ?? 300)
     }
 
-    private func addHistory(tool: ProviderID?, kind: HistoryKind, title: String, detail: String) {
-        let event = HistoryEvent(timestamp: Date(), tool: tool, kind: kind, title: title, detail: detail)
+    /// Newest events kept in memory for the UI; the full log lives on disk.
+    static let historyInMemory = 500
+
+    private func addHistory(
+        tool: ProviderID?, kind: HistoryKind, title: String, detail: String,
+        outcome: EventOutcome? = nil, windowKey: String? = nil, windowResetAt: Date? = nil, model: String? = nil
+    ) {
+        // An in-flight task for a just-removed account must not resurrect its events.
+        if let tool, toolStates[tool] == nil { return }
+        let event = HistoryEvent(
+            tool: tool, kind: kind, title: title, detail: detail,
+            outcome: outcome, windowKey: windowKey, windowResetAt: windowResetAt, model: model
+        )
         history.insert(event, at: 0)
-        if history.count > 10 { history.removeLast(history.count - 10) }
+        if history.count > Self.historyInMemory { history.removeLast(history.count - Self.historyInMemory) }
+        EventLogStore.shared.append(event)
         DiagnosticLogger.appendHistory(event)
+    }
+
+    /// Fills `history` from `events.jsonl` (pruning it) without losing events
+    /// recorded while the file was loading. Events of accounts that no longer
+    /// exist are dropped; the rest get their full `ProviderID` back.
+    private func loadPersistedHistory() {
+        Task { [weak self] in
+            let loaded = await EventLogStore.shared.loadAndPrune()
+            guard let self else { return }
+            let known = Dictionary(uniqueKeysWithValues: self.providers.map { ($0.storageKey, $0) })
+            let restored = loaded.reversed().compactMap { event -> HistoryEvent? in
+                guard let key = event.tool?.storageKey else { return event }
+                guard let provider = known[key] else { return nil }
+                return HistoryEvent(
+                    id: event.id, timestamp: event.timestamp, tool: provider, kind: event.kind,
+                    title: event.title, detail: event.detail, outcome: event.outcome,
+                    windowKey: event.windowKey, windowResetAt: event.windowResetAt, model: event.model
+                )
+            }
+            let fresh = Set(self.history.map(\.id))
+            self.history = Array((self.history + restored.filter { !fresh.contains($0.id) })
+                .prefix(Self.historyInMemory))
+        }
+    }
+
+    /// Structured fields shared by the claim receipt events.
+    private func claimFields(_ state: ToolState) -> (windowKey: String?, windowResetAt: Date?, model: String?) {
+        (state.quotaSnapshot?.rawWindowKey, state.resetAt, state.lastWarmupModel)
     }
 
     private func nextBackoff(for state: ToolState) -> TimeInterval {

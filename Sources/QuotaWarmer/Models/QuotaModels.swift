@@ -52,7 +52,7 @@ enum AuthStatus: String {
     }
 }
 
-enum HistoryKind: String {
+enum HistoryKind: String, Codable, CaseIterable {
     case quotaFetch
     case resetDetected
     case autoWarmup
@@ -177,15 +177,6 @@ enum AutoWarmDedup {
         if let endsAt = lastWarmedWindowEndsAt, endsAt > now { return false }
         return true
     }
-}
-
-struct HistoryEvent: Identifiable {
-    let id = UUID()
-    let timestamp: Date
-    let tool: ProviderID?
-    let kind: HistoryKind
-    let title: String
-    let detail: String
 }
 
 /// Result of the most recent warm-up, used to *prove* a window was actually
