@@ -15,10 +15,10 @@ enum DebugLevel: Int, CaseIterable {
 
     static var current: DebugLevel {
         get {
-            let raw = UserDefaults.standard.object(forKey: "debugLevel") as? Int ?? DebugLevel.normal.rawValue
+            let raw = UserDefaults.standard.object(forKey: AppSettings.Key.debugLevel) as? Int ?? DebugLevel.normal.rawValue
             return DebugLevel(rawValue: raw) ?? .normal
         }
-        set { UserDefaults.standard.set(newValue.rawValue, forKey: "debugLevel") }
+        set { UserDefaults.standard.set(newValue.rawValue, forKey: AppSettings.Key.debugLevel) }
     }
 }
 

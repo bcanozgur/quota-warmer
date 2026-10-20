@@ -20,6 +20,7 @@ struct AccountsHistoryRegression {
             let catalog = try? ModelCatalog.decode(Data(contentsOf: URL(fileURLWithPath: path)))
             check(catalog.map { store.adopt($0, source: "repo") } == true, "repo \(tool) catalog loads")
         }
+        testAppSettings()
         testProviderIdentity()
         testAccountEnvironment()
         testKeychainServiceNames()
@@ -41,6 +42,82 @@ struct AccountsHistoryRegression {
             print("\(failures.count) of \(checks) accounts/history checks failed")
             exit(1)
         }
+    }
+
+    // MARK: - Settings
+
+    /// Key strings are the on-disk format of existing installs; this pins them
+    /// and every default so a refactor cannot silently rename or re-default one.
+    static func testAppSettings() {
+        typealias K = AppSettings.Key
+        let pinned: [(String, String)] = [
+            (K.schemaVersion, "settingsSchemaVersion"),
+            (K.refreshInterval, "refreshInterval"), (K.windowDurationSecs, "windowDurationSecs"),
+            (K.rateLimitGuard, "rateLimitGuard"), (K.globalPassive, "globalPassive"),
+            (K.morningPrewarmEnabled, "morningPrewarmEnabled"), (K.morningPrewarmHour, "morningPrewarmHour"),
+            (K.morningPrewarmMinute, "morningPrewarmMinute"), (K.morningPrewarmWeekdaysOnly, "morningPrewarmWeekdaysOnly"),
+            (K.lastMorningWarmDayLegacy, "lastMorningWarmDay"),
+            (K.notifyWarning, "notifyWarning"), (K.notifyActivated, "notifyActivated"),
+            (K.alertSessionEnabled, "alertSessionEnabled"), (K.alertSessionFirst, "alertSessionFirst"),
+            (K.alertSessionSecond, "alertSessionSecond"), (K.alertWeeklyEnabled, "alertWeeklyEnabled"),
+            (K.alertWeeklyFirst, "alertWeeklyFirst"), (K.alertWeeklySecond, "alertWeeklySecond"),
+            (K.alertPaceEnabled, "alertPaceEnabled"),
+            (K.colorfulQuotaBars, "colorfulQuotaBars"), (K.appearanceMode, "appearanceMode"),
+            (K.historyRange, "historyRange"), (K.historyProvider, "historyProvider"),
+            (K.globalHotKeyEnabled, "globalHotKeyEnabled"), (K.globalHotKeyCode, "globalHotKeyCode"),
+            (K.globalHotKeyModifiers, "globalHotKeyModifiers"),
+            (K.onboardingCompletedVersion, "onboardingCompletedVersion"), (K.onboardingDismissed, "onboardingDismissed"),
+            (K.launchAtLogin, "launchAtLogin"), (K.debugLevel, "debugLevel"), (K.accounts, "accounts.v1"),
+            (K.toolMode("claude.work"), "toolMode.claude.work"),
+            (K.toolActiveLegacy("codex"), "toolActive.codex"),
+            (K.menuBarVisible("codex"), "menuBarVisible.codex"),
+            (K.quotaDisplayMode("codex"), "quotaDisplayMode.codex"),
+            (K.quotaAlertMarks("codex"), "quotaAlertMarks.codex"),
+            (K.lastAutoWindowKey("claude"), "lastAutoWindowKey.claude"),
+            (K.lastAutoWarmEndsAt("claude"), "lastAutoWarmEndsAt.claude"),
+            (K.confirmedWarmupResetAt("claude"), "confirmedWarmupResetAt.claude"),
+            (K.lastMorningWarmDay("claude"), "lastMorningWarmDay.claude"),
+        ]
+        for (actual, expected) in pinned { expect(actual, expected, "settings key \(expected)") }
+
+        let suite = "accounts-history-regression-settings"
+        let defaults = UserDefaults(suiteName: suite)!
+        defaults.removePersistentDomain(forName: suite)
+        defer { defaults.removePersistentDomain(forName: suite) }
+        var settings = AppSettings(defaults: defaults)
+        expect(settings.refreshInterval, 300, "default refresh interval")
+        expect(settings.windowDuration, 5 * 3600, "default window duration")
+        expect(settings.rateLimitGuard, true, "default rate-limit guard on")
+        expect(settings.globalPassive, false, "default not paused")
+        expect(settings.morningPrewarmEnabled, false, "default morning pre-warm off")
+        expect(settings.morningHour, 6, "default morning hour")
+        expect(settings.morningMinute, 0, "default morning minute")
+        expect(settings.morningWeekdaysOnly, true, "default weekdays only")
+        expect(settings.onboardingCompletedVersion, nil, "default onboarding version unset")
+        expect(settings.onboardingDismissed, false, "default banner not dismissed")
+        expect(settings.lastMorningWarmDay("claude"), nil, "default no morning day")
+
+        defaults.set(0, forKey: "refreshInterval")
+        expect(settings.refreshInterval, 300, "a stored 0 refresh interval falls back to 300")
+        defaults.set(120, forKey: "refreshInterval")
+        expect(settings.refreshInterval, 120, "stored refresh interval wins")
+        defaults.set(-5, forKey: "windowDurationSecs")
+        expect(settings.windowDuration, 5 * 3600, "non-positive window duration falls back")
+        defaults.set(3600, forKey: "windowDurationSecs")
+        expect(settings.windowDuration, 3600, "stored window duration wins")
+
+        settings.globalPassive = true
+        expect(defaults.bool(forKey: "globalPassive"), true, "globalPassive writes its key")
+        settings.setLastMorningWarmDay("2026-1-2", for: "claude")
+        expect(defaults.string(forKey: "lastMorningWarmDay.claude"), "2026-1-2", "morning day writes per-tool key")
+
+        expect(settings.schemaVersion, 0, "fresh defaults have no schema version")
+        settings.migrateIfNeeded()
+        expect(settings.schemaVersion, AppSettings.currentSchemaVersion, "migration stamps the schema version")
+        expect(defaults.integer(forKey: "refreshInterval"), 120, "migration leaves values untouched")
+        settings = AppSettings(defaults: defaults)
+        settings.migrateIfNeeded()
+        expect(settings.schemaVersion, AppSettings.currentSchemaVersion, "migration is idempotent")
     }
 
     // MARK: - Accounts

@@ -7,7 +7,7 @@ enum AppearanceMode: String, CaseIterable {
     case light
     case dark
 
-    static let defaultsKey = "appearanceMode"
+    static let defaultsKey = AppSettings.Key.appearanceMode
 
     /// Sidebar button order: System → Light → Dark → System.
     var next: AppearanceMode {

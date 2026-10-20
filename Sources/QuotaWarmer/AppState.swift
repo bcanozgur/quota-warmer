@@ -2,261 +2,15 @@ import AppKit
 import Combine
 import Foundation
 
-struct WarmupLog: Identifiable {
-    let id = UUID()
-    let timestamp: Date
-    let mode: String
-    let command: String
-    let output: String
-}
-
-// MARK: - ToolState
-
-@MainActor
-final class ToolState: ObservableObject {
-    /// The watched account. A `var` only so a rename can update its label;
-    /// identity (kind + account id) never changes.
-    var tool: ProviderID
-
-    /// Source of truth for how this tool is treated. `.monitor` is the safe
-    /// default; `.autoWarm` is an explicit opt-in. See `ToolMode`.
-    @Published var mode: ToolMode {
-        didSet { UserDefaults.standard.set(mode.rawValue, forKey: "toolMode.\(tool.rawValue)") }
-    }
-
-    /// Whether QuotaWarmer polls quota for this tool (monitor or auto-warm).
-    var isMonitored: Bool { mode != .off }
-    /// Whether automatic warm-up may fire for this tool.
-    var isAutoWarmEnabled: Bool { mode == .autoWarm }
-
-    /// Whether this tool's glyph + quota is pinned to the menu bar. Independent
-    /// of `mode` — an off/monitor tool can still be watched in the menu bar.
-    @Published var menuBarVisible: Bool {
-        didSet { UserDefaults.standard.set(menuBarVisible, forKey: "menuBarVisible.\(tool.rawValue)") }
-    }
-    /// Show quota as remaining (drains to 0%) or used (fills to 100%). Affects
-    /// only the bars, row text and menu-bar percent — never warm-up decisions.
-    @Published var displayMode: QuotaDisplayMode {
-        didSet { UserDefaults.standard.set(displayMode.rawValue, forKey: QuotaDisplayMode.defaultsKey(storageKey: tool.storageKey)) }
-    }
-    @Published var isFetchingQuota = false
-    @Published var isWarming = false
-    @Published var errorMessage: String?
-    @Published var quotaSnapshot: QuotaSnapshot?
-    @Published var tokenUsageSummary: TokenUsageSummary?
-    @Published var isFetchingTokenUsage = false
-    @Published var sourceHealth: SourceHealth = .unknown
-    @Published var authStatus: AuthStatus = .unknown
-    @Published var healthMessage: String = "not checked"
-    @Published var nextRefreshAt: Date?
-    @Published var backoffUntil: Date?
-    @Published var quotaBackoffUntil: Date?
-    @Published var authRetryScheduledAt: Date?
-    @Published var confirmedWarmupResetAt: Date?
-    @Published var lastAutoWindowKey: String?
-    /// When the window we last auto-warmed will reset. Until then, the auto path
-    /// won't warm again — a dedup that survives providers whose reported reset
-    /// time drifts between polls (e.g. Codex `reset_after_seconds`).
-    @Published var lastAutoWarmWindowEndsAt: Date?
-    /// Why the last automatic or morning warm-up evaluation didn't warm; nil
-    /// after one that did (or before any ran). Display-only.
-    @Published private(set) var lastAutoWarmSkip: AutoWarmSkipReason?
-    /// When that evaluation ran (display-only, for the status line).
-    @Published private(set) var lastAutoWarmDecisionAt: Date?
-    @Published var lastWarmupOutcome: WarmupOutcome = .none
-    /// Model the last warm-up command used (for the persisted event log).
-    var lastWarmupModel: String?
-    @Published var warmupLogs: [WarmupLog] = []
-    @Published var isLogExpanded = false
-    var quotaBackoffDelay: TimeInterval = 0
-    var authRetryAttempts = 0
-    var authRetryTask: Task<Void, Never>?
-    var claimVerifyTask: Task<Void, Never>?
-    var settleRepollTask: Task<Void, Never>?
-
-    /// A stand-in for a removed account: off, nothing restored or saved.
-    init(orphan tool: ProviderID) {
-        self.tool = tool
-        self.mode = .off
-        self.menuBarVisible = false
-        self.displayMode = .remaining
-    }
-
-    init(tool: ProviderID) {
-        self.tool = tool
-        self.mode = ToolState.resolveMode(for: tool)
-        self.menuBarVisible = UserDefaults.standard.object(forKey: "menuBarVisible.\(tool.rawValue)") as? Bool ?? true
-        self.displayMode = QuotaDisplayMode.stored(storageKey: tool.storageKey)
-        self.lastAutoWindowKey = UserDefaults.standard.string(forKey: "lastAutoWindowKey.\(tool.rawValue)")
-        if let storedEnds = UserDefaults.standard.object(forKey: "lastAutoWarmEndsAt.\(tool.rawValue)") as? TimeInterval {
-            let endsAt = Date(timeIntervalSince1970: storedEnds)
-            if endsAt > Date() {
-                self.lastAutoWarmWindowEndsAt = endsAt
-            } else {
-                UserDefaults.standard.removeObject(forKey: "lastAutoWarmEndsAt.\(tool.rawValue)")
-            }
-        }
-        if let storedReset = UserDefaults.standard.object(forKey: "confirmedWarmupResetAt.\(tool.rawValue)") as? TimeInterval {
-            let resetAt = Date(timeIntervalSince1970: storedReset)
-            if resetAt > Date() {
-                self.confirmedWarmupResetAt = resetAt
-            } else {
-                UserDefaults.standard.removeObject(forKey: "confirmedWarmupResetAt.\(tool.rawValue)")
-            }
-        }
-    }
-
-    /// Resolves the persisted mode, migrating older installs. A previously
-    /// "active" tool keeps auto-warm; a previously "passive" tool stays off;
-    /// brand-new installs default to monitor-only (safe, read-only).
-    private static func resolveMode(for tool: ProviderID) -> ToolMode {
-        let key = "toolMode.\(tool.rawValue)"
-        if let raw = UserDefaults.standard.string(forKey: key), let stored = ToolMode(rawValue: raw) {
-            return stored
-        }
-        if let legacyActive = UserDefaults.standard.object(forKey: "toolActive.\(tool.rawValue)") as? Bool {
-            let migrated: ToolMode = legacyActive ? .autoWarm : .off
-            UserDefaults.standard.set(migrated.rawValue, forKey: key)
-            return migrated
-        }
-        UserDefaults.standard.set(ToolMode.monitor.rawValue, forKey: key)
-        return .monitor
-    }
-
-    var freshness: QuotaFreshness {
-        quotaSnapshot?.freshness() ?? .unknown
-    }
-
-    var lastSuccessfulFetch: Date? {
-        quotaSnapshot?.fetchedAt
-    }
-
-    var primaryMetric: QuotaMetric? {
-        quotaSnapshot?.fiveHour
-    }
-
-    var weeklyMetric: QuotaMetric? {
-        quotaSnapshot?.weekly
-    }
-
-    var credentialSource: String? {
-        quotaSnapshot?.message
-    }
-
-    var resetAt: Date? {
-        // A real (non-idle) live reset is authoritative.
-        if let metric = primaryMetric, !metric.isIdle, let liveReset = metric.resetAt {
-            return liveReset
-        }
-        // Otherwise a just-confirmed warm-up's known boundary beats an idle
-        // "if you started now" projection (which slides on every poll).
-        if let confirmedWarmupResetAt, confirmedWarmupResetAt > Date() {
-            return confirmedWarmupResetAt
-        }
-        // Fall back to the idle projection (or nil) so the UI still shows a
-        // countdown when no window has been claimed.
-        return primaryMetric?.resetAt
-    }
-
-    /// The reset of a *real* (live or just-claimed) window, excluding the idle
-    /// "if you started now" projection. `resetAt` deliberately falls back to that
-    /// sliding projection so the UI shows a countdown for idle windows — but a
-    /// projection is not a window that will actually expire, so anything that
-    /// schedules a real-world action off the reset (e.g. the "window expiring
-    /// soon" notification) must use this instead to avoid alarming the user about
-    /// an idle window that never opened.
-    var realWindowResetAt: Date? {
-        if let metric = primaryMetric, !metric.isIdle, let liveReset = metric.resetAt {
-            return liveReset
-        }
-        if let confirmedWarmupResetAt, confirmedWarmupResetAt > Date() {
-            return confirmedWarmupResetAt
-        }
-        return nil
-    }
-
-    var timeUntilReset: TimeInterval? {
-        guard let resetAt else { return nil }
-        let remaining = resetAt.timeIntervalSinceNow
-        return remaining > 0 ? remaining : nil
-    }
-
-    /// The last known 5h window's reset moment has already passed, so that
-    /// window rolled over and the snapshot's usage figures describe a window
-    /// that no longer exists. Reached when live polling is blocked (rate limit,
-    /// auth) for longer than the window itself — continuing to show the old
-    /// percentage would claim the user has far less quota than they really do.
-    ///
-    /// Note this is *not* the same as a stale-but-still-valid snapshot: while
-    /// the known reset is still in the future its numbers remain correct, which
-    /// is why the menu bar keeps counting down even when the dot is yellow.
-    var primaryWindowRolledOver: Bool {
-        quotaSnapshot?.primaryWindowRolledOver() ?? false
-    }
-
-    var windowProgress: Double {
-        primaryMetric?.remainingFraction ?? 0
-    }
-
-    /// The live 5h reading is a not-yet-settled rollover artifact (window just
-    /// opened but reports near-empty quota). Views show a neutral "settling"
-    /// state instead of an alarming 0% until a follow-up poll lands the real
-    /// number; `scheduleSettleRepoll` drives that poll.
-    var sessionSettling: Bool {
-        quotaSnapshot?.isUnsettledRolloverReading(windowDuration: tool.windowDuration) ?? false
-    }
-
-    var quotaBackoffActive: Bool {
-        quotaBackoffUntil.map { $0 > Date() } ?? false
-    }
-
-    /// Stores the decision and returns the previous skip reason (nil if it warmed
-    /// or none ran) so the caller can record a history event on a change.
-    @discardableResult
-    func recordAutoWarmDecision(_ decision: AutoWarmDecision) -> AutoWarmSkipReason? {
-        let reason = decision.skipReason
-        let previous = lastAutoWarmSkip
-        if lastAutoWarmSkip != reason { lastAutoWarmSkip = reason }
-        lastAutoWarmDecisionAt = Date()
-        return previous
-    }
-
-    func rememberAutoWindow(_ key: String) {
-        lastAutoWindowKey = key
-        UserDefaults.standard.set(key, forKey: "lastAutoWindowKey.\(tool.rawValue)")
-    }
-
-    /// Records when the window we just warmed will reset, so the auto path won't
-    /// warm it again until it has ended.
-    func rememberAutoWarmWindowEnd(_ date: Date) {
-        guard date > Date() else { return }
-        lastAutoWarmWindowEndsAt = date
-        UserDefaults.standard.set(date.timeIntervalSince1970, forKey: "lastAutoWarmEndsAt.\(tool.rawValue)")
-    }
-
-    func rememberConfirmedWarmup(startedAt: Date, duration: TimeInterval) {
-        let resetAt = startedAt.addingTimeInterval(duration)
-        guard resetAt > Date() else { return }
-        confirmedWarmupResetAt = resetAt
-        UserDefaults.standard.set(resetAt.timeIntervalSince1970, forKey: "confirmedWarmupResetAt.\(tool.rawValue)")
-    }
-
-    func clearConfirmedWarmupIfLiveResetExistsOrExpired(now: Date = Date()) {
-        // Only a *real* (non-idle) live reset supersedes the recorded warm-up
-        // reset — an idle projection (sliding "if you started now") is not proof
-        // a window opened, so it must not clear the confirmed boundary.
-        let hasRealLiveReset = primaryMetric?.resetAt != nil && primaryMetric?.isIdle != true
-        if hasRealLiveReset || (confirmedWarmupResetAt.map { $0 <= now } ?? false) {
-            confirmedWarmupResetAt = nil
-            UserDefaults.standard.removeObject(forKey: "confirmedWarmupResetAt.\(tool.rawValue)")
-        }
-    }
-}
-
 // MARK: - AppState
 
+/// The `ObservableObject` facade Views observe. It owns the published state
+/// (accounts, per-account `ToolState`, history, morning status, panel state),
+/// the timers and the shared services; behavior lives in the coordinators
+/// under `Coordinators/`, which reach this state through `CoordinatorHost`.
+/// Settings are read through `AppSettings`.
 @MainActor
-final class AppState: ObservableObject {
+final class AppState: ObservableObject, CoordinatorHost {
     @Published var showOnboarding = false
     /// Full first-run guide (see `OnboardingFlow`); separate from the missing-CLI banner above.
     @Published var showWelcomeGuide = false
@@ -268,18 +22,20 @@ final class AppState: ObservableObject {
     /// right-click menu ("Show Stats" / "Go to Settings") can drive it.
     @Published var selectedTab: AppTab = .main
     @Published var updateInfo: ReleaseInfo?
-    @Published private(set) var toolStates: [ProviderID: ToolState]
-    /// Accounts the user added on top of each CLI's default account.
-    @Published private(set) var accounts: [ProviderAccount]
+    /// Per-account state. Mutated only by `AccountsCoordinator`.
+    @Published var toolStates: [ProviderID: ToolState]
+    /// Accounts the user added on top of each CLI's default account. Mutated
+    /// only by `AccountsCoordinator`.
+    @Published var accounts: [ProviderAccount]
     @Published var history: [HistoryEvent] = []
-    @Published var morningPrewarmEnabled: Bool = UserDefaults.standard.bool(forKey: "morningPrewarmEnabled")
+    @Published var morningPrewarmEnabled: Bool
     @Published var morningStatus: String?
     /// Most recent successful quota poll across all tools. Drives the liveness
     /// watchdog so a silently-stalled app stops looking "all good."
     @Published var lastSuccessfulPollAt: Date?
     @Published var globalPassive: Bool {
         didSet {
-            UserDefaults.standard.set(globalPassive, forKey: "globalPassive")
+            settings.globalPassive = globalPassive
             if globalPassive {
                 scheduler.invalidateAll()
                 providers.forEach { notifications.cancelAll(for: $0) }
@@ -289,34 +45,36 @@ final class AppState: ObservableObject {
         }
     }
 
-    /// One long-lived scanner per tool: each caches parsed log files and only
-    /// reads what was appended since its last scan.
-    private var usageProviders: [ProviderID: LocalUsageProvider] = [:]
-    private var tokenUsageScannedAt: [ProviderID: Date] = [:]
-    /// Quota refreshes come in bursts (warm-up verification, settle re-polls,
-    /// wake); token totals need not follow each one.
-    private let tokenUsageMinInterval: TimeInterval = 60
+    let settings = AppSettings.shared
     private let runner = WarmupRunner()
     private let scheduler = Scheduler()
     private let notifications = NotificationManager.shared
     private let updateChecker = UpdateChecker()
     private let quotaProvider: QuotaProviding = QuotaProvider()
-    private let wakeScheduler = WakeScheduler()
-    private let claudeAuthRetryDelays: [TimeInterval] = [15, 45, 90]
     private var refreshTimer: Timer?
-    private var morningReapplyTask: Task<Void, Never>?
+    private var quotaTimer: Timer?
+
+    lazy var events = EventHistoryCoordinator(host: self)
+    lazy var quota = QuotaPollingCoordinator(
+        host: self, quotaProvider: quotaProvider, runner: runner, scheduler: scheduler, notifications: notifications)
+    lazy var warmup = WarmupCoordinator(host: self, runner: runner, notifications: notifications)
+    lazy var morning = MorningCoordinator(host: self, scheduler: scheduler)
+    private lazy var accountsCoordinator = AccountsCoordinator(
+        host: self, scheduler: scheduler, notifications: notifications)
 
     init() {
+        settings.migrateIfNeeded()
         let storedAccounts = ProviderAccount.load()
         accounts = storedAccounts
         var states: [ProviderID: ToolState] = [:]
         for tool in Self.orderedProviders(accounts: storedAccounts) { states[tool] = ToolState(tool: tool) }
         toolStates = states
-        globalPassive = UserDefaults.standard.object(forKey: "globalPassive") as? Bool ?? false
+        globalPassive = settings.globalPassive
+        morningPrewarmEnabled = settings.morningPrewarmEnabled
 
         scheduler.onFire = { [weak self] tool in
             Task { @MainActor [weak self] in
-                await self?.attemptAutomaticWarmup(tool: tool, reason: "scheduled refresh")
+                await self?.warmup.attemptAutomaticWarmup(tool: tool, reason: "scheduled refresh")
             }
         }
         scheduler.providers = { [weak self] in
@@ -328,18 +86,18 @@ final class AppState: ObservableObject {
                 // mistaken for a stalled app; the per-tool fires that follow
                 // will refresh this on success.
                 self?.lastSuccessfulPollAt = Date()
-                self?.handleSystemWake()
+                self?.morning.handleSystemWake()
             }
         }
 
-        loadPersistedHistory()
+        events.loadPersistedHistory()
         refreshAllActivity(allowAutomaticWarmup: false)
         startQuotaRefreshTimer()
         startUIRefreshTimer()
         if morningPrewarmEnabled {
-            scheduleMorningTimer()
-            refreshMorningHardwareStatus()
-            Task { await runScheduledMorningWarmupIfNeeded(source: .launch) }
+            morning.scheduleMorningTimer()
+            morning.refreshMorningHardwareStatus()
+            Task { await morning.runScheduledMorningWarmupIfNeeded(source: .launch) }
         }
         Task { await checkOnboarding() }
         Task { await checkForAppUpdate() }
@@ -352,17 +110,13 @@ final class AppState: ObservableObject {
         }
     }
 
+    func notifyChange() { objectWillChange.send() }
+
+    // MARK: - Accounts
+
     /// The account's live state. A task still in flight for an account that
-    /// was just removed gets an inert, unsaved stand-in (mode `.off`), so it
-    /// winds down without crashing or re-arming timers.
-    func state(for tool: ProviderID) -> ToolState {
-        if let state = toolStates[tool] { return state }
-        if let orphan = orphanStates[tool] { return orphan }
-        let orphan = ToolState(orphan: tool)
-        orphanStates[tool] = orphan
-        return orphan
-    }
-    private var orphanStates: [ProviderID: ToolState] = [:]
+    /// was just removed gets an inert, unsaved stand-in (mode `.off`).
+    func state(for tool: ProviderID) -> ToolState { accountsCoordinator.state(for: tool) }
 
     /// Every watched account in display order: per CLI, the default account
     /// first, then added accounts in the order they were added.
@@ -374,134 +128,17 @@ final class AppState: ObservableObject {
         }
     }
 
-    // MARK: - Accounts
+    typealias AccountError = AccountsCoordinator.AccountError
 
-    enum AccountError: LocalizedError {
-        case invalidName
-        case invalidHome
-        case duplicateHome
-        case createFailed(String)
-
-        var errorDescription: String? {
-            switch self {
-            case .invalidName: return "Give the account a name."
-            case .invalidHome: return "The folder must be an absolute path without quotes."
-            case .duplicateHome: return "Another account already uses this folder."
-            case .createFailed(let reason): return "Could not create the folder: \(reason)"
-            }
-        }
-    }
-
-    /// Adds an account whose CLI home is `home` (created if missing). The new
-    /// account starts in Monitor mode; nothing is sent until the user opts in.
     @discardableResult
     func addAccount(kind: ToolID, name: String, home: String) throws -> ProviderID {
-        let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmedName.isEmpty else { throw AccountError.invalidName }
-        let standardized = (home as NSString).expandingTildeInPath
-        let normalized = standardized.count > 1 && standardized.hasSuffix("/")
-            ? String(standardized.dropLast()) : standardized
-        guard ProviderAccount.isValidHome(normalized) else { throw AccountError.invalidHome }
-        let defaultHome = (kind.logDirectoryURL?.deletingLastPathComponent().path) ?? ""
-        guard normalized != defaultHome,
-              !accounts.contains(where: { $0.kind == kind && $0.home == normalized }) else {
-            throw AccountError.duplicateHome
-        }
-        do {
-            try FileManager.default.createDirectory(
-                atPath: normalized,
-                withIntermediateDirectories: true,
-                attributes: [.posixPermissions: 0o700]
-            )
-        } catch {
-            throw AccountError.createFailed(error.localizedDescription)
-        }
-
-        var id = ProviderAccount.slugified(trimmedName)
-        if !ProviderAccount.isValidID(id) { id = "acct" }
-        let base = id
-        var n = 2
-        while accounts.contains(where: { $0.id == id }) {
-            id = "\(base)-\(n)"
-            n += 1
-        }
-
-        let account = ProviderAccount(id: id, kind: kind, name: trimmedName, home: normalized)
-        let provider = account.providerID
-        UserDefaults.standard.set(ToolMode.monitor.rawValue, forKey: "toolMode.\(provider.storageKey)")
-        // Menu-bar space is scarce; an added account is pinned only on request.
-        UserDefaults.standard.set(false, forKey: "menuBarVisible.\(provider.storageKey)")
-        let newState = ToolState(tool: provider)
-        objectWillChange.send()
-        accounts.append(account)
-        ProviderAccount.save(accounts)
-        toolStates[provider] = newState
-        addHistory(tool: provider, kind: .quotaFetch, title: "Account added", detail: normalized)
-        Task { await refreshQuota(for: provider, allowAutomaticWarmup: false) }
-        return provider
+        try accountsCoordinator.addAccount(kind: kind, name: name, home: home)
     }
 
-    func renameAccount(_ tool: ProviderID, to name: String) {
-        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !tool.isDefault, !trimmed.isEmpty,
-              let index = accounts.firstIndex(where: { $0.id == tool.accountID }) else { return }
-        objectWillChange.send()
-        accounts[index].name = trimmed
-        ProviderAccount.save(accounts)
-        toolStates[tool]?.tool = accounts[index].providerID
-    }
+    func renameAccount(_ tool: ProviderID, to name: String) { accountsCoordinator.renameAccount(tool, to: name) }
+    func removeAccount(_ tool: ProviderID) { accountsCoordinator.removeAccount(tool) }
 
-    /// Stops watching an added account and forgets its settings. The CLI home
-    /// folder (and the login inside it) is left on disk untouched.
-    func removeAccount(_ tool: ProviderID) {
-        guard !tool.isDefault, let state = toolStates[tool] else { return }
-        scheduler.invalidate(tool: tool)
-        notifications.cancelAll(for: tool)
-        state.claimVerifyTask?.cancel()
-        state.settleRepollTask?.cancel()
-        clearAuthRetry(for: state)
-        if tool.kind == .claude { CredentialStore().invalidateCachedClaudeCredential(for: tool) }
-
-        let suffix = ".\(tool.storageKey)"
-        for key in UserDefaults.standard.dictionaryRepresentation().keys where key.hasSuffix(suffix) {
-            UserDefaults.standard.removeObject(forKey: key)
-        }
-        UsageHistoryStore.shared.removeAll(for: tool)
-        EventLogStore.shared.removeAll(for: tool)
-        history.removeAll { $0.tool?.storageKey == tool.storageKey }
-
-        objectWillChange.send()
-        accounts.removeAll { $0.id == tool.accountID }
-        ProviderAccount.save(accounts)
-        toolStates[tool] = nil
-        usageProviders[tool] = nil
-        tokenUsageScannedAt[tool] = nil
-        exportStatus()
-        addHistory(tool: nil, kind: .quotaFetch, title: "Account removed", detail: tool.displayName)
-    }
-
-    /// Rewrites `status.json` (see `QuotaStatusExport`) from every watched
-    /// account's latest snapshot, for the statusline script and other tools.
-    private func exportStatus() {
-        let entries = providers.compactMap { provider -> QuotaStatusExport.Entry? in
-            guard let state = toolStates[provider] else { return nil }
-            return QuotaStatusExport.Entry(
-                provider: state.tool,
-                mode: state.mode,
-                displayMode: state.displayMode,
-                pinned: state.menuBarVisible,
-                snapshot: state.quotaSnapshot
-            )
-        }
-        QuotaStatusExport.write(QuotaStatusExport.make(entries))
-    }
-
-    private func usageProvider(for tool: ProviderID) -> LocalUsageProvider {
-        if let existing = usageProviders[tool] { return existing }
-        let created = LocalUsageProvider()
-        usageProviders[tool] = created
-        return created
-    }
+    // MARK: - Per-account switches
 
     /// Pins/unpins a tool in the menu bar. Routed through AppState so the
     /// menu-bar label (which observes AppState, not each ToolState) refreshes
@@ -520,25 +157,6 @@ final class AppState: ObservableObject {
         state.displayMode = state.displayMode.toggled
     }
 
-    /// Whether anything is being polled right now (drives the watchdog).
-    var hasLivePolling: Bool {
-        !globalPassive && providers.contains { state(for: $0).isMonitored }
-    }
-
-    /// True when the app should be polling but hasn't had a successful quota
-    /// fetch in a suspiciously long time — i.e. it may be silently stalled.
-    var watcherStale: Bool {
-        guard hasLivePolling, let last = lastSuccessfulPollAt else { return false }
-        return Date().timeIntervalSince(last) > max(refreshInterval * 2, 120)
-    }
-
-    /// User-facing one-liner for the watchdog, or nil when healthy.
-    var watcherStatusText: String? {
-        guard watcherStale, let last = lastSuccessfulPollAt else { return nil }
-        let minutes = max(1, Int(Date().timeIntervalSince(last) / 60))
-        return "No successful check in \(minutes)m"
-    }
-
     /// Switches a tool between off / monitor-only / auto-warm. Routed through
     /// AppState (with an explicit objectWillChange) so the menu-bar label —
     /// which observes AppState, not each ToolState — refreshes immediately.
@@ -553,70 +171,34 @@ final class AppState: ObservableObject {
             scheduler.invalidate(tool: tool)
             notifications.cancelAll(for: tool)
             state.claimVerifyTask?.cancel(); state.claimVerifyTask = nil
-            clearAuthRetry(for: state)
+            quota.clearAuthRetry(for: state)
             state.nextRefreshAt = nil
-            addHistory(tool: tool, kind: .quotaFetch, title: "Monitoring off", detail: "QuotaWarmer will not watch this tool")
+            events.addHistory(tool: tool, kind: .quotaFetch, title: "Monitoring off", detail: "QuotaWarmer will not watch this tool")
         case .monitor:
-            addHistory(tool: tool, kind: .quotaFetch, title: "Monitor only", detail: "Watching quota; automatic warm-up off")
-            Task { await refreshQuota(for: tool, allowAutomaticWarmup: false) }
+            events.addHistory(tool: tool, kind: .quotaFetch, title: "Monitor only", detail: "Watching quota; automatic warm-up off")
+            Task { await quota.refreshQuota(for: tool, allowAutomaticWarmup: false) }
         case .autoWarm:
-            addHistory(tool: tool, kind: .quotaFetch, title: "Auto-warm on", detail: "Will claim fresh windows automatically")
-            Task { await refreshQuota(for: tool, allowAutomaticWarmup: true) }
+            events.addHistory(tool: tool, kind: .quotaFetch, title: "Auto-warm on", detail: "Will claim fresh windows automatically")
+            Task { await quota.refreshQuota(for: tool, allowAutomaticWarmup: true) }
         }
     }
 
-    func activate(_ tool: ProviderID) {
-        Task { await triggerWarmup(tool: tool, mode: "manual") }
-    }
+    // MARK: - Facade over the coordinators
+
+    var hasLivePolling: Bool { quota.hasLivePolling }
+    var watcherStale: Bool { quota.watcherStale }
+    var watcherStatusText: String? { quota.watcherStatusText }
+    var quotaAlertSettings: QuotaAlertSettings { quota.quotaAlertSettings }
 
     func refreshAllActivity(allowAutomaticWarmup: Bool = false, includeInactive: Bool = false) {
-        isRefreshing = true
-        let tools = providers.filter { includeInactive || state(for: $0).isMonitored }
-        guard !tools.isEmpty else {
-            isRefreshing = false
-            return
-        }
-        for tool in tools {
-            Task { await refreshQuota(for: tool, allowAutomaticWarmup: allowAutomaticWarmup) }
-        }
-        Task { @MainActor in
-            try? await Task.sleep(nanoseconds: 700_000_000)
-            self.isRefreshing = false
-        }
+        quota.refreshAllActivity(allowAutomaticWarmup: allowAutomaticWarmup, includeInactive: includeInactive)
     }
 
-    /// The Refresh button. Unlike a timer poll this must always do something the
-    /// user can see: it ignores an outstanding rate-limit backoff (which would
-    /// otherwise leave the button a silent no-op for the whole retry window) and
-    /// may show the Keychain approval dialog, because a click is the one moment
-    /// interaction is wanted. An opted-in auto-warm still resumes here, bounded
-    /// to once per window by the usual dedup, so approving access mid-window
-    /// claims it instead of waiting for the next tick.
-    /// Redeems a banked Codex reset, then force-refreshes so the bars show the
-    /// restored quota. Returns a user-facing error, or nil on success.
     func useResetCredit(_ credit: ResetCredit, for tool: ProviderID) async -> String? {
-        do {
-            let windows = try await quotaProvider.consumeCodexResetCredit(id: credit.id, provider: tool)
-            addHistory(tool: tool, kind: .quotaFetch, title: "Banked reset used",
-                       detail: "\(credit.title); \(windows) window(s) reset")
-            await refreshQuotaManually(for: tool)
-            return nil
-        } catch let error as QuotaProviderError {
-            return error.errorDescription ?? "Could not use the reset."
-        } catch {
-            return "Could not use the reset."
-        }
+        await quota.useResetCredit(credit, for: tool)
     }
 
-    func refreshQuotaManually(for tool: ProviderID) async {
-        let shouldAutoWarm = tool.kind == .claude && state(for: tool).isAutoWarmEnabled
-        await refreshQuota(
-            for: tool,
-            allowAutomaticWarmup: shouldAutoWarm,
-            allowsCredentialInteraction: tool.kind == .claude,
-            force: true
-        )
-    }
+    func refreshQuotaManually(for tool: ProviderID) async { await quota.refreshQuotaManually(for: tool) }
 
     func refreshQuota(
         for tool: ProviderID,
@@ -625,945 +207,43 @@ final class AppState: ObservableObject {
         allowsCredentialInteraction: Bool = false,
         force: Bool = false
     ) async {
-        let state = state(for: tool)
-        // Timer, wake and scheduler callbacks can converge on the same instant.
-        // Claude refresh tokens are single-use, so only one Claude request chain
-        // may run at a time. Codex keeps its existing behavior unchanged.
-        guard tool.kind != .claude || !state.isFetchingQuota else { return }
-        refreshTokenUsage(for: tool, force: force)
-        if let backoffUntil = state.quotaBackoffUntil, backoffUntil > Date() {
-            // An explicit user request retries now. Clearing the backoff matters
-            // as much as skipping it: a source that is no longer limited must be
-            // able to return to healthy instead of staying pinned to the stale
-            // reading until the original retry time.
-            if force {
-                clearQuotaBackoff(for: state)
-            } else {
-                state.nextRefreshAt = backoffUntil
-                state.errorMessage = rateLimitMessage(until: backoffUntil)
-                state.healthMessage = state.errorMessage ?? state.healthMessage
-                scheduleQuotaRefresh(for: tool, at: backoffUntil)
-                return
-            }
-        }
-
-        state.isFetchingQuota = true
-        state.errorMessage = nil
-
-        do {
-            let snapshot = try await quotaProvider.fetchQuota(
-                for: tool,
-                allowsCredentialInteraction: allowsCredentialInteraction
-            )
-            clearQuotaBackoff(for: state)
-            clearAuthRetry(for: state)
-            lastSuccessfulPollAt = Date()
-            state.quotaSnapshot = snapshot
-            // Removed mid-fetch: don't recreate the deleted history file.
-            if toolStates[tool] != nil {
-                UsageHistoryStore.shared.record(snapshot, for: tool)
-                evaluateQuotaAlerts(for: tool, snapshot: snapshot)
-            }
-            exportStatus()
-            state.sourceHealth = snapshot.freshness() == .fresh ? .healthy : .stale
-            state.authStatus = .available
-            state.healthMessage = snapshot.message ?? snapshot.primarySource
-            state.nextRefreshAt = Date().addingTimeInterval(refreshInterval)
-            state.clearConfirmedWarmupIfLiveResetExistsOrExpired()
-            // Background self-heal of a stuck warm-up status. Skipped while a
-            // warm-up is in flight, and skipped on the recheck path (which calls
-            // evaluateWarmupClaim right after) so the two never both confirm.
-            if reconcileStuckOutcome, !state.isWarming { reconcileWarmupOutcome(for: state) }
-            addHistory(
-                tool: tool,
-                kind: .quotaFetch,
-                title: "Quota fetched",
-                detail: quotaFetchDetail(snapshot)
-            )
-            rescheduleRefresh(for: tool)
-
-            // A successful OAuth quota response is stronger evidence than the
-            // headless `claude auth status` probe, which can report logged-out
-            // even while the real Claude CLI and OAuth credential are usable.
-            // The actual warm-up command still reports authentication failure.
-            if allowAutomaticWarmup {
-                // Claude serializes quota fetches. Release the outer fetch before
-                // the warm-up path performs its post-command verification fetch;
-                // otherwise the single-flight guard would discard that proof.
-                if tool.kind == .claude { state.isFetchingQuota = false }
-                await attemptAutomaticWarmup(tool: tool, reason: "fresh quota")
-            }
-        } catch {
-            applyQuotaError(error, to: state)
-        }
-
-        state.isFetchingQuota = false
-    }
-
-    /// Settings → Alerts (session/weekly used% thresholds, pace warning).
-    var quotaAlertSettings: QuotaAlertSettings { QuotaAlertSettings.load() }
-
-    /// Posts any session/weekly/pace warning a fresh snapshot makes due, each at
-    /// most once per window (see `QuotaAlertPolicy`). Silent while paused.
-    private func evaluateQuotaAlerts(for tool: ProviderID, snapshot: QuotaSnapshot) {
-        guard !globalPassive else { return }
-        let marks = QuotaAlertMark.load(storageKey: tool.storageKey)
-        let evaluation = QuotaAlertPolicy.evaluate(
-            snapshot: snapshot,
-            settings: quotaAlertSettings,
-            marks: marks,
-            fiveHourDuration: tool.windowDuration,
-            weeklyDuration: tool.weeklyWindowDuration
-        )
-        if evaluation.marks != marks {
-            QuotaAlertMark.save(evaluation.marks, storageKey: tool.storageKey)
-        }
-        for alert in evaluation.alerts {
-            notifications.notifyQuotaAlert(alert, tool: tool)
-            DiagnosticLogger.append("quota_alert tool=\(tool.rawValue) kind=\(alert.kind.rawValue) used=\(alert.usedPercent)")
-        }
-    }
-
-    private func refreshTokenUsage(for tool: ProviderID, force: Bool = false) {
-        let state = state(for: tool)
-        // Skip if a scan is already in flight for this tool — otherwise rapid
-        // refresh cycles can pile up overlapping disk scans. This single-flight
-        // is also what makes sharing one provider per tool safe.
-        guard !state.isFetchingTokenUsage else { return }
-        let provider = usageProvider(for: tool)
-        if !force, let last = tokenUsageScannedAt[tool], Date().timeIntervalSince(last) < tokenUsageMinInterval {
-            return
-        }
-        tokenUsageScannedAt[tool] = Date()
-        state.isFetchingTokenUsage = true
-        // The scan walks the CLI JSONL logs synchronously; keep it off the main
-        // actor so the menu-bar panel never freezes (which also kept it from
-        // dismissing on outside clicks).
-        Task.detached(priority: .utility) {
-            let summary = provider.usage(for: tool.kind, baseURL: tool.logDirectoryURL)
-            await MainActor.run {
-                state.tokenUsageSummary = summary
-                state.isFetchingTokenUsage = false
-            }
-        }
-    }
-
-    func applyRefreshInterval() {
-        startQuotaRefreshTimer()
-        startUIRefreshTimer()
-        for tool in providers where state(for: tool).isMonitored {
-            state(for: tool).nextRefreshAt = Date().addingTimeInterval(refreshInterval)
-        }
-    }
-
-    // MARK: - Morning pre-warm
-
-    /// Toggle entry point from Settings. Enabling/disabling touches the system
-    /// power schedule via a single admin prompt.
-    func setMorningPrewarm(_ enabled: Bool) {
-        guard enabled != morningPrewarmEnabled else { return }
-        if enabled {
-            Task { await enableMorningPrewarm() }
-        } else {
-            Task { await disableMorningPrewarm() }
-        }
-    }
-
-    /// Called when the wake time or weekday setting changes. Reschedules the
-    /// in-app timer immediately and debounces the hardware re-apply so rapid
-    /// stepper edits coalesce into one admin prompt.
-    func morningTimeChanged() {
-        guard morningPrewarmEnabled else { return }
-        scheduleMorningTimer()
-        morningReapplyTask?.cancel()
-        morningReapplyTask = Task { [weak self] in
-            try? await Task.sleep(nanoseconds: 1_300_000_000)
-            guard !Task.isCancelled else { return }
-            await self?.applyHardwareWake()
-        }
-    }
-
-    private func enableMorningPrewarm() async {
-        morningPrewarmEnabled = true
-        UserDefaults.standard.set(true, forKey: "morningPrewarmEnabled")
-        let ok = await applyHardwareWake()
-        if ok {
-            scheduleMorningTimer()
-        } else {
-            // Admin cancelled / failed — revert so the UI reflects reality.
-            morningPrewarmEnabled = false
-            UserDefaults.standard.set(false, forKey: "morningPrewarmEnabled")
-            scheduler.cancelMorning()
-        }
-    }
-
-    private func disableMorningPrewarm() async {
-        morningPrewarmEnabled = false
-        UserDefaults.standard.set(false, forKey: "morningPrewarmEnabled")
-        scheduler.cancelMorning()
-        morningReapplyTask?.cancel()
-        let result = await wakeScheduler.cancel()
-        morningStatus = result.success ? "Morning pre-warm is off." : result.message
-        addHistory(tool: nil, kind: .quotaFetch, title: "Morning pre-warm off", detail: result.message)
-    }
-
-    @discardableResult
-    private func applyHardwareWake() async -> Bool {
-        let days: WakeScheduler.WakeDays = morningWeekdaysOnly ? .weekdays : .everyday
-        let result = await wakeScheduler.apply(hour: morningHour, minute: morningMinute, days: days)
-        if result.success {
-            let timeText = String(format: "%02d:%02d", morningHour, morningMinute)
-            if WakeScheduler.isOnACPower() {
-                morningStatus = "Mac will wake at \(timeText) and start your window."
-            } else {
-                morningStatus = "Scheduled for \(timeText), but on battery with the lid closed the wake may be skipped — your window warms the moment you open the lid."
-            }
-            addHistory(tool: nil, kind: .quotaFetch, title: "Morning pre-warm scheduled", detail: result.message)
-        } else {
-            morningStatus = result.message
-        }
-        return result.success
-    }
-
-    private func refreshMorningHardwareStatus() {
-        let days: WakeScheduler.WakeDays = morningWeekdaysOnly ? .weekdays : .everyday
-        guard wakeScheduler.scheduleMatches(hour: morningHour, minute: morningMinute, days: days) else {
-            let expectedTime = String(format: "%02d:%02d", morningHour, morningMinute)
-            morningStatus = "Morning wake is not installed or was replaced. Toggle Wake & Warm off and on to repair it."
-            DiagnosticLogger.append("morning_wake_schedule_mismatch expected=\(expectedTime) days=\(days.humanLabel)")
-            return
-        }
-        let timeText = String(format: "%02d:%02d", morningHour, morningMinute)
-        morningStatus = WakeScheduler.isOnACPower()
-            ? "Mac will wake at \(timeText) and start your window."
-            : "Scheduled for \(timeText); battery and a closed lid can prevent the wake."
-    }
-
-    private func scheduleMorningTimer() {
-        scheduler.cancelMorning()
-        guard morningPrewarmEnabled, let fireDate = nextMorningFireDate() else { return }
-        DiagnosticLogger.append("morning_timer_scheduled fireAt=\(ISO8601DateFormatter().string(from: fireDate))")
-        scheduler.scheduleMorning(at: fireDate) { [weak self] sleepGuard in
-            Task { @MainActor [weak self] in
-                defer { sleepGuard.release() }
-                await self?.runScheduledMorningWarmupIfNeeded(source: .timer)
-            }
-        }
-    }
-
-    private enum ScheduledMorningSource {
-        case timer
-        case wake
-        case launch
-    }
-
-    /// Scheduled pre-warm is intentionally separate from fresh-reset detection:
-    /// it may start a not-yet-active window after a missed launch/wake, so it
-    /// must not depend on `resetAt` being present in quota API payloads.
-    private func runScheduledMorningWarmupIfNeeded(source: ScheduledMorningSource) async {
-        guard morningPrewarmEnabled, !globalPassive else { scheduleMorningTimer(); return }
-
-        let now = Date()
-        let todayKey = Self.dayKey(now)
-        if morningWeekdaysOnly, Calendar.current.isDateInWeekend(now) {
-            scheduleMorningTimer(); return
-        }
-
-        guard let scheduledAt = todaysMorningDate(now: now) else {
-            scheduleMorningTimer(); return
-        }
-
-        guard now >= scheduledAt else {
-            scheduleMorningTimer(); return
-        }
-
-        // A pmset wake may be a short DarkWake. Keep the Mac awake only while
-        // the scheduled quota check and bounded warm-up command are running so
-        // the system cannot return to sleep halfway through the claim.
-        let scheduledActivity = ProcessInfo.processInfo.beginActivity(
-            options: [.userInitiated, .latencyCritical],
-            reason: "QuotaWarmer scheduled morning warm-up"
-        )
-        defer { ProcessInfo.processInfo.endActivity(scheduledActivity) }
-        let sleepGuard = SleepGuard(reason: "morning-\(String(describing: source))")
-        defer { sleepGuard.release() }
-        DiagnosticLogger.append("morning_warm_running source=\(String(describing: source))")
-
-        var caughtUpSuccessfully = false
-        for tool in providers where state(for: tool).isAutoWarmEnabled {
-            let state = state(for: tool)
-            let gate = managedWarmupGate(for: tool)
-            guard gate == .warm else {
-                noteAutoWarmDecision(state, gate)
-                logMorningSkip(tool: tool, reason: "managedWarmupBlocked", source: source)
-                continue
-            }
-
-            // Scheduled warm-up is still an automatic action: require a fresh,
-            // healthy provider snapshot. Local CLI logs are display context only.
-            await refreshQuota(
-                for: tool,
-                allowAutomaticWarmup: false
-            )
-            let sourceFresh = state.sourceHealth == .healthy && state.freshness == .fresh
-            let liveWindowActive = state.quotaSnapshot?.showsActiveWindow() == true
-            let decision = MorningWarmupPolicy.decision(
-                now: now,
-                scheduledAt: scheduledAt,
-                dayKey: todayKey,
-                lastSuccessfulDay: lastMorningWarmDay(for: tool, todayKey: todayKey),
-                liveWindowActive: liveWindowActive,
-                sourceFresh: sourceFresh,
-                windowDuration: tool.windowDuration
-            )
-
-            guard case .run(let caughtUp) = decision else {
-                if case .skip(let reason) = decision {
-                    noteAutoWarmDecision(state, .skip(.morning(reason)))
-                    logMorningSkip(tool: tool, reason: reason.rawValue, source: source)
-                }
-                continue
-            }
-            noteAutoWarmDecision(state, .warm)
-
-            let previousQuotaFetchedAt = state.quotaSnapshot?.fetchedAt
-            let succeeded = await triggerWarmup(
-                tool: tool,
-                mode: caughtUp ? "scheduled-catchup" : "scheduled"
-            )
-            if succeeded {
-                rememberMorningWarmSuccess(for: tool, dayKey: todayKey)
-                claimAutoWindowFromPostWarmQuota(for: tool, previousFetchedAt: previousQuotaFetchedAt)
-                caughtUpSuccessfully = caughtUpSuccessfully || caughtUp
-            }
-        }
-
-        if caughtUpSuccessfully, source != .timer {
-            NotificationManager.shared.notifyMorningCatchUp(onBattery: !WakeScheduler.isOnACPower())
-        }
-        scheduleMorningTimer()
-    }
-
-    private func logMorningSkip(tool: ProviderID, reason: String, source: ScheduledMorningSource) {
-        DiagnosticLogger.append(
-            "morning_warm_skipped tool=\(tool.rawValue) reason=\(reason) source=\(String(describing: source))"
+        await quota.refreshQuota(
+            for: tool,
+            allowAutomaticWarmup: allowAutomaticWarmup,
+            reconcileStuckOutcome: reconcileStuckOutcome,
+            allowsCredentialInteraction: allowsCredentialInteraction,
+            force: force
         )
     }
 
-    private func handleSystemWake() {
-        guard morningPrewarmEnabled else { return }
-        guard let todaysMorning = todaysMorningDate(now: Date()), Date() >= todaysMorning else { return }
-        Task { @MainActor in await runScheduledMorningWarmupIfNeeded(source: .wake) }
-    }
-
-    private func nextMorningFireDate() -> Date? {
-        var comps = DateComponents()
-        comps.hour = morningHour
-        comps.minute = morningMinute
-        comps.second = 0
-        let cal = Calendar.current
-        guard var next = cal.nextDate(after: Date(), matching: comps, matchingPolicy: .nextTime) else { return nil }
-        if morningWeekdaysOnly {
-            var guardCount = 0
-            while cal.isDateInWeekend(next), guardCount < 8 {
-                guard let bumped = cal.nextDate(after: next, matching: comps, matchingPolicy: .nextTime) else { break }
-                next = bumped
-                guardCount += 1
-            }
-        }
-        return next
-    }
-
-    private func todaysMorningDate(now: Date = Date()) -> Date? {
-        var comps = Calendar.current.dateComponents([.year, .month, .day], from: now)
-        comps.hour = morningHour
-        comps.minute = morningMinute
-        comps.second = 0
-        return Calendar.current.date(from: comps)
-    }
-
-    private func upcomingReservedMorningDate(now: Date = Date()) -> Date? {
-        guard morningPrewarmEnabled, !globalPassive else { return nil }
-        if morningWeekdaysOnly, Calendar.current.isDateInWeekend(now) { return nil }
-        guard let scheduledAt = todaysMorningDate(now: now), now < scheduledAt else { return nil }
-        return scheduledAt
-    }
-
-    private var morningHour: Int { UserDefaults.standard.object(forKey: "morningPrewarmHour") as? Int ?? 6 }
-    private var morningMinute: Int { UserDefaults.standard.object(forKey: "morningPrewarmMinute") as? Int ?? 0 }
-    private var morningWeekdaysOnly: Bool { UserDefaults.standard.object(forKey: "morningPrewarmWeekdaysOnly") as? Bool ?? true }
-
-    private func lastMorningWarmDay(for tool: ProviderID, todayKey: String) -> String? {
-        let perToolDay = UserDefaults.standard.string(forKey: "lastMorningWarmDay.\(tool.rawValue)")
-        let legacyDay = UserDefaults.standard.string(forKey: "lastMorningWarmDay")
-        let resolved = MorningWarmupPolicy.resolvedLastSuccessfulDay(
-            perToolDay: perToolDay,
-            legacyDay: legacyDay,
-            currentDay: todayKey
-        )
-        if perToolDay == nil, resolved == todayKey {
-            rememberMorningWarmSuccess(for: tool, dayKey: todayKey)
-        }
-        return resolved
-    }
-
-    private func rememberMorningWarmSuccess(for tool: ProviderID, dayKey: String) {
-        UserDefaults.standard.set(dayKey, forKey: "lastMorningWarmDay.\(tool.rawValue)")
-    }
-
-    private static func dayKey(_ date: Date) -> String {
-        let c = Calendar.current.dateComponents([.year, .month, .day], from: date)
-        return "\(c.year ?? 0)-\(c.month ?? 0)-\(c.day ?? 0)"
-    }
-
-    func checkForAppUpdate() async {
-        updateInfo = await updateChecker.checkForUpdate()
-        addHistory(tool: nil, kind: .updateCheck, title: "Update checked", detail: updateInfo == nil ? "No update found" : "Update available")
-    }
-
-    private func attemptAutomaticWarmup(tool: ProviderID, reason: String) async {
-        let state = state(for: tool)
-        let gate = managedWarmupGate(for: tool)
-        guard gate == .warm else {
-            noteAutoWarmDecision(state, gate)
-            return
-        }
-
-        await refreshQuotaForAutomaticDecision(tool: tool)
-        let now = Date()
-        let decision = AutoWarmDecision.window(
-            AutoWarmDecision.Window(
-                sourceHealth: state.sourceHealth,
-                snapshot: state.quotaSnapshot,
-                windowDuration: tool.windowDuration,
-                lastAutoWindowKey: state.lastAutoWindowKey,
-                lastAutoWarmWindowEndsAt: state.lastAutoWarmWindowEndsAt,
-                upcomingMorningAt: upcomingReservedMorningDate(now: now)
-            ),
-            now: now
-        )
-        noteAutoWarmDecision(state, decision)
-        guard decision == .warm, let snapshot = state.quotaSnapshot else {
-            switch decision.skipReason {
-            case .reservedForMorning(let scheduledAt):
-                DiagnosticLogger.append(
-                    "auto_warm_reserved_for_morning tool=\(tool.rawValue) scheduledAt=\(ISO8601DateFormatter().string(from: scheduledAt))"
-                )
-            case .warmedWindowActive(let endsAt):
-                DiagnosticLogger.append("auto_warm_skipped_active_window tool=\(tool.rawValue) windowEndsAt=\(ISO8601DateFormatter().string(from: endsAt))")
-            default:
-                break
-            }
-            return
-        }
-
-        addHistory(tool: tool, kind: .resetDetected, title: "Fresh reset detected", detail: reason)
-        let previousFetchedAt = snapshot.fetchedAt
-        let succeeded = await triggerWarmup(tool: tool, mode: "auto")
-        // Only claim the window once a warm-up actually succeeded. Marking it on
-        // failure would burn the dedup slot and leave a fresh window unwarmed
-        // until the next reset; instead, let the next refresh retry (under backoff).
-        //
-        // Claim the *post-warm* window key, not the pre-warm one: warming an idle
-        // Codex window opens it, so the pre-warm snapshot's stable "idle" key would
-        // wrongly match — and block — the next idle period's claim. Keying on the
-        // freshly-opened (now active) window lets each later idle window re-claim.
-        if succeeded {
-            claimAutoWindowFromPostWarmQuota(for: tool, previousFetchedAt: previousFetchedAt)
-        }
-    }
-
-    private func managedWarmupGate(for tool: ProviderID) -> AutoWarmDecision {
-        let state = state(for: tool)
-        return AutoWarmDecision.gate(
-            AutoWarmDecision.Gate(
-                isAutoWarmEnabled: state.isAutoWarmEnabled,
-                globalPassive: globalPassive,
-                isWarming: state.isWarming,
-                authStatus: state.authStatus,
-                rateLimitGuard: UserDefaults.standard.object(forKey: "rateLimitGuard") as? Bool ?? true,
-                backoffUntil: state.backoffUntil
-            ),
-            now: Date()
-        )
-    }
-
-    private func claimAutoWindowFromPostWarmQuota(for tool: ProviderID, previousFetchedAt: Date?) {
-        let state = state(for: tool)
-        guard let snapshot = state.quotaSnapshot,
-              // If the post-warm quota still reads idle (e.g. the API hasn't caught
-              // up to the just-sent command), don't store the stable "idle" key — it
-              // would block the next idle period's claim. Leave the prior key in
-              // place; `lastAutoWarmWindowEndsAt` already guards against re-warming.
-              snapshot.fiveHour?.isIdle != true,
-              snapshot.isClaimableAutoWindow(previousFetchedAt: previousFetchedAt) else {
-            return
-        }
-        state.rememberAutoWindow(snapshot.rawWindowKey)
-    }
-
-    private func refreshQuotaForAutomaticDecision(tool: ProviderID) async {
-        let state = state(for: tool)
-        if state.freshness == .fresh, state.sourceHealth != .rateLimited { return }
-        await refreshQuota(for: tool, allowAutomaticWarmup: false)
+    func activate(_ tool: ProviderID) {
+        Task { await warmup.triggerWarmup(tool: tool, mode: "manual") }
     }
 
     @discardableResult
     func triggerWarmup(tool: ProviderID, mode: String) async -> Bool {
-        let state = state(for: tool)
-        guard !state.isWarming else { return false }
-
-        state.isWarming = true
-        state.errorMessage = nil
-        // Any warm-up (auto, morning, manual) can start inside a DarkWake; hold
-        // the Mac awake until the command and the immediate quota re-check end.
-        let sleepGuard = SleepGuard(reason: "warmup-\(tool.rawValue)-\(mode)")
-        defer { sleepGuard.release() }
-        state.claimVerifyTask?.cancel(); state.claimVerifyTask = nil
-        state.settleRepollTask?.cancel(); state.settleRepollTask = nil
-        notifications.cancelAll(for: tool)
-
-        var succeeded = false
-        do {
-            let result = try await runner.warmup(tool)
-            let entry = WarmupLog(timestamp: result.date, mode: mode, command: result.command, output: result.output)
-            state.warmupLogs.insert(entry, at: 0)
-            if state.warmupLogs.count > 20 { state.warmupLogs.removeLast() }
-            state.backoffUntil = nil
-            addHistory(
-                tool: tool,
-                kind: historyKind(forWarmupMode: mode),
-                title: historyTitle(forWarmupMode: mode),
-                detail: "Command completed",
-                outcome: .sent,
-                model: WarmupRunner.modelArgument(in: result.command)
-            )
-            state.lastWarmupModel = WarmupRunner.modelArgument(in: result.command)
-            notifications.notifyWarmupCommandSent(tool: tool)
-            state.lastWarmupOutcome = .pending(sentAt: result.date)
-            await refreshQuota(
-                for: tool,
-                allowAutomaticWarmup: false
-            )
-            // No *real* live window yet: either no reset at all, or only an idle
-            // "if you started now" projection (Claude's null `five_hour` is now
-            // surfaced as an idle window with a sliding reset). Record the
-            // command's expected reset so the confirm path (evaluateWarmupClaim)
-            // has a stable boundary to trust instead of the sliding projection.
-            let liveMetric = state.primaryMetric
-            if liveMetric?.resetAt == nil || liveMetric?.isIdle == true {
-                state.rememberConfirmedWarmup(startedAt: result.date, duration: tool.windowDuration)
-            }
-            // Remember when this freshly-claimed window resets so the auto path
-            // won't re-warm it on the next poll (see attemptAutomaticWarmup).
-            state.rememberAutoWarmWindowEnd(state.resetAt ?? result.date.addingTimeInterval(tool.windowDuration))
-            // Prove the window actually opened (not just that the command exited
-            // zero). Confirmed now, or re-checked after a bounded grace period.
-            evaluateWarmupClaim(for: tool, sentAt: result.date, attempt: 0)
-            succeeded = true
-        } catch WarmupError.authenticationRequired(let message) {
-            state.errorMessage = message
-            state.healthMessage = message
-            state.sourceHealth = .authFailure
-            state.authStatus = .failed
-            state.backoffUntil = nil
-            state.lastWarmupOutcome = .failed(at: Date(), reason: message)
-            addHistory(tool: tool, kind: .authFailure, title: "Warmup blocked", detail: message, outcome: .failed)
-            scheduleClaudeAuthRecheckIfNeeded(for: state, reason: message)
-        } catch {
-            state.errorMessage = error.localizedDescription
-            state.backoffUntil = Date().addingTimeInterval(nextBackoff(for: state))
-            state.lastWarmupOutcome = .failed(at: Date(), reason: error.localizedDescription)
-            addHistory(tool: tool, kind: .pollingError, title: "Warmup failed", detail: error.localizedDescription, outcome: .failed)
-        }
-
-        state.isWarming = false
-        return succeeded
+        await warmup.triggerWarmup(tool: tool, mode: mode)
     }
 
-    /// Grace delays for re-checking that a warm-up actually opened the window,
-    /// to tolerate provider lag before falling back to the assumed window. Bounded.
-    private let claimVerifyDelays: [TimeInterval] = [30, 90]
+    func setMorningPrewarm(_ enabled: Bool) { morning.setMorningPrewarm(enabled) }
+    func morningTimeChanged() { morning.morningTimeChanged() }
 
-    /// Evaluates the live (post-warm) snapshot: marks the window confirmed, or
-    /// schedules a bounded grace re-check, or — once attempts are exhausted —
-    /// confirms against the completed command's expected (assumed) window.
-    private func evaluateWarmupClaim(for tool: ProviderID, sentAt: Date, attempt: Int) {
-        let state = state(for: tool)
-        if state.quotaSnapshot?.showsActiveWindow() == true {
-            state.claimVerifyTask?.cancel(); state.claimVerifyTask = nil
-            state.lastWarmupOutcome = .confirmed(at: Date(), resetAt: state.resetAt)
-            let fields = claimFields(state)
-            addHistory(
-                tool: tool, kind: .resetDetected, title: "Window claim confirmed", detail: claimConfirmedDetail(state),
-                outcome: .confirmed, windowKey: fields.windowKey, windowResetAt: fields.windowResetAt, model: fields.model
-            )
-            DiagnosticLogger.append("warmup_claim_confirmed tool=\(tool.rawValue) attempt=\(attempt)")
-            if state.sourceHealth == .healthy {
-                notifications.notifyActivated(tool: tool)
-            }
-            // The window's reset time is right, but right at rollover the provider
-            // can pair it with the just-ended window's high utilization (reads as
-            // "0% left"). Re-poll a few times so the settled percentage lands in
-            // seconds instead of waiting for the next 5-minute refresh.
-            scheduleSettleRepoll(for: tool)
-            return
-        }
-
-        guard attempt < claimVerifyDelays.count else {
-            let expectedReset = state.confirmedWarmupResetAt ?? state.resetAt
-            state.lastWarmupOutcome = .unverified(sentAt: sentAt, expectedResetAt: expectedReset)
-            addHistory(
-                tool: tool,
-                kind: .pollingError,
-                title: "Window claim unverified",
-                detail: "The command completed, but live quota did not confirm an active window.",
-                outcome: .missed,
-                windowResetAt: expectedReset,
-                model: state.lastWarmupModel
-            )
-            DiagnosticLogger.append("warmup_claim_unverified tool=\(tool.rawValue)")
-            return
-        }
-
-        let delay = claimVerifyDelays[attempt]
-        state.lastWarmupOutcome = .pending(sentAt: sentAt)
-        state.claimVerifyTask?.cancel()
-        DiagnosticLogger.append("warmup_claim_recheck tool=\(tool.rawValue) attempt=\(attempt + 1) delay=\(Int(delay))s")
-        state.claimVerifyTask = Task { [weak self] in
-            try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
-            guard !Task.isCancelled else { return }
-            await self?.runClaimVerification(tool: tool, sentAt: sentAt, attempt: attempt + 1)
-        }
+    func checkForAppUpdate() async {
+        updateInfo = await updateChecker.checkForUpdate()
+        events.addHistory(tool: nil, kind: .updateCheck, title: "Update checked", detail: updateInfo == nil ? "No update found" : "Update available")
     }
 
-    /// Heals a stuck warm-up status on regular polls (outside the bounded in-warm
-    /// verification): a `.pending` outcome whose recheck task was lost (e.g.
-    /// cancelled without resolving) is upgraded to `.confirmed` once a later
-    /// snapshot actually shows the window open — this covers Claude's laggy
-    /// `five_hour` reporting and verification suspended across system sleep. A
-    /// `.pending` whose warmed window has fully elapsed without ever confirming
-    /// is cleared so the status card doesn't linger for hours.
-    private func reconcileWarmupOutcome(for state: ToolState) {
-        switch state.lastWarmupOutcome {
-        case .pending(let sentAt):
-            if state.quotaSnapshot?.showsActiveWindow() == true {
-                state.claimVerifyTask?.cancel(); state.claimVerifyTask = nil
-                state.lastWarmupOutcome = .confirmed(at: Date(), resetAt: state.resetAt)
-                let fields = claimFields(state)
-                addHistory(
-                    tool: state.tool, kind: .resetDetected, title: "Window claim confirmed", detail: claimConfirmedDetail(state),
-                    outcome: .confirmed, windowKey: fields.windowKey, windowResetAt: fields.windowResetAt, model: fields.model
-                )
-                DiagnosticLogger.append("warmup_claim_healed tool=\(state.tool.rawValue)")
-            } else if Date().timeIntervalSince(sentAt) > state.tool.windowDuration {
-                state.lastWarmupOutcome = .none
-            }
-        case .confirmed(_, let resetAt):
-            // The claimed window has fully reset (its boundary is in the past) and
-            // the live snapshot no longer shows an active window — clear the
-            // "Window claimed at …" card so it doesn't keep implying an active
-            // window hours after that window expired.
-            if let resetAt, resetAt <= Date(),
-               state.quotaSnapshot?.showsActiveWindow() != true {
-                state.lastWarmupOutcome = .none
-            }
-        case .unverified(_, let expectedResetAt):
-            if state.quotaSnapshot?.showsActiveWindow() == true {
-                state.lastWarmupOutcome = .confirmed(at: Date(), resetAt: state.resetAt)
-                let fields = claimFields(state)
-                addHistory(
-                    tool: state.tool, kind: .resetDetected, title: "Window claim confirmed", detail: claimConfirmedDetail(state),
-                    outcome: .confirmed, windowKey: fields.windowKey, windowResetAt: fields.windowResetAt, model: fields.model
-                )
-                DiagnosticLogger.append("warmup_claim_healed tool=\(state.tool.rawValue)")
-            } else if let expectedResetAt, expectedResetAt <= Date() {
-                state.lastWarmupOutcome = .none
-            }
-        default:
-            break
-        }
-    }
+    // MARK: - Timers & panel
 
-    private func runClaimVerification(tool: ProviderID, sentAt: Date, attempt: Int) async {
-        let state = state(for: tool)
-        guard state.claimVerifyTask != nil else { return }
-        state.claimVerifyTask = nil
-        await refreshQuota(for: tool, allowAutomaticWarmup: false, reconcileStuckOutcome: false)
-        evaluateWarmupClaim(for: tool, sentAt: sentAt, attempt: attempt)
-    }
-
-    /// Short, bounded follow-up polls that run only while the live 5h reading is
-    /// an unsettled rollover artifact (`sessionSettling`). Stops as soon as the
-    /// provider returns the real percentage, or after the last delay. Distinct
-    /// from `claimVerifyTask` (which proves the *window* opened, and stops on
-    /// confirmation) — this exists purely to settle the displayed *quota*.
-    private let settleRepollDelays: [TimeInterval] = [20, 45, 90]
-
-    private func scheduleSettleRepoll(for tool: ProviderID, attempt: Int = 0) {
-        let state = state(for: tool)
-        guard state.sessionSettling, attempt < settleRepollDelays.count else {
-            state.settleRepollTask?.cancel(); state.settleRepollTask = nil
-            return
-        }
-        let delay = settleRepollDelays[attempt]
-        state.settleRepollTask?.cancel()
-        DiagnosticLogger.append("quota_settle_repoll tool=\(tool.rawValue) attempt=\(attempt + 1) delay=\(Int(delay))s")
-        state.settleRepollTask = Task { [weak self] in
-            try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
-            guard !Task.isCancelled else { return }
-            await self?.refreshQuota(for: tool, allowAutomaticWarmup: false, reconcileStuckOutcome: false)
-            self?.scheduleSettleRepoll(for: tool, attempt: attempt + 1)
-        }
-    }
-
-    private func claimConfirmedDetail(_ state: ToolState) -> String {
-        guard let reset = state.resetAt else { return "Window is active." }
-        let seconds = max(0, Int(reset.timeIntervalSinceNow))
-        return "Window active · resets in \(seconds / 3600)h \((seconds % 3600) / 60)m"
-    }
-
-    private func historyKind(forWarmupMode mode: String) -> HistoryKind {
-        switch mode {
-        case "auto", "scheduled", "scheduled-catchup":
-            return .autoWarmup
-        default:
-            return .manualWarmup
-        }
-    }
-
-    private func historyTitle(forWarmupMode mode: String) -> String {
-        switch mode {
-        case "auto":
-            return "Auto warmup sent"
-        case "scheduled":
-            return "Scheduled warmup sent"
-        case "scheduled-catchup":
-            return "Scheduled catch-up warmup sent"
-        default:
-            return "Manual warmup sent"
-        }
-    }
-
-    private func applyQuotaBackoff(for state: ToolState, retryAfter: TimeInterval?) -> Date {
-        let baseDelay: TimeInterval = 5 * 60
-        let maxDelay: TimeInterval = 60 * 60
-        let fallbackDelay = state.quotaBackoffDelay > 0
-            ? min(state.quotaBackoffDelay * 2, maxDelay)
-            : baseDelay
-        let delay = max(fallbackDelay, retryAfter ?? 0)
-        let retryAt = Date().addingTimeInterval(delay)
-
-        state.quotaBackoffDelay = delay
-        state.quotaBackoffUntil = retryAt
-        state.nextRefreshAt = retryAt
-        scheduleQuotaRefresh(for: state.tool, at: retryAt)
-        return retryAt
-    }
-
-    private func clearQuotaBackoff(for state: ToolState) {
-        state.quotaBackoffUntil = nil
-        state.quotaBackoffDelay = 0
-    }
-
-    private func clearAuthRetry(for state: ToolState) {
-        state.authRetryTask?.cancel()
-        state.authRetryTask = nil
-        state.authRetryAttempts = 0
-        state.authRetryScheduledAt = nil
-    }
-
-    private func applyCLIAuthenticationStatusIfNeeded(for tool: ProviderID, to state: ToolState) async -> Bool {
-        guard tool.kind == .claude else { return true }
-
-        switch await runner.cliAuthenticationStatus(for: tool) {
-        case .authenticated:
-            if state.authStatus == .failed || state.authStatus == .missing {
-                addHistory(tool: tool, kind: .quotaFetch, title: "Claude CLI auth restored", detail: "Warmup can run again")
-            }
-            state.authStatus = .available
-            if state.sourceHealth == .authFailure, let snapshot = state.quotaSnapshot {
-                state.sourceHealth = snapshot.freshness() == .fresh ? .healthy : .stale
-            }
-            if state.errorMessage == WarmupRunner.claudeLoginRequiredMessage {
-                state.errorMessage = nil
-            }
-            state.backoffUntil = nil
-            // Cancel any pending retry task but preserve authRetryAttempts so that
-            // if the subsequent refreshQuota call also fails, scheduleClaudeAuthRecheckIfNeeded
-            // continues from the current attempt index instead of restarting from 0.
-            // authRetryAttempts is only reset to 0 by the refreshQuota success path.
-            state.authRetryTask?.cancel()
-            state.authRetryTask = nil
-            state.authRetryScheduledAt = nil
-            return true
-        case .notAuthenticated(let message):
-            let wasAlreadyBlocked = state.authStatus == .failed && state.errorMessage == message
-            state.authStatus = .failed
-            state.sourceHealth = .authFailure
-            state.errorMessage = message
-            state.healthMessage = message
-            state.backoffUntil = nil
-            if !wasAlreadyBlocked {
-                addHistory(tool: tool, kind: .authFailure, title: "Claude CLI login required", detail: message)
-            }
-            scheduleClaudeAuthRecheckIfNeeded(for: state, reason: message)
-            return false
-        case .unknown(let message):
-            DiagnosticLogger.append("cli_auth_status_unknown tool=\(tool.rawValue) reason=\(message)")
-            return true
-        }
-    }
-
-    private func scheduleQuotaRefresh(for tool: ProviderID, at date: Date) {
-        guard state(for: tool).isMonitored, !globalPassive else { return }
-        scheduler.schedule(tool: tool, at: date)
-    }
-
-    private func rateLimitMessage(until date: Date) -> String {
-        "rate limited; retry at \(shortTime(date))"
-    }
-
-    private func shortTime(_ date: Date) -> String {
-        let formatter = DateFormatter()
-        formatter.dateStyle = .none
-        formatter.timeStyle = .short
-        return formatter.string(from: date)
-    }
-
-    private func applyQuotaError(_ error: Error, to state: ToolState) {
-        let message = error.localizedDescription
-        state.errorMessage = message
-        state.healthMessage = message
-
-        if let providerError = error as? QuotaProviderError {
-            switch providerError {
-            case .credentialInteractionRequired:
-                clearQuotaBackoff(for: state)
-                clearAuthRetry(for: state)
-                state.sourceHealth = .authFailure
-                state.authStatus = .missing
-                addHistory(tool: state.tool, kind: .authFailure, title: "Claude access needs approval", detail: message)
-            case .cliRefreshRequired:
-                clearQuotaBackoff(for: state)
-                clearAuthRetry(for: state)
-                state.errorMessage = nil
-                state.healthMessage = message
-                state.sourceHealth = .stale
-                state.authStatus = .available
-                addHistory(tool: state.tool, kind: .quotaFetch, title: "Claude CLI refresh needed", detail: message)
-            case .authFailure:
-                clearQuotaBackoff(for: state)
-                clearAuthRetry(for: state)
-                state.sourceHealth = .authFailure
-                state.authStatus = .failed
-                addHistory(tool: state.tool, kind: .authFailure, title: "Authorization failed", detail: message)
-            case .missingCredentials:
-                clearQuotaBackoff(for: state)
-                state.sourceHealth = .authFailure
-                state.authStatus = .missing
-                addHistory(tool: state.tool, kind: .authFailure, title: "Credentials missing", detail: message)
-                scheduleClaudeAuthRecheckIfNeeded(for: state, reason: message)
-            case .rateLimited(_, let retryAfter):
-                clearAuthRetry(for: state)
-                let retryAt = applyQuotaBackoff(for: state, retryAfter: retryAfter)
-                let retryMessage = rateLimitMessage(until: retryAt)
-                state.sourceHealth = .rateLimited
-                state.authStatus = .available
-                state.errorMessage = retryMessage
-                state.healthMessage = retryMessage
-                addHistory(tool: state.tool, kind: .rateLimit, title: "Rate limited", detail: "\(message). Retrying at \(shortTime(retryAt)).")
-            case .unavailable, .malformed:
-                clearQuotaBackoff(for: state)
-                clearAuthRetry(for: state)
-                state.sourceHealth = state.quotaSnapshot == nil ? .unavailable : .stale
-                addHistory(tool: state.tool, kind: .pollingError, title: "Quota fetch failed", detail: message)
-            }
-        } else {
-            clearQuotaBackoff(for: state)
-            clearAuthRetry(for: state)
-            state.sourceHealth = state.quotaSnapshot == nil ? .unavailable : .stale
-            addHistory(tool: state.tool, kind: .pollingError, title: "Quota fetch failed", detail: message)
-        }
-    }
-
-    private func quotaFetchDetail(_ snapshot: QuotaSnapshot) -> String {
-        var parts = [snapshot.primarySource]
-        if let corroborating = snapshot.corroboratingSource {
-            parts.append("checked \(corroborating)")
-        }
-        if let credentialSource = snapshot.message, !credentialSource.isEmpty {
-            parts.append("via \(credentialSource)")
-        }
-        return parts.joined(separator: ", ")
-    }
-
-    private func scheduleClaudeAuthRecheckIfNeeded(for state: ToolState, reason: String) {
-        guard state.tool.kind == .claude, state.isMonitored, !globalPassive else { return }
-        guard state.authRetryAttempts < claudeAuthRetryDelays.count else {
-            DiagnosticLogger.append(
-                "auth_recheck_exhausted tool=\(state.tool.rawValue) attempts=\(state.authRetryAttempts) reason=\(reason)"
-            )
-            return
-        }
-
-        state.authRetryTask?.cancel()
-        let delay = claudeAuthRetryDelays[state.authRetryAttempts]
-        state.authRetryAttempts += 1
-        let attempt = state.authRetryAttempts
-        let retryAt = Date().addingTimeInterval(delay)
-        state.authRetryScheduledAt = retryAt
-        state.nextRefreshAt = retryAt
-
-        addHistory(
-            tool: state.tool,
-            kind: .quotaFetch,
-            title: "Auth recheck scheduled",
-            detail: "Retry \(attempt)/\(claudeAuthRetryDelays.count) at \(shortTime(retryAt)) after Claude login"
-        )
-        DiagnosticLogger.append(
-            "auth_recheck_scheduled tool=\(state.tool.rawValue) attempt=\(attempt) retryAt=\(ISO8601DateFormatter().string(from: retryAt)) reason=\(reason)"
-        )
-
-        state.authRetryTask = Task { [weak self] in
-            try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
-            guard !Task.isCancelled else { return }
-            await self?.runClaudeAuthRecheck(for: state.tool, attempt: attempt)
-        }
-    }
-
-    private func runClaudeAuthRecheck(for tool: ProviderID, attempt: Int) async {
-        guard let state = toolStates[tool] else { return }
-        guard state.authRetryAttempts == attempt else { return }
-        state.authRetryTask = nil
-        state.authRetryScheduledAt = nil
-        DiagnosticLogger.append("auth_recheck_running tool=\(tool.rawValue) attempt=\(attempt)")
-        guard await applyCLIAuthenticationStatusIfNeeded(for: tool, to: state) else { return }
-        await refreshQuota(for: tool, allowAutomaticWarmup: false)
-    }
-
-    private func rescheduleRefresh(for tool: ProviderID) {
-        let state = state(for: tool)
-        guard state.isMonitored, !globalPassive else {
-            scheduler.invalidate(tool: tool)
-            state.nextRefreshAt = nil
-            return
-        }
-        let nextDate = Date().addingTimeInterval(refreshInterval)
-        scheduler.schedule(tool: tool, at: nextDate)
-        state.nextRefreshAt = nextDate
-        // Use the *real* window reset, not the idle "if you started now"
-        // projection that `resetAt` falls back to — otherwise an idle window
-        // (e.g. Claude's null `five_hour`) would schedule a misleading
-        // "window expiring soon" notification for a window that never opened.
-        if let resetAt = state.realWindowResetAt, resetAt > Date() {
-            notifications.scheduleWindowWarning(for: tool, expiresAt: resetAt)
-        }
+    func applyRefreshInterval() {
+        startQuotaRefreshTimer()
+        startUIRefreshTimer()
+        quota.applyRefreshIntervalToStates()
     }
 
     private func startQuotaRefreshTimer() {
         quotaTimer?.invalidate()
-        quotaTimer = Timer.scheduledTimer(withTimeInterval: refreshInterval, repeats: true) { [weak self] _ in
+        quotaTimer = Timer.scheduledTimer(withTimeInterval: settings.refreshInterval, repeats: true) { [weak self] _ in
             Task { @MainActor [weak self] in
                 self?.refreshAllActivity(allowAutomaticWarmup: true)
             }
@@ -1592,7 +272,6 @@ final class AppState: ObservableObject {
         }
     }
 
-    private var quotaTimer: Timer?
     /// Set by AppDelegate while the panel is shown; gates the per-second
     /// SwiftUI invalidation above.
     var isPanelVisible = false
@@ -1613,86 +292,19 @@ final class AppState: ObservableObject {
     /// Menu-bar refresh for the 1 s tick while the panel is closed.
     var onUITick: (() -> Void)?
 
-    private var refreshInterval: TimeInterval {
-        let stored = UserDefaults.standard.integer(forKey: "refreshInterval")
-        return TimeInterval(stored.nonZero ?? 300)
-    }
-
-    /// Records the decision on the tool and, only when the skip reason changed
-    /// to a user-relevant one, a single history event (not one per poll).
-    private func noteAutoWarmDecision(_ state: ToolState, _ decision: AutoWarmDecision) {
-        let previous = state.recordAutoWarmDecision(decision)
-        if let entry = AutoWarmExplanation.historyEntry(previous: previous, new: decision.skipReason, now: Date()) {
-            addHistory(tool: state.tool, kind: .autoWarmup, title: entry.title, detail: entry.detail, outcome: .skipped)
-        }
-    }
-
-    /// Newest events kept in memory for the UI; the full log lives on disk.
-    static let historyInMemory = 500
-
-    private func addHistory(
-        tool: ProviderID?, kind: HistoryKind, title: String, detail: String,
-        outcome: EventOutcome? = nil, windowKey: String? = nil, windowResetAt: Date? = nil, model: String? = nil
-    ) {
-        // An in-flight task for a just-removed account must not resurrect its events.
-        if let tool, toolStates[tool] == nil { return }
-        let event = HistoryEvent(
-            tool: tool, kind: kind, title: title, detail: detail,
-            outcome: outcome, windowKey: windowKey, windowResetAt: windowResetAt, model: model
-        )
-        history.insert(event, at: 0)
-        if history.count > Self.historyInMemory { history.removeLast(history.count - Self.historyInMemory) }
-        EventLogStore.shared.append(event)
-        DiagnosticLogger.appendHistory(event)
-    }
-
-    /// Fills `history` from `events.jsonl` (pruning it) without losing events
-    /// recorded while the file was loading. Events of accounts that no longer
-    /// exist are dropped; the rest get their full `ProviderID` back.
-    private func loadPersistedHistory() {
-        Task { [weak self] in
-            let loaded = await EventLogStore.shared.loadAndPrune()
-            guard let self else { return }
-            let known = Dictionary(uniqueKeysWithValues: self.providers.map { ($0.storageKey, $0) })
-            let restored = loaded.reversed().compactMap { event -> HistoryEvent? in
-                guard let key = event.tool?.storageKey else { return event }
-                guard let provider = known[key] else { return nil }
-                return HistoryEvent(
-                    id: event.id, timestamp: event.timestamp, tool: provider, kind: event.kind,
-                    title: event.title, detail: event.detail, outcome: event.outcome,
-                    windowKey: event.windowKey, windowResetAt: event.windowResetAt, model: event.model
-                )
-            }
-            let fresh = Set(self.history.map(\.id))
-            self.history = Array((self.history + restored.filter { !fresh.contains($0.id) })
-                .prefix(Self.historyInMemory))
-        }
-    }
-
-    /// Structured fields shared by the claim receipt events.
-    private func claimFields(_ state: ToolState) -> (windowKey: String?, windowResetAt: Date?, model: String?) {
-        (state.quotaSnapshot?.rawWindowKey, state.resetAt, state.lastWarmupModel)
-    }
-
-    private func nextBackoff(for state: ToolState) -> TimeInterval {
-        if let backoffUntil = state.backoffUntil, backoffUntil > Date() {
-            return min(backoffUntil.timeIntervalSinceNow * 2, 30 * 60)
-        }
-        return 5 * 60
-    }
+    // MARK: - Onboarding
 
     private func checkOnboarding() async {
         var anyMissing = false
         for tool in ToolID.allCases {
             if await runner.cliMissing(tool) { anyMissing = true }
         }
-        let defaults = UserDefaults.standard
         let decision = OnboardingFlow.launchDecision(
-            completedVersion: defaults.object(forKey: "onboardingCompletedVersion") as? Int,
+            completedVersion: settings.onboardingCompletedVersion,
             hadPriorSettings: hadPriorSettings,
             anyCLIMissing: anyMissing,
-            bannerDismissed: defaults.bool(forKey: "onboardingDismissed"))
-        if decision.markCompleted { defaults.set(OnboardingFlow.currentVersion, forKey: "onboardingCompletedVersion") }
+            bannerDismissed: settings.onboardingDismissed)
+        if decision.markCompleted { settings.onboardingCompletedVersion = OnboardingFlow.currentVersion }
         if decision.showGuide { openWelcomeGuide() }
         if decision.showMissingCLIBanner { showOnboarding = true }
     }
@@ -1704,10 +316,7 @@ final class AppState: ObservableObject {
     }
 
     func finishWelcomeGuide() {
-        UserDefaults.standard.set(OnboardingFlow.currentVersion, forKey: "onboardingCompletedVersion")
+        settings.onboardingCompletedVersion = OnboardingFlow.currentVersion
         showWelcomeGuide = false
     }
 }
-
-/// Diagnostic logging verbosity, set from the menu-bar right-click menu.
-/// `.off` silences the on-disk diagnostics log entirely.

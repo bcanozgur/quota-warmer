@@ -102,8 +102,7 @@ enum ToolID: String, CaseIterable, Identifiable, Codable {
     /// Rolling quota window duration. Claude Code is always 5 h server-side;
     /// the setting lets the user adjust if Anthropic ever changes this.
     var windowDuration: TimeInterval {
-        let stored = UserDefaults.standard.integer(forKey: "windowDurationSecs")
-        return stored > 0 ? TimeInterval(stored) : 5 * 3600
+        AppSettings.shared.windowDuration
     }
 
     /// Weekly quota window length (7 days). Used by the in-app pace marker to

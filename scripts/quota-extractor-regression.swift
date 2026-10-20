@@ -725,7 +725,13 @@ access_token=private-value
             require(!source.contains("\"Ready\""), "\(sourcePath) must not render an uppercase Ready status")
         }
 
-        let appStateSource = readSource("Sources/QuotaWarmer/AppState.swift")
+        // AppState's behavior is split across the coordinators and ToolState; assert on all of it.
+        let coordinatorsDir = "Sources/QuotaWarmer/Coordinators"
+        let coordinatorFiles = ((try? FileManager.default.contentsOfDirectory(atPath: coordinatorsDir)) ?? [])
+            .filter { $0.hasSuffix(".swift") }.sorted()
+        let appStateSource = (coordinatorFiles.map { "\(coordinatorsDir)/\($0)" }
+            + ["Sources/QuotaWarmer/Models/ToolState.swift", "Sources/QuotaWarmer/AppState.swift"])
+            .map(readSource).joined(separator: "\n")
         require(
             appStateSource.contains("liveMetric?.resetAt == nil || liveMetric?.isIdle == true")
                 && appStateSource.contains("state.rememberConfirmedWarmup(startedAt: result.date, duration: tool.windowDuration)"),
@@ -902,7 +908,7 @@ access_token=private-value
             "Concurrent Claude refresh triggers must collapse to a single in-flight request chain"
         )
         require(
-            appStateSource.contains("let shouldAutoWarm = tool.kind == .claude && state(for: tool).isAutoWarmEnabled"),
+            appStateSource.contains("let shouldAutoWarm = tool.kind == .claude && host.state(for: tool).isAutoWarmEnabled"),
             "A manual Claude refresh must immediately resume an opted-in auto-warm after credential approval"
         )
         require(

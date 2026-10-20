@@ -15,7 +15,7 @@ struct QuotaAlertMark: Codable, Equatable {
     /// Highest used% threshold announced in this window (pace uses 100).
     var level: Int
 
-    static func defaultsKey(storageKey: String) -> String { "quotaAlertMarks.\(storageKey)" }
+    static func defaultsKey(storageKey: String) -> String { AppSettings.Key.quotaAlertMarks(storageKey) }
 
     static func load(storageKey: String, defaults: UserDefaults = .standard) -> [String: QuotaAlertMark] {
         guard let data = defaults.data(forKey: defaultsKey(storageKey: storageKey)),
@@ -42,13 +42,13 @@ struct QuotaAlertSettings: Equatable {
     /// Choices offered by the threshold pickers.
     static let thresholdChoices = [50, 60, 70, 75, 80, 85, 90, 95]
 
-    static let sessionEnabledKey = "alertSessionEnabled"
-    static let sessionFirstKey = "alertSessionFirst"
-    static let sessionSecondKey = "alertSessionSecond"
-    static let weeklyEnabledKey = "alertWeeklyEnabled"
-    static let weeklyFirstKey = "alertWeeklyFirst"
-    static let weeklySecondKey = "alertWeeklySecond"
-    static let paceEnabledKey = "alertPaceEnabled"
+    static let sessionEnabledKey = AppSettings.Key.alertSessionEnabled
+    static let sessionFirstKey = AppSettings.Key.alertSessionFirst
+    static let sessionSecondKey = AppSettings.Key.alertSessionSecond
+    static let weeklyEnabledKey = AppSettings.Key.alertWeeklyEnabled
+    static let weeklyFirstKey = AppSettings.Key.alertWeeklyFirst
+    static let weeklySecondKey = AppSettings.Key.alertWeeklySecond
+    static let paceEnabledKey = AppSettings.Key.alertPaceEnabled
 
     /// Next pick for a click-to-cycle threshold control; wraps to the first.
     static func nextThreshold(after value: Int) -> Int {

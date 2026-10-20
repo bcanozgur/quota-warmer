@@ -43,6 +43,7 @@ jobs:
           swiftc \
             -module-cache-path /tmp/QuotaWarmerQuotaModuleCache \
             -parse-as-library \
+            Sources/QuotaWarmer/Models/AppSettings.swift \
             Sources/QuotaWarmer/Models/ToolID.swift \
             Sources/QuotaWarmer/Models/QuotaModels.swift \
             Sources/QuotaWarmer/Models/AutoWarmDecision.swift \
@@ -65,6 +66,7 @@ jobs:
           swiftc \
             -module-cache-path /tmp/QuotaWarmerQuotaModuleCache \
             -parse-as-library \
+            Sources/QuotaWarmer/Models/AppSettings.swift \
             Sources/QuotaWarmer/Models/ToolID.swift \
             Sources/QuotaWarmer/Models/QuotaModels.swift \
             Sources/QuotaWarmer/Models/AutoWarmDecision.swift \
@@ -93,6 +95,7 @@ jobs:
           swiftc \
             -module-cache-path /tmp/QuotaWarmerQuotaModuleCache \
             -parse-as-library \
+            Sources/QuotaWarmer/Models/AppSettings.swift \
             Sources/QuotaWarmer/Models/ToolID.swift \
             Sources/QuotaWarmer/Models/QuotaModels.swift \
             Sources/QuotaWarmer/Models/AutoWarmDecision.swift \

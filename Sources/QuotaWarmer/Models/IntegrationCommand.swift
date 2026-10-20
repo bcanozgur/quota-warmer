@@ -81,9 +81,9 @@ struct IntegrationRefreshThrottle {
 /// A global hotkey for opening the popover: a key (`kVK_ANSI_*` code) plus
 /// modifier flags. Stored in `UserDefaults`; off by default.
 struct HotKeySpec: Equatable {
-    static let enabledKey = "globalHotKeyEnabled"
-    static let keyCodeKey = "globalHotKeyCode"
-    static let modifiersKey = "globalHotKeyModifiers"
+    static let enabledKey = AppSettings.Key.globalHotKeyEnabled
+    static let keyCodeKey = AppSettings.Key.globalHotKeyCode
+    static let modifiersKey = AppSettings.Key.globalHotKeyModifiers
 
     /// Modifier bits stored in defaults (independent of Carbon's values).
     struct Modifiers: OptionSet, Equatable {

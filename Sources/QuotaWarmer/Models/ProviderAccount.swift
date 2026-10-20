@@ -196,7 +196,7 @@ struct ProviderAccount: Codable, Hashable, Identifiable {
         return String(out.prefix(24))
     }
 
-    static let defaultsKey = "accounts.v1"
+    static let defaultsKey = AppSettings.Key.accounts
 
     static func load(from defaults: UserDefaults = .standard) -> [ProviderAccount] {
         guard let data = defaults.data(forKey: defaultsKey),

@@ -19,7 +19,7 @@ enum QuotaDisplayMode: String, CaseIterable {
     }
 
     static func defaultsKey(for tool: ToolID) -> String { defaultsKey(storageKey: tool.rawValue) }
-    static func defaultsKey(storageKey: String) -> String { "quotaDisplayMode.\(storageKey)" }
+    static func defaultsKey(storageKey: String) -> String { AppSettings.Key.quotaDisplayMode(storageKey) }
 }
 
 /// Claude-style severity of a quota window, driven by how much has been used.
@@ -53,7 +53,7 @@ enum QuotaUsageLevel: Equatable {
 enum QuotaDisplay {
     /// Settings → "Colorful Quota Bars". On (default): bars are blue / orange /
     /// red by usage. Off: the original single-color (ink) bars.
-    static let colorfulBarsKey = "colorfulQuotaBars"
+    static let colorfulBarsKey = AppSettings.Key.colorfulQuotaBars
 
     /// Severity to color a row with, or nil for the plain single-color style.
     /// A row with no data, or one still settling after a rollover, stays in the
