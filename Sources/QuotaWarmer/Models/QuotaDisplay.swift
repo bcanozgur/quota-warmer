@@ -162,3 +162,66 @@ enum QuotaDisplay {
         return ""
     }
 }
+
+/// Compact human duration: `46m`, `3h 30m`, `2d 8h`.
+func quotaDurationText(_ seconds: Int) -> String {
+    if seconds < 60 { return "\(seconds)s" }
+    if seconds < 3600 { return "\(seconds / 60)m" }
+    if seconds < 86_400 { return "\(seconds / 3600)h \((seconds % 3600) / 60)m" }
+    return "\(seconds / 86_400)d \((seconds % 86_400) / 3600)h"
+}
+
+/// Pace model behind the usage bars: compares quota left against time left in the
+/// window. When more time than quota remains, the quota will empty before the
+/// window resets — we surface how far "behind" it is and a projected run-out time.
+enum QuotaPace {
+    struct Result {
+        var timeLeftFraction: Double?   // thumb position; nil when no reset is known
+        var resetText: String           // "Resets in 3h 30m" (or a fallback)
+        var shortPercent: Int?          // deficit vs pace, only when behind
+        var runsOutText: String?        // "Runs out in 46m", only when behind
+        var runsOutIn: TimeInterval? = nil  // seconds behind `runsOutText`
+        var isBehind: Bool { shortPercent != nil }
+    }
+
+    static func compute(
+        quotaLeft: Double,
+        resetAt: Date?,
+        windowDuration: TimeInterval,
+        now: Date,
+        fallbackResetText: String
+    ) -> Result {
+        // No reset, or one that has already passed (an expired window whose
+        // snapshot hasn't refreshed to the new window yet). Showing "Resets in 0s"
+        // for a window that already ended is misleading, so fall back to the
+        // neutral freshness text just like the no-reset case.
+        guard let resetAt, resetAt > now else {
+            return Result(timeLeftFraction: nil, resetText: fallbackResetText,
+                          shortPercent: nil, runsOutText: nil)
+        }
+        let timeRemaining = resetAt.timeIntervalSince(now)
+        let timeLeftFraction = min(max(timeRemaining / windowDuration, 0), 1)
+        let resetText = "Resets in \(quotaDurationText(Int(timeRemaining)))"
+
+        // Behind pace: more of the window's time remains than quota does, so at
+        // the current burn rate the quota empties before the window resets.
+        guard timeLeftFraction > quotaLeft + 0.01 else {
+            return Result(timeLeftFraction: timeLeftFraction, resetText: resetText,
+                          shortPercent: nil, runsOutText: nil)
+        }
+        let shortPercent = Int(round((timeLeftFraction - quotaLeft) * 100))
+        let elapsed = windowDuration - timeRemaining
+        let quotaUsed = max(0, 1 - quotaLeft)
+        var runsOutText: String?
+        var runsOutIn: TimeInterval?
+        if elapsed > 0, quotaUsed > 0 {
+            let secondsToRunout = quotaLeft / (quotaUsed / elapsed)
+            if secondsToRunout.isFinite, secondsToRunout >= 0, secondsToRunout < timeRemaining {
+                runsOutText = "Runs out in \(quotaDurationText(Int(secondsToRunout)))"
+                runsOutIn = secondsToRunout
+            }
+        }
+        return Result(timeLeftFraction: timeLeftFraction, resetText: resetText,
+                      shortPercent: shortPercent, runsOutText: runsOutText, runsOutIn: runsOutIn)
+    }
+}

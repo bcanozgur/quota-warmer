@@ -22,6 +22,7 @@ struct QuotaDisplayRegression {
         testAppearanceMode()
         testTimeInput()
         testColorfulSetting()
+        testQuotaAlerts()
 
         if failures.isEmpty {
             print("Quota display regressions passed (\(checks) checks)")
@@ -310,6 +311,208 @@ struct QuotaDisplayRegression {
                 if back.hour != hour || back.minute != minute { fail("'\(text)' round-trip gave \(back)") }
             }
         }
+    }
+
+    // MARK: - Proactive quota alerts
+
+    static let alertNow = Date(timeIntervalSince1970: 1_800_000_000)
+    static let fiveHours: TimeInterval = 5 * 3600
+    static let oneWeek: TimeInterval = 7 * 86_400
+
+    /// Hand-built snapshot: `used` fractions, resets `resetIn` seconds after `alertNow`.
+    static func alertSnapshot(
+        used: Double? = nil, resetIn: TimeInterval? = 3600, idle: Bool = false,
+        weeklyUsed: Double? = nil, weeklyResetIn: TimeInterval = 3 * 86_400,
+        fetchedAt: Date = alertNow, source: String = "Claude OAuth usage"
+    ) -> QuotaSnapshot {
+        let resetAt = resetIn.map { alertNow.addingTimeInterval($0) }
+        let fiveHour = used.map {
+            QuotaMetric(name: "5h", usedPercent: $0, remainingPercent: nil, resetAt: resetAt, detail: nil, isIdle: idle)
+        }
+        let weekly = weeklyUsed.map {
+            QuotaMetric(name: "Weekly", usedPercent: $0, remainingPercent: nil,
+                        resetAt: alertNow.addingTimeInterval(weeklyResetIn), detail: nil)
+        }
+        let key = [source, resetAt.map { ISO8601DateFormatter().string(from: $0) } ?? "no-reset"].joined(separator: "|")
+        return QuotaSnapshot(tool: .claude, fetchedAt: fetchedAt, primarySource: source, corroboratingSource: nil,
+                             fiveHour: fiveHour, weekly: weekly, extras: [], rawWindowKey: key, message: nil)
+    }
+
+    static func evaluate(
+        _ snapshot: QuotaSnapshot,
+        marks: [String: QuotaAlertMark] = [:],
+        settings: QuotaAlertSettings = QuotaAlertSettings(),
+        now: Date = alertNow
+    ) -> QuotaAlertPolicy.Evaluation {
+        QuotaAlertPolicy.evaluate(snapshot: snapshot, settings: settings, marks: marks,
+                                  fiveHourDuration: fiveHours, weeklyDuration: oneWeek, now: now)
+    }
+
+    static func kinds(_ evaluation: QuotaAlertPolicy.Evaluation) -> [QuotaAlertKind] {
+        evaluation.alerts.map(\.kind)
+    }
+
+    static func testQuotaAlerts() {
+        // Thresholds and the cycle control.
+        expect(QuotaAlertPolicy.crossedThreshold(used: 79, thresholds: [80, 95]), nil, "79% crosses nothing")
+        expect(QuotaAlertPolicy.crossedThreshold(used: 80, thresholds: [80, 95]), 80, "80% crosses 80")
+        expect(QuotaAlertPolicy.crossedThreshold(used: 97, thresholds: [95, 80]), 95, "97% announces only the highest")
+        expect(QuotaAlertPolicy.crossedThreshold(used: 100, thresholds: [0, 120]), nil, "out-of-range thresholds ignored")
+        expect(QuotaAlertSettings.nextThreshold(after: 80), 85, "80% cycles to 85%")
+        expect(QuotaAlertSettings.nextThreshold(after: 95), 50, "95% wraps to 50%")
+        expect(QuotaAlertSettings.nextThreshold(after: 77), 80, "off-list value snaps to next choice")
+
+        // Settings defaults and persistence.
+        let suite = "QuotaWarmerAlertRegression.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let stock = QuotaAlertSettings.load(from: defaults)
+        expect(stock, QuotaAlertSettings(), "unset defaults load the stock settings")
+        expect(stock.sessionThresholds, [80, 95], "default 5h thresholds")
+        expect(stock.weeklyThresholds, [75, 90], "default weekly thresholds")
+        check(stock.sessionEnabled && stock.weeklyEnabled && stock.paceEnabled, "alerts default on")
+        defaults.set(false, forKey: QuotaAlertSettings.paceEnabledKey)
+        defaults.set(70, forKey: QuotaAlertSettings.sessionFirstKey)
+        defaults.set(85, forKey: QuotaAlertSettings.weeklySecondKey)
+        let custom = QuotaAlertSettings.load(from: defaults)
+        check(!custom.paceEnabled, "pace toggle persists")
+        expect(custom.sessionThresholds, [70, 95], "5h threshold persists")
+        expect(custom.weeklyThresholds, [75, 85], "weekly threshold persists")
+        let savedMarks = ["session": QuotaAlertMark(windowKey: "k", resetAt: alertNow, level: 80)]
+        QuotaAlertMark.save(savedMarks, storageKey: "claude.work", defaults: defaults)
+        expect(QuotaAlertMark.load(storageKey: "claude.work", defaults: defaults), savedMarks, "marks round-trip")
+        expect(QuotaAlertMark.load(storageKey: "claude", defaults: defaults), [:], "marks are per account")
+        check(QuotaAlertMark.defaultsKey(storageKey: "claude.work").hasSuffix(".claude.work"),
+              "marks key is wiped with its account")
+
+        // 5h thresholds: once per threshold per window (pace isolated; covered below).
+        var thresholdsOnly = QuotaAlertSettings()
+        thresholdsOnly.paceEnabled = false
+        var marks: [String: QuotaAlertMark] = [:]
+        var result = evaluate(alertSnapshot(used: 0.79), settings: thresholdsOnly)
+        expect(kinds(result), [], "79% used: no alert")
+        result = evaluate(alertSnapshot(used: 0.80), marks: marks, settings: thresholdsOnly)
+        expect(kinds(result), [.session], "80% used: session alert")
+        expect(result.alerts.first?.usedPercent, 80, "session alert carries used%")
+        expect(result.alerts.first?.title(toolName: "Claude Code"), "Claude Code — 80% of 5h quota used", "session title")
+        expect(result.alerts.first?.body, "20% left, resets in 1h 0m.", "session body")
+        marks = result.marks
+        expect(kinds(evaluate(alertSnapshot(used: 0.80), marks: marks, settings: thresholdsOnly)), [], "80% again: deduped")
+        expect(kinds(evaluate(alertSnapshot(used: 0.88), marks: marks, settings: thresholdsOnly)), [], "88% in the same window: still deduped")
+        result = evaluate(alertSnapshot(used: 0.95), marks: marks, settings: thresholdsOnly)
+        expect(kinds(result), [.session], "95% used: second threshold fires")
+        marks = result.marks
+        expect(kinds(evaluate(alertSnapshot(used: 0.99), marks: marks, settings: thresholdsOnly)), [], "99% after 95%: deduped")
+        // Next window (reset 5h later): fires again.
+        result = evaluate(alertSnapshot(used: 0.82, resetIn: 3600 + fiveHours,
+                                        fetchedAt: alertNow.addingTimeInterval(fiveHours)),
+                          marks: marks, settings: thresholdsOnly, now: alertNow.addingTimeInterval(fiveHours))
+        expect(kinds(result), [.session], "new window re-arms the 80% alert")
+
+        // Jumping straight past both thresholds announces only the highest, once.
+        result = evaluate(alertSnapshot(used: 0.97))
+        expect(kinds(result), [.session], "97% from nothing: one alert")
+        expect(result.marks["session"]?.level, 95, "jump marks the highest threshold")
+        expect(kinds(evaluate(alertSnapshot(used: 0.97), marks: result.marks)), [], "jump is not re-announced at 80%")
+
+        // Disabled / gated cases never alert nor consume the dedup slot.
+        var off = QuotaAlertSettings()
+        off.sessionEnabled = false
+        result = evaluate(alertSnapshot(used: 0.90), settings: off)
+        check(!kinds(result).contains(.session), "5h alerts off")
+        expectNil(result.marks["session"], "disabled alert leaves no mark")
+        expect(kinds(result), [.pace], "pace warning still fires on its own toggle")
+        expect(kinds(evaluate(alertSnapshot(used: 0.90, fetchedAt: alertNow.addingTimeInterval(-600)))), [],
+               "stale snapshot never alerts")
+        expect(kinds(evaluate(alertSnapshot(used: 0.90, resetIn: -60))), [], "passed reset never alerts")
+        expect(kinds(evaluate(alertSnapshot(used: 0.90, resetIn: nil))), [], "no reset, no window to dedup on")
+        expect(kinds(evaluate(alertSnapshot(used: 0, idle: true))), [], "idle window never alerts")
+        // Rollover artifact: 1 min into the window, reads 90% used.
+        expect(kinds(evaluate(alertSnapshot(used: 0.90, resetIn: fiveHours - 60))), [],
+               "unsettled rollover reading never alerts")
+
+        // Pace: 1h into the window with half the quota gone → runs out in 1h.
+        result = evaluate(alertSnapshot(used: 0.50, resetIn: 4 * 3600))
+        expect(kinds(result), [.pace], "behind pace: pace alert")
+        close(result.alerts.first?.runsOutIn, 3600, "pace projects 1h to run out")
+        expect(result.alerts.first?.title(toolName: "Codex"), "Codex — On pace to run out", "pace title")
+        expect(result.alerts.first?.body, "Runs out in 1h 0m — before the 5h reset in 4h 0m. 50% used.", "pace body")
+        expect(kinds(evaluate(alertSnapshot(used: 0.60, resetIn: 4 * 3600), marks: result.marks)), [],
+               "pace alert once per window")
+        expect(kinds(evaluate(alertSnapshot(used: 0.30, resetIn: fiveHours - 600))), [],
+               "no pace alert in the first 15 minutes")
+        expect(kinds(evaluate(alertSnapshot(used: 0.10, resetIn: fiveHours - 1200))), [],
+               "no pace alert under 20% used")
+        expect(kinds(evaluate(alertSnapshot(used: 0.50, resetIn: 2 * 3600))), [], "on pace: no alert")
+        var noPace = QuotaAlertSettings()
+        noPace.paceEnabled = false
+        expect(kinds(evaluate(alertSnapshot(used: 0.50, resetIn: 4 * 3600), settings: noPace)), [], "pace alert off")
+        // Threshold and pace due together: one notification carrying both.
+        result = evaluate(alertSnapshot(used: 0.85, resetIn: 3 * 3600))
+        expect(kinds(result), [.session], "threshold + pace post a single alert")
+        check(result.alerts.first?.runsOutIn != nil, "merged alert carries the run-out")
+        check(result.alerts.first?.body.contains("before reset") == true, "merged body mentions the run-out")
+        check(result.marks["pace"] != nil, "merged alert consumes the pace slot")
+        expect(kinds(evaluate(alertSnapshot(used: 0.86, resetIn: 3 * 3600), marks: result.marks)), [],
+               "nothing left to say after the merged alert")
+        // The pace projection is the same one the bars show.
+        let pace = QuotaPace.compute(quotaLeft: 0.5, resetAt: alertNow.addingTimeInterval(4 * 3600),
+                                     windowDuration: fiveHours, now: alertNow, fallbackResetText: "")
+        expect(pace.runsOutText, "Runs out in 1h 0m", "bar text matches the alert projection")
+        close(pace.runsOutIn, 3600, "QuotaPace exposes the run-out seconds")
+
+        // Weekly thresholds, deduped on the weekly reset.
+        expect(kinds(evaluate(alertSnapshot(weeklyUsed: 0.74))), [], "74% weekly: no alert")
+        result = evaluate(alertSnapshot(weeklyUsed: 0.75))
+        expect(kinds(result), [.weekly], "75% weekly alert")
+        expect(result.alerts.first?.title(toolName: "Claude Code"), "Claude Code — 75% of weekly quota used", "weekly title")
+        expect(result.alerts.first?.body, "25% left, resets in 3d 0h.", "weekly body")
+        marks = result.marks
+        expect(kinds(evaluate(alertSnapshot(weeklyUsed: 0.89), marks: marks)), [], "89% weekly: deduped")
+        expect(kinds(evaluate(alertSnapshot(weeklyUsed: 0.89, weeklyResetIn: 3 * 86_400 - 2 * 3600), marks: marks)), [],
+               "weekly reset drifting 2h is the same window")
+        result = evaluate(alertSnapshot(weeklyUsed: 0.90), marks: marks)
+        expect(kinds(result), [.weekly], "90% weekly alert")
+        expect(kinds(evaluate(alertSnapshot(weeklyUsed: 0.80, weeklyResetIn: 3 * 86_400 + oneWeek), marks: result.marks)),
+               [.weekly], "next weekly window re-arms")
+        var noWeekly = QuotaAlertSettings()
+        noWeekly.weeklyEnabled = false
+        expect(kinds(evaluate(alertSnapshot(weeklyUsed: 0.95), settings: noWeekly)), [], "weekly alerts off")
+        // 5h and weekly are independent.
+        expect(kinds(evaluate(alertSnapshot(used: 0.81, weeklyUsed: 0.76))), [.session, .weekly], "both windows alert")
+
+        // Real parsers. Codex derives its reset from `reset_after_seconds`, so the
+        // window key drifts every poll; the alert must not repeat.
+        let provider = QuotaProvider()
+        func codex(used: Int, resetAfter: Int) -> QuotaSnapshot {
+            provider.codexSnapshot(payload: ["rate_limit": [
+                "primary_window": ["used_percent": used, "limit_window_seconds": 18000, "reset_after_seconds": resetAfter]
+            ]], source: "codex", message: nil)
+        }
+        let first = codex(used: 85, resetAfter: 3600)
+        let drifted = codex(used: 86, resetAfter: 3290)
+        check(first.rawWindowKey != drifted.rawWindowKey, "Codex window key drifts between polls")
+        result = QuotaAlertPolicy.evaluate(snapshot: first, settings: QuotaAlertSettings(), marks: [:],
+                                           fiveHourDuration: fiveHours, weeklyDuration: oneWeek)
+        expect(kinds(result), [.session], "Codex 85% used alerts")
+        expect(kinds(QuotaAlertPolicy.evaluate(snapshot: drifted, settings: QuotaAlertSettings(), marks: result.marks,
+                                               fiveHourDuration: fiveHours, weeklyDuration: oneWeek)), [],
+               "drifted Codex key is the same window")
+        let idleCodex = codex(used: 0, resetAfter: 18000)
+        expect(kinds(QuotaAlertPolicy.evaluate(snapshot: idleCodex, settings: QuotaAlertSettings(), marks: [:],
+                                                fiveHourDuration: fiveHours, weeklyDuration: oneWeek)), [],
+               "idle Codex window never alerts")
+        let claudeReset = ISO8601DateFormatter().string(from: Date().addingTimeInterval(3600))
+        let claude = provider.claudeSnapshot(
+            payload: ["five_hour": ["utilization": 96, "resets_at": claudeReset],
+                      "seven_day": ["utilization": 10, "resets_at": ISO8601DateFormatter().string(from: Date().addingTimeInterval(4 * 86_400))]],
+            source: "Claude OAuth usage", corroboratingSource: nil, message: nil
+        )
+        result = QuotaAlertPolicy.evaluate(snapshot: claude, settings: QuotaAlertSettings(), marks: [:],
+                                           fiveHourDuration: fiveHours, weeklyDuration: oneWeek)
+        expect(kinds(result), [.session], "Claude 96% used: one 5h alert, weekly under threshold")
+        expect(result.alerts.map(\.usedPercent), [96], "Claude 96% used alerts with the displayed percent")
+        expect(result.marks["session"]?.windowKey, claude.rawWindowKey, "5h mark keyed on rawWindowKey")
     }
 
     // MARK: - Helpers
