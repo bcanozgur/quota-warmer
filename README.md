@@ -40,6 +40,7 @@ By default it only **monitors**: it watches live quota snapshots and shows each 
 - **Right-click menu**: jump to stats or settings, set the diagnostics level, or quit.
 - **History, notifications and updates**: recent checks, warm-ups and failures in Settings; optional reminders before a window resets and when a window is claimed; in-app update checks.
 - **Launch at login**: runs quietly as a menu bar utility.
+- **Statusline**: show live quota in Claude Code's status line, tmux or starship (see [Statusline](#statusline)).
 
 ## Is this allowed?
 
@@ -109,6 +110,62 @@ xattr -dr com.apple.quarantine "/Applications/QuotaWarmer.app"
 
 …or right-click **QuotaWarmer.app** in Applications and choose **Open** the first time.
 
+## Statusline
+
+After every successful quota check, QuotaWarmer writes the live quota to
+`~/Library/Application Support/QuotaWarmer/status.json` (per account: session and weekly
+used/left percent, reset times, freshness, mode; never tokens or credentials).
+`scripts/quotawarmer-statusline.sh` turns it into one line:
+
+```text
+Claude 58% left · 2h13m | Codex 18% used · 43m (stale 12m)
+```
+
+Each account uses its own left/used setting from the app. Data older than 5 minutes is marked
+`(stale …)`, accounts set to Off are skipped, and the script always exits 0 (`QuotaWarmer: no data`
+when the app hasn't written the file yet). It needs nothing beyond macOS.
+
+Install the script:
+
+```bash
+mkdir -p ~/.local/bin && curl -fsSL https://raw.githubusercontent.com/bcanozgur/quota-warmer/main/scripts/quotawarmer-statusline.sh -o ~/.local/bin/quotawarmer-statusline.sh && chmod +x ~/.local/bin/quotawarmer-statusline.sh
+```
+
+**Claude Code** — add to `~/.claude/settings.json`:
+
+```json
+{
+  "statusLine": {
+    "type": "command",
+    "command": "~/.local/bin/quotawarmer-statusline.sh --only claude"
+  }
+}
+```
+
+**tmux** — in `~/.tmux.conf`:
+
+```text
+set -g status-interval 30
+set -g status-right '#(~/.local/bin/quotawarmer-statusline.sh --pinned)'
+```
+
+**starship** — in `~/.config/starship.toml`:
+
+```toml
+[custom.quota]
+command = "~/.local/bin/quotawarmer-statusline.sh --only claude"
+when = true
+format = "[$output]($style) "
+```
+
+Options: `--only claude,codex.work` (tools or account ids), `--pinned` (accounts pinned to the
+menu bar), `--weekly` (append `wk 31%`), `--mode used|remaining` (override the app setting),
+`--stale-after SECONDS` (default 300), `--file PATH` (or `QUOTAWARMER_STATUS_FILE`).
+
+The file's format is versioned by `schemaVersion` (currently 1); see
+`Sources/QuotaWarmer/Models/QuotaStatus.swift`. Consumers should judge freshness from `fetchedAt`,
+since the file is only rewritten when a check succeeds.
+
 ## Build From Source
 
 Install XcodeGen, generate the project, and open it in Xcode:
@@ -137,6 +194,7 @@ Run the regression suites (standalone `swiftc` builds — the same ones CI runs;
 
 - `scripts/quota-extractor-regression.swift` — quota parsing, warm-up commands, cost estimates
 - `scripts/quota-display-regression.swift` — left/used display, bar colors, menu-bar text, theme cycle, wake-time input
+- `scripts/accounts-history-regression.swift` — multi-account identity, quota history, the `status.json` export
 
 ## Project Structure
 
