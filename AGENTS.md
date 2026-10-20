@@ -34,3 +34,7 @@ Use project skills under `.agents/skills/` for non-trivial work: `quotawarmer-qu
 Project agents live under `.agents/agents/`. Use `quotawarmer-quota-engineer` for quota and warm-up fixes, and `quotawarmer-runtime-verifier` for independent proof that a user-visible macOS fix is installed and running.
 
 `Tests/RegressionTests/quota-display-regression.swift` also compiles `Models/OnboardingFlow.swift` (first-run guide eligibility: first launch, upgrade, missing CLI, completed); add a case whenever that logic changes.
+
+## Localization and Accessibility
+
+UI copy is English with a Turkish translation in `Sources/QuotaWarmer/Resources/Localizable.xcstrings`. Add user-facing strings in code (`Text`/`LocalizedStringKey` helpers, or `String(localized:)` in Models), do a clean `xcodebuild` build into a private derived-data folder, run `python3 scripts/sync-localizations.py <derived-data>` to add the keys, translate them, and run `python3 scripts/check-localizations.py` (CI runs it before `swift test`). Keep log lines, UserDefaults keys, URL tokens, event-log JSON and status fields in English. Icon-only controls need labels, and status must not rely on color alone.

@@ -89,6 +89,17 @@ The subagents preload their matching skills through Claude Code's `skills:` fron
 - Errors surfaced to the user go through the typed `QuotaProviderError` / `WarmupError` / `CredentialError` enums and are mapped to `SourceHealth`/`AuthStatus` + a `HistoryEvent` in `applyQuotaError`.
 - History events are persisted by `EventLogStore` (`Models/EventLog.swift`) to `~/Library/Application Support/QuotaWarmer/events.jsonl` (90 days / 5,000 lines, pruned on launch; `AppState.history` keeps only the newest 500 in memory; `removeAccount` purges the account's events). Warm-up events carry structured `outcome`/`windowKey`/`windowResetAt`/`model` for the ROI panel. They are also mirrored through `DiagnosticLogger` to `~/Library/Logs/QuotaWarmer/diagnostics.log` (2 MB × 3 rotated files). Settings → Recent Events offers filter, paging, Export Diagnostics… (`Services/DiagnosticsExport.swift`) and Report an Issue (URL carries only app + macOS version). Keep the diagnostics log diagnostic-only: never write raw bearer tokens, auth headers, or warm-up command output that might contain secrets.
 
+## Localization and accessibility
+
+UI copy is English (source) plus Turkish, in `Sources/QuotaWarmer/Resources/Localizable.xcstrings`.
+
+- SwiftUI literals (`Text("…")`, `Button("…")`, `.help("…")`) localize automatically. Helpers that receive copy must take `LocalizedStringKey` (or `LocalizedStringResource`), not `String`, or the literal is shown untranslated.
+- Strings built in Models or services use `String(localized:)`, with interpolation, never concatenation. Pass `locale:` only when the text must stay English (the event log does this).
+- Not localized, on purpose: log/diagnostic lines, UserDefaults keys, URL scheme tokens, event-log JSON, `status.json` fields, and brand names.
+- Workflow: add the string in code, run a clean `xcodebuild … -derivedDataPath /tmp/dd-<name> clean build`, then `python3 scripts/sync-localizations.py /tmp/dd-<name>` to add the key, add its Turkish value, and run `python3 scripts/check-localizations.py`. CI runs the checker before `swift test`.
+- Turkish terms: warm-up → "ısıtma", quota → "kota", window → "pencere", reset → "sıfırlanma". Percent goes before the number (`%46 kaldı`); durations use `dk`, `sa`, `g`, `sn`.
+- Accessibility: every icon-only control has a label (`.accessibilityLabel`, plus `.help` where useful). Status is never color-only: pair dots and bars with a word or symbol. Keep `DS.C` tokens at WCAG AA (4.5:1 text, 3:1 UI); check against both themes when changing a color. Respect `accessibilityReduceMotion` for animation.
+
 ## Release
 
 Releases are automatic: when CI is green on `main`, `.github/workflows/auto-release.yml` picks the next version from the commit subjects since the last `v*` tag (`Add`/`feat` → minor, `BREAKING`/`!:` → major, other app changes → patch; docs/CI-only changes and `[skip release]` never release), bumps `CFBundleShortVersionString` in `project.yml` + `Info.plist`, tags, and dispatches `release-unsigned.yml`. That workflow (also triggered by a pushed `vMAJOR.MINOR.PATCH` tag) validates the tag against `project.yml`, builds an **ad-hoc signed, not notarized** DMG, publishes the GitHub Release with `latest.json`, and bumps the Homebrew cask. `release.yml` (signed + notarized) is manual-only until Apple Developer secrets exist. The in-app `UpdateChecker` reads GitHub's `releases/latest` API. The version string in `project.yml` is the source of truth.

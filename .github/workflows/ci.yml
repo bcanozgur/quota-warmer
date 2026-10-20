@@ -38,6 +38,11 @@ jobs:
       - name: Generate Xcode project
         run: xcodegen generate
 
+      - name: Check localizations
+        # Every String Catalog key needs a finished Turkish translation with the
+        # same format placeholders as the English key.
+        run: python3 scripts/check-localizations.py
+
       - name: Run regression suites
         # Package.swift compiles the app's Models/Services in place; the three
         # suites in Tests/RegressionTests run as one serialized Swift Testing suite.
