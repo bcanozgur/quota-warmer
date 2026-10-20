@@ -59,6 +59,7 @@
 		D3067D7D44804AD7875F7C2E /* MorningCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD2D8960A8FE4A8CB84EB1BD /* MorningCoordinator.swift */; };
 		D49ED7E3B5EAB4587153F230 /* claude-models.json in Resources */ = {isa = PBXBuildFile; fileRef = 708576E3C4101A8F6BF23DD1 /* claude-models.json */; };
 		D88DA7D629B20963E763DA47 /* AutoWarmDecision.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7D95C8268ED2E35DCC765A35 /* AutoWarmDecision.swift */; };
+		DD3A9E311D6F932F2943A800 /* Localizable.xcstrings in Resources */ = {isa = PBXBuildFile; fileRef = 17F4825DA4BF85382EFADADA /* Localizable.xcstrings */; };
 		E33391F5D262478D2FC88C1E /* WakeScheduler.swift in Sources */ = {isa = PBXBuildFile; fileRef = 166E35057E1F11E7F1A327F8 /* WakeScheduler.swift */; };
 		E6D7A521F2B96CA5A3DB00C7 /* QuotaProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0ECCEAAAD4F2D01A85698B2 /* QuotaProvider.swift */; };
 		E806388933B9087D09ED9144 /* MenuBarLabel.swift in Sources */ = {isa = PBXBuildFile; fileRef = E94AAC800581DE96B2F6ED29 /* MenuBarLabel.swift */; };
@@ -76,6 +77,7 @@
 		1577681C89107051CD944BCA /* QuotaDisplay.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuotaDisplay.swift; sourceTree = "<group>"; };
 		15BE4D2A429BB790E2ACF1BE /* AppState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppState.swift; sourceTree = "<group>"; };
 		166E35057E1F11E7F1A327F8 /* WakeScheduler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WakeScheduler.swift; sourceTree = "<group>"; };
+		17F4825DA4BF85382EFADADA /* Localizable.xcstrings */ = {isa = PBXFileReference; lastKnownFileType = text.json.xcstrings; path = Localizable.xcstrings; sourceTree = "<group>"; };
 		1DCBDB4DB1F1C51C1F117DCD /* EventLog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EventLog.swift; sourceTree = "<group>"; };
 		1F346F22AD123AA6C32975A6 /* OnboardingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OnboardingView.swift; sourceTree = "<group>"; };
 		22F6F141D5AA7E62B213C954 /* GlobalHotKey.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GlobalHotKey.swift; sourceTree = "<group>"; };
@@ -142,6 +144,7 @@
 			children = (
 				708576E3C4101A8F6BF23DD1 /* claude-models.json */,
 				7A6F087F318D56CEBBE69160 /* codex-models.json */,
+				17F4825DA4BF85382EFADADA /* Localizable.xcstrings */,
 			);
 			path = Resources;
 			sourceTree = "<group>";
@@ -331,6 +334,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				6EE00E6AD61DD98974168E92 /* Assets.xcassets in Resources */,
+				DD3A9E311D6F932F2943A800 /* Localizable.xcstrings in Resources */,
 				D49ED7E3B5EAB4587153F230 /* claude-models.json in Resources */,
 				F887A77BE882540DC3F386AD /* codex-models.json in Resources */,
 			);
@@ -422,9 +426,11 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
+				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.quotawarmer.app;
 				SDKROOT = macosx;
+				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_VERSION = 5.9;
 			};
 			name = Debug;
@@ -563,9 +569,11 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
+				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.quotawarmer.app;
 				SDKROOT = macosx;
+				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_VERSION = 5.9;
 			};
 			name = Release;

@@ -8,9 +8,9 @@ enum ImpactRange: String, CaseIterable, Identifiable {
 
     var label: String {
         switch self {
-        case .week: return "7d"
-        case .month: return "30d"
-        case .all: return "All"
+        case .week: return String(localized: "7d")
+        case .month: return String(localized: "30d")
+        case .all: return String(localized: "All")
         }
     }
 

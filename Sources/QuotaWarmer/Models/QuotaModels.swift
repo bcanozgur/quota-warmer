@@ -14,6 +14,16 @@ enum QuotaFreshness: String {
         case .expired: return "expired"
         }
     }
+
+    /// Localized label for UI copy; `label` stays English for machine-readable output.
+    func displayLabel(locale: Locale = .current) -> String {
+        switch self {
+        case .unknown: return String(localized: "unknown", locale: locale)
+        case .fresh: return String(localized: "fresh", locale: locale)
+        case .stale: return String(localized: "stale", locale: locale)
+        case .expired: return String(localized: "expired", locale: locale)
+        }
+    }
 }
 
 enum SourceHealth: String {
@@ -34,6 +44,18 @@ enum SourceHealth: String {
         case .rateLimited: return "rate limited"
         }
     }
+
+    /// Localized label for UI copy; `label` stays English for machine-readable output.
+    func displayLabel(locale: Locale = .current) -> String {
+        switch self {
+        case .unknown: return String(localized: "unknown", locale: locale)
+        case .healthy: return String(localized: "healthy", locale: locale)
+        case .stale: return String(localized: "stale", locale: locale)
+        case .unavailable: return String(localized: "unavailable", locale: locale)
+        case .authFailure: return String(localized: "auth failure", locale: locale)
+        case .rateLimited: return String(localized: "rate limited", locale: locale)
+        }
+    }
 }
 
 enum AuthStatus: String {
@@ -48,6 +70,16 @@ enum AuthStatus: String {
         case .available: return "available"
         case .missing: return "missing"
         case .failed: return "failed"
+        }
+    }
+
+    /// Localized label for UI copy; `label` stays English for machine-readable output.
+    func displayLabel(locale: Locale = .current) -> String {
+        switch self {
+        case .unknown: return String(localized: "unknown", locale: locale)
+        case .available: return String(localized: "available", locale: locale)
+        case .missing: return String(localized: "missing", locale: locale)
+        case .failed: return String(localized: "failed", locale: locale)
         }
     }
 }

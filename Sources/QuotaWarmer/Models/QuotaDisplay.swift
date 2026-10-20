@@ -102,25 +102,30 @@ enum QuotaDisplay {
         return mode == .remaining ? clamped : 1 - clamped
     }
 
-    static func suffix(for mode: QuotaDisplayMode) -> String {
-        mode == .remaining ? "left" : "used"
-    }
-
-    /// Row label: `83% left` / `17% used`, or the `last known` variant.
+    /// Row label: `83% left` / `17% used`, or the `last known` variant. Each
+    /// phrase is one localized string because Turkish puts the number first
+    /// with its `%` (`%83 kaldı`).
     static func quotaText(remainingFraction: Double?, isLive: Bool, mode: QuotaDisplayMode) -> String {
-        guard let remainingFraction else { return "-- \(suffix(for: mode))" }
+        guard let remainingFraction else {
+            return mode == .remaining
+                ? String(localized: "-- left") : String(localized: "-- used")
+        }
         let value = percent(remainingFraction: remainingFraction, mode: mode)
-        return isLive ? "\(value)% \(suffix(for: mode))" : "\(value)% last known"
+        if !isLive { return String(localized: "\(value)% last known") }
+        return mode == .remaining
+            ? String(localized: "\(value)% left") : String(localized: "\(value)% used")
     }
 
-    /// Menu-bar countdown: `3h05m`, `42m`, `2d4h`.
+    /// Menu-bar countdown: `3h05m`, `42m`, `2d4h` (Turkish: `3sa05dk`, `42dk`, `2g4sa`).
     static func compactTime(_ secs: TimeInterval) -> String {
         let total = max(0, Int(secs))
         let d = total / 86_400
         let h = (total % 86_400) / 3600
         let m = (total % 3600) / 60
-        if d > 0 { return "\(d)d\(h)h" }
-        return h > 0 ? "\(h)h\(String(format: "%02d", m))m" : "\(m)m"
+        if d > 0 { return String(localized: "\(d)d\(h)h") }
+        return h > 0
+            ? String(localized: "\(h)h\(String(format: "%02d", m))m")
+            : String(localized: "\(m)m")
     }
 
     /// Inputs of the menu-bar text for one tool (the 5-hour window only).
@@ -135,7 +140,7 @@ enum QuotaDisplay {
     }
 
     static func menuBarText(_ input: MenuBarInput, mode: QuotaDisplayMode) -> String {
-        if input.isWarming { return "warming" }
+        if input.isWarming { return String(localized: "warming") }
         if input.sessionSettling, let reset = input.timeUntilReset {
             // Window just opened; the percentage is a not-yet-settled rollover
             // artifact, so show only the countdown (no misleading "0%").
@@ -148,7 +153,7 @@ enum QuotaDisplay {
         }
         if let reset = input.timeUntilReset {
             let value = percent(remainingFraction: input.remainingFraction ?? 0, mode: mode)
-            return "\(compactTime(reset)) - \(value)%"
+            return String(localized: "\(compactTime(reset)) - \(value)%")
         }
         if input.primaryWindowRolledOver {
             // The known reset passed while polling was blocked: the window rolled
@@ -165,10 +170,12 @@ enum QuotaDisplay {
 
 /// Compact human duration: `46m`, `3h 30m`, `2d 8h`.
 func quotaDurationText(_ seconds: Int) -> String {
-    if seconds < 60 { return "\(seconds)s" }
-    if seconds < 3600 { return "\(seconds / 60)m" }
-    if seconds < 86_400 { return "\(seconds / 3600)h \((seconds % 3600) / 60)m" }
-    return "\(seconds / 86_400)d \((seconds % 86_400) / 3600)h"
+    if seconds < 60 { return String(localized: "\(seconds)s") }
+    if seconds < 3600 { return String(localized: "\(seconds / 60)m") }
+    if seconds < 86_400 {
+        return String(localized: "\(seconds / 3600)h \((seconds % 3600) / 60)m")
+    }
+    return String(localized: "\(seconds / 86_400)d \((seconds % 86_400) / 3600)h")
 }
 
 /// Pace model behind the usage bars: compares quota left against time left in the
@@ -201,7 +208,7 @@ enum QuotaPace {
         }
         let timeRemaining = resetAt.timeIntervalSince(now)
         let timeLeftFraction = min(max(timeRemaining / windowDuration, 0), 1)
-        let resetText = "Resets in \(quotaDurationText(Int(timeRemaining)))"
+        let resetText = String(localized: "Resets in \(quotaDurationText(Int(timeRemaining)))")
 
         // Behind pace: more of the window's time remains than quota does, so at
         // the current burn rate the quota empties before the window resets.
@@ -217,7 +224,7 @@ enum QuotaPace {
         if elapsed > 0, quotaUsed > 0 {
             let secondsToRunout = quotaLeft / (quotaUsed / elapsed)
             if secondsToRunout.isFinite, secondsToRunout >= 0, secondsToRunout < timeRemaining {
-                runsOutText = "Runs out in \(quotaDurationText(Int(secondsToRunout)))"
+                runsOutText = String(localized: "Runs out in \(quotaDurationText(Int(secondsToRunout)))")
                 runsOutIn = secondsToRunout
             }
         }

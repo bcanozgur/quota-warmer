@@ -80,9 +80,9 @@ struct QuotaAlert: Equatable {
 
     func title(toolName: String) -> String {
         switch kind {
-        case .session: return "\(toolName) — \(usedPercent)% of 5h quota used"
-        case .weekly: return "\(toolName) — \(usedPercent)% of weekly quota used"
-        case .pace: return "\(toolName) — On pace to run out"
+        case .session: return String(localized: "\(toolName) — \(usedPercent)% of 5h quota used")
+        case .weekly: return String(localized: "\(toolName) — \(usedPercent)% of weekly quota used")
+        case .pace: return String(localized: "\(toolName) — On pace to run out")
         }
     }
 
@@ -91,14 +91,15 @@ struct QuotaAlert: Equatable {
         let reset = quotaDurationText(Int(resetIn))
         switch kind {
         case .session, .weekly:
-            var text = "\(left)% left, resets in \(reset)."
+            var text = String(localized: "\(left)% left, resets in \(reset).")
             if let runsOutIn {
-                text += " At this pace it runs out in \(quotaDurationText(Int(runsOutIn))) — before reset."
+                let runsOut = quotaDurationText(Int(runsOutIn))
+                text += " " + String(localized: "At this pace it runs out in \(runsOut) — before reset.")
             }
             return text
         case .pace:
             let runsOut = quotaDurationText(Int(runsOutIn ?? 0))
-            return "Runs out in \(runsOut) — before the 5h reset in \(reset). \(usedPercent)% used."
+            return String(localized: "Runs out in \(runsOut) — before the 5h reset in \(reset). \(usedPercent)% used.")
         }
     }
 }

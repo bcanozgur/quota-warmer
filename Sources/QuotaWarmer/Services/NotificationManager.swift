@@ -17,8 +17,8 @@ class NotificationManager {
         cancelPending(id: warningID(tool))
 
         let content = UNMutableNotificationContent()
-        content.title = "\(tool.displayName) — Window Expiring Soon"
-        content.body  = "30 minutes left in your 5h quota window. QuotaWarmer will auto-trigger at reset."
+        content.title = String(localized: "\(tool.displayName) — Window Expiring Soon")
+        content.body  = String(localized: "30 minutes left in your 5h quota window. QuotaWarmer will auto-trigger at reset.")
         content.sound = .default
 
         let trigger = UNTimeIntervalNotificationTrigger(
@@ -31,9 +31,9 @@ class NotificationManager {
 
     func notifyWarmupCommandSent(tool: ProviderID) {
         let content = UNMutableNotificationContent()
-        content.title = "\(tool.displayName) 5h Window Warmup Sent"
+        content.title = String(localized: "\(tool.displayName) 5h Window Warmup Sent")
         content.subtitle = "QuotaWarmer"
-        content.body = "QuotaWarmer sent the warmup command for \(tool.displayName). The next quota refresh will confirm the active 5-hour window."
+        content.body = String(localized: "QuotaWarmer sent the warmup command for \(tool.displayName). The next quota refresh will confirm the active 5-hour window.")
         content.sound = .default
         if let attachment = brandedAttachment(for: tool) {
             content.attachments = [attachment]
@@ -49,8 +49,8 @@ class NotificationManager {
 
     func notifyActivated(tool: ProviderID) {
         let content = UNMutableNotificationContent()
-        content.title = "\(tool.displayName) — Window Started"
-        content.body  = "5-hour quota window is now active. Next auto-trigger in 5 hours."
+        content.title = String(localized: "\(tool.displayName) — Window Started")
+        content.body  = String(localized: "5-hour quota window is now active. Next auto-trigger in 5 hours.")
         content.sound = .default
 
         let req = UNNotificationRequest(
@@ -77,10 +77,10 @@ class NotificationManager {
 
     func notifyMorningCatchUp(onBattery: Bool) {
         let content = UNMutableNotificationContent()
-        content.title = "Morning Pre-warm — Caught Up"
+        content.title = String(localized: "Morning Pre-warm — Caught Up")
         content.body  = onBattery
-            ? "The scheduled wake was skipped (on battery). Your quota window is being warmed now that the Mac is awake."
-            : "Your quota window is being warmed now that the Mac is awake."
+            ? String(localized: "The scheduled wake was skipped (on battery). Your quota window is being warmed now that the Mac is awake.")
+            : String(localized: "Your quota window is being warmed now that the Mac is awake.")
         content.sound = .default
 
         let req = UNNotificationRequest(

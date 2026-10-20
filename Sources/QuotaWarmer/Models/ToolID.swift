@@ -124,18 +124,18 @@ enum ToolMode: String, CaseIterable, Codable {
     /// Short label for compact controls.
     var label: String {
         switch self {
-        case .off:      return "Off"
-        case .monitor:  return "Monitor"
-        case .autoWarm: return "Auto-warm"
+        case .off:      return String(localized: "Off")
+        case .monitor:  return String(localized: "Monitor")
+        case .autoWarm: return String(localized: "Auto-warm")
         }
     }
 
     /// Descriptive label for the dropdown menu items.
     var menuLabel: String {
         switch self {
-        case .off:      return "Off — don't watch"
-        case .monitor:  return "Monitor only — watch quota"
-        case .autoWarm: return "Auto-warm — claim windows"
+        case .off:      return String(localized: "Off — don't watch")
+        case .monitor:  return String(localized: "Monitor only — watch quota")
+        case .autoWarm: return String(localized: "Auto-warm — claim windows")
         }
     }
 

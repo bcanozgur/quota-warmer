@@ -1,6 +1,7 @@
 name: QuotaWarmer
 options:
   bundleIdPrefix: com.quotawarmer
+  developmentLanguage: en
   deploymentTarget:
     macOS: "14.0"
   xcodeVersion: "15.0"
@@ -20,6 +21,9 @@ targets:
         CFBundleIdentifier: com.quotawarmer.app
         CFBundleShortVersionString: "1.2.1"
         CFBundleVersion: "1"
+        CFBundleLocalizations:
+          - en
+          - tr
         LSUIElement: true
         CFBundleURLTypes:
           - CFBundleURLName: com.quotawarmer.app
@@ -39,3 +43,5 @@ targets:
         MACOSX_DEPLOYMENT_TARGET: "14.0"
         ENABLE_APP_SANDBOX: "NO"
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        LOCALIZATION_PREFERS_STRING_CATALOGS: "YES"
+        SWIFT_EMIT_LOC_STRINGS: "YES"
