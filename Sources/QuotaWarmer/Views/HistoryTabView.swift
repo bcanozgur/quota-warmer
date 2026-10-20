@@ -110,7 +110,7 @@ struct HistoryTabView: View {
                         .font(.system(size: 10, weight: .semibold))
                 }
                 ForEach(appState.providers) { tool in
-                    chip(title: tool.shortName, selected: tool == selectedProvider, color: DS.C.accent(tool)) {
+                    chip(title: tool.shortName, selected: tool == selectedProvider, color: DS.C.history(tool.kind)) {
                         providerKey = tool.storageKey
                     } icon: {
                         Image(tool.kind.glyphAssetName)
@@ -156,6 +156,15 @@ private struct WindowBar: Identifiable {
     /// reset is still ahead) or one that began before the range stays inside.
     let start: Date
     let end: Date
+    let color: Color
+}
+
+/// A day bar in the 30-day "Peak 5h window per day" chart.
+private struct DayPeakBar: Identifiable {
+    let id: String
+    let account: String
+    let day: Date
+    let peak: Double
     let color: Color
 }
 
@@ -215,16 +224,14 @@ enum HistoryRange: String, CaseIterable, Identifiable {
     }
 }
 
-/// The stat row and charts for one or more accounts. `combined` draws each
-/// account in its brand color on shared charts; a single account keeps the
-/// usage-level colors.
+/// The stat row and charts for one or more accounts. Every series is drawn
+/// in its tool's History color (Claude orange, Codex blue), never by usage
+/// level; on shared charts an added account is a lighter shade.
 private struct HistoryContent: View {
     let series: [HistorySeries]
     let combined: Bool
     let range: HistoryRange
     let loaded: Bool
-
-    @AppStorage(QuotaDisplay.colorfulBarsKey) private var colorfulBars = true
 
     var body: some View {
         let windowsByAccount = series.map { ($0, $0.windows) }
@@ -311,79 +318,119 @@ private struct HistoryContent: View {
         }
     }
 
+    /// Over 30 days the 5-hour line resets ~150 times and turns into a solid
+    /// comb, so that range charts the weekly quota alone; the per-window
+    /// picture lives in the peak chart below.
+    private var showsSessionLine: Bool { range != .month }
+
     private var usageCard: some View {
         let end = Date()
         let start = end.addingTimeInterval(-range.interval)
-        return card(title: "Quota used", info: Self.usageInfo(combined: combined), trailing: legend) {
+        let trailing = HStack(spacing: 8) {
+            legend
+            recordingSince(start: start)
+        }
+        return card(title: showsSessionLine ? "Quota used" : "Weekly quota used", info: Self.usageInfo(combined: combined, session: showsSessionLine), trailing: trailing) {
             Chart {
                 ForEach(series) { entry in
                     let color = lineColor(entry)
-                    let session = UsageHistory.chartPoints(entry.samples) { $0.s.map { $0 * 100 } }
-                    // A lone reading (first poll, or one between gaps) draws no line.
-                    let segmentSizes = Dictionary(grouping: session, by: \.segment).mapValues(\.count)
-                    let lonePoints = session.filter { segmentSizes[$0.segment] == 1 }
                     let weekly = UsageHistory.chartPoints(entry.samples) { $0.w.map { $0 * 100 } }
-                    ForEach(session) { point in
-                        if !combined {
-                            AreaMark(
+                    let bridges = UsageHistory.bridges(weekly)
+                    // Faint, dotted: the weekly value across a short unmeasured
+                    // stretch (usually the night), so it doesn't break apart.
+                    ForEach(bridges) { bridge in
+                        ForEach([bridge.from, bridge.to]) { point in
+                            LineMark(
+                                x: .value("Time", point.t),
+                                y: .value("Weekly", point.value),
+                                series: .value("Segment", "\(entry.id)-\(bridge.id)")
+                            )
+                            .foregroundStyle((showsSessionLine && !combined ? DS.C.textSub : color).opacity(0.4))
+                            .lineStyle(StrokeStyle(lineWidth: 1, dash: [1.5, 2.5]))
+                        }
+                    }
+                    if showsSessionLine {
+                        let session = UsageHistory.chartPoints(entry.samples) { $0.s.map { $0 * 100 } }
+                        // A lone reading (first poll, or one between gaps) draws no line.
+                        let segmentSizes = Dictionary(grouping: session, by: \.segment).mapValues(\.count)
+                        let lonePoints = session.filter { segmentSizes[$0.segment] == 1 }
+                        ForEach(session) { point in
+                            if !combined {
+                                AreaMark(
+                                    x: .value("Time", point.t),
+                                    y: .value("Session", point.value),
+                                    series: .value("Segment", "\(entry.id)-s\(point.segment)")
+                                )
+                                .foregroundStyle(color.opacity(0.16))
+                                .interpolationMethod(.stepEnd)
+                            }
+                            LineMark(
                                 x: .value("Time", point.t),
                                 y: .value("Session", point.value),
                                 series: .value("Segment", "\(entry.id)-s\(point.segment)")
                             )
-                            .foregroundStyle(color.opacity(0.14))
+                            .foregroundStyle(color)
+                            .lineStyle(StrokeStyle(lineWidth: 1.5))
                             .interpolationMethod(.stepEnd)
                         }
-                        LineMark(
-                            x: .value("Time", point.t),
-                            y: .value("Session", point.value),
-                            series: .value("Segment", "\(entry.id)-s\(point.segment)")
-                        )
-                        .foregroundStyle(color)
-                        .lineStyle(StrokeStyle(lineWidth: 1.5))
-                        .interpolationMethod(.stepEnd)
-                    }
-                    ForEach(lonePoints) { point in
-                        PointMark(x: .value("Time", point.t), y: .value("Session", point.value))
+                        ForEach(lonePoints) { point in
+                            PointMark(x: .value("Time", point.t), y: .value("Session", point.value))
+                                .foregroundStyle(color)
+                                .symbolSize(18)
+                        }
+                        ForEach(weekly) { point in
+                            LineMark(
+                                x: .value("Time", point.t),
+                                y: .value("Weekly", point.value),
+                                series: .value("Segment", "\(entry.id)-w\(point.segment)")
+                            )
+                            .foregroundStyle(combined ? color.opacity(0.7) : DS.C.textSub)
+                            .lineStyle(StrokeStyle(lineWidth: 1.2, dash: [3, 3]))
+                        }
+                    } else {
+                        // Weekly only: the hero line, filled when it's alone. The
+                        // fill follows bridged stretches so it doesn't strobe at gaps.
+                        if !combined {
+                            ForEach(UsageHistory.joiningBridges(weekly)) { point in
+                                AreaMark(
+                                    x: .value("Time", point.t),
+                                    y: .value("Weekly", point.value),
+                                    series: .value("Segment", "\(entry.id)-a\(point.segment)")
+                                )
+                                .foregroundStyle(color.opacity(0.14))
+                            }
+                        }
+                        ForEach(weekly) { point in
+                            LineMark(
+                                x: .value("Time", point.t),
+                                y: .value("Weekly", point.value),
+                                series: .value("Segment", "\(entry.id)-w\(point.segment)")
+                            )
                             .foregroundStyle(color)
-                            .symbolSize(18)
-                    }
-                    ForEach(weekly) { point in
-                        LineMark(
-                            x: .value("Time", point.t),
-                            y: .value("Weekly", point.value),
-                            series: .value("Segment", "\(entry.id)-w\(point.segment)")
-                        )
-                        .foregroundStyle(combined ? color.opacity(0.75) : DS.C.textSub)
-                        .lineStyle(StrokeStyle(lineWidth: 1.2, dash: [3, 3]))
+                            .lineStyle(StrokeStyle(lineWidth: 1.6))
+                        }
                     }
                 }
             }
-            .chartXScale(domain: start...end)
+            .chartXScale(domain: timeDomain(start: start, end: end))
             .chartYScale(domain: 0...100)
             .chartPlotStyle { $0.clipped() }
-            .chartYAxis {
-                AxisMarks(position: .leading, values: [0, 50, 100]) { value in
-                    AxisGridLine().foregroundStyle(DS.C.borderSoft)
-                    AxisValueLabel { Text("\(value.as(Int.self) ?? 0)%").font(.system(size: 8.5)) }
-                }
-            }
-            .chartXAxis { timeAxis }
+            .chartYAxis { percentAxis }
+            .chartXAxis { timeAxis(timeDomain(start: start, end: end)) }
             .frame(height: 120)
         }
     }
 
     @ViewBuilder
     private var legend: some View {
-        if combined {
-            HStack(spacing: 8) {
+        HStack(spacing: 8) {
+            if combined {
                 ForEach(series) { entry in
                     legendItem(entry.tool.shortName, color: lineColor(entry), dashed: false)
                 }
-                legendItem("Weekly", color: DS.C.textSub, dashed: true)
-            }
-        } else {
-            HStack(spacing: 8) {
-                legendItem("5h", color: series.first.map(lineColor) ?? DS.C.usageBlue, dashed: false)
+                if showsSessionLine { legendItem("Weekly", color: DS.C.textSub, dashed: true) }
+            } else if showsSessionLine {
+                legendItem("5h", color: series.first.map(lineColor) ?? DS.C.textSub, dashed: false)
                 legendItem("Weekly", color: DS.C.textSub, dashed: true)
             }
         }
@@ -398,60 +445,140 @@ private struct HistoryContent: View {
         }
     }
 
+    /// 24h / 7d: one bar per window across the hours it was open. 30d: a
+    /// 5-hour span is ~2pt wide there, so each bar is a day instead — the
+    /// fullest window that opened that day.
     private func windowCard(_ windowsByAccount: [(HistorySeries, [QuotaWindowSummary])]) -> some View {
         let end = Date()
         let start = end.addingTimeInterval(-range.interval)
+        let daily = range == .month
         var visible: [WindowBar] = []
-        for (entry, windows) in windowsByAccount {
-            for window in windows where window.resetAt >= start {
-                let barStart = max(window.startAt, start)
-                let barEnd = min(window.resetAt, end)
-                guard barEnd > barStart else { continue }
-                // One fixed color per account, never by level: height already
-                // shows the peak. Accounts overlap, so combined bars are see-through.
-                let color: Color = combined ? lineColor(entry).opacity(0.6) : lineColor(entry)
-                visible.append(WindowBar(
-                    id: "\(entry.id)-\(window.resetAt.timeIntervalSince1970)",
-                    window: window,
-                    start: barStart,
-                    end: barEnd,
-                    color: color
-                ))
+        var days: [DayPeakBar] = []
+        if daily {
+            for (entry, windows) in windowsByAccount {
+                for peak in UsageHistory.dailyPeaks(windows, days: range.dayCount, now: end, calendar: .current) {
+                    guard let value = peak.peak else { continue }
+                    days.append(DayPeakBar(id: "\(entry.id)-\(peak.day.timeIntervalSince1970)", account: entry.tool.shortName,
+                                           day: peak.day, peak: value, color: lineColor(entry)))
+                }
+            }
+        } else {
+            for (entry, windows) in windowsByAccount {
+                for window in windows where window.resetAt >= start {
+                    // A small gap on both ends keeps back-to-back windows apart.
+                    let inset = window.duration * 0.06
+                    let barStart = max(window.startAt.addingTimeInterval(inset), start)
+                    let barEnd = min(window.resetAt.addingTimeInterval(-inset), end)
+                    guard barEnd > barStart else { continue }
+                    // Accounts overlap, so combined bars are see-through.
+                    visible.append(WindowBar(
+                        id: "\(entry.id)-\(window.resetAt.timeIntervalSince1970)",
+                        window: window,
+                        start: barStart,
+                        end: barEnd,
+                        color: combined ? lineColor(entry).opacity(0.7) : lineColor(entry)
+                    ))
+                }
             }
         }
-        var info = "One bar per 5-hour window, spanning the hours it was open; its height is the most of the window that was used before it reset."
-        if combined { info += " Each account is drawn in its own color, see-through where windows overlap." }
-        return card(title: "Peak per 5h window", info: info) {
-            if visible.isEmpty {
+        var info = daily
+            ? "One bar per day: the fullest 5-hour window that opened that day, as the most of it used before it reset. The dashed line is the 95% limit."
+            : "One bar per 5-hour window, spanning the hours it was open; its height is the most of the window that was used before it reset. The dashed line is the 95% limit."
+        if combined { info += daily ? " Accounts sit side by side." : " Each account has its own color, see-through where windows overlap." }
+        let isEmpty = daily ? days.isEmpty : visible.isEmpty
+        return card(title: daily ? "Peak 5h window per day" : "Peak per 5h window", info: info, trailing: recordingSince(start: start)) {
+            if isEmpty {
                 Text("No opened windows in this range.")
                     .font(.system(size: 10.5))
                     .foregroundStyle(DS.C.textMuted)
                     .frame(maxWidth: .infinity, minHeight: 60)
             } else {
-                Chart(visible) { bar in
-                    // Spans the window's real 5 hours, so bars read as time on
-                    // the same axis as the usage chart above.
-                    RectangleMark(
-                        xStart: .value("Start", bar.start),
-                        xEnd: .value("Reset", bar.end),
-                        yStart: .value("Base", 0.0),
-                        yEnd: .value("Peak", bar.window.peakUsed * 100)
-                    )
-                    .foregroundStyle(bar.color)
-                    .cornerRadius(2)
-                }
-                .chartXScale(domain: start...end)
-                .chartYScale(domain: 0...100)
-                .chartPlotStyle { $0.clipped() }
-                .chartYAxis {
-                    AxisMarks(position: .leading, values: [0, 50, 100]) { value in
-                        AxisGridLine().foregroundStyle(DS.C.borderSoft)
-                        AxisValueLabel { Text("\(value.as(Int.self) ?? 0)%").font(.system(size: 8.5)) }
+                Chart {
+                    limitRule
+                    if daily {
+                        ForEach(days) { bar in
+                            BarMark(
+                                x: .value("Day", bar.day, unit: .day),
+                                y: .value("Peak", bar.peak * 100),
+                                width: .ratio(0.8)
+                            )
+                            .foregroundStyle(bar.color)
+                            .position(by: .value("Account", bar.account))
+                            .cornerRadius(1.5)
+                        }
+                    } else {
+                        // Spans the window's real 5 hours, so bars read as time
+                        // on the same axis as the usage chart above.
+                        ForEach(visible) { bar in
+                            RectangleMark(
+                                xStart: .value("Start", bar.start),
+                                xEnd: .value("Reset", bar.end),
+                                yStart: .value("Base", 0.0),
+                                yEnd: .value("Peak", bar.window.peakUsed * 100)
+                            )
+                            .foregroundStyle(bar.color)
+                            .cornerRadius(1.5)
+                        }
                     }
                 }
-                .chartXAxis { timeAxis }
-                .frame(height: 96)
+                .chartXScale(domain: timeDomain(start: start, end: end))
+                .chartYScale(domain: 0...100)
+                .chartPlotStyle { $0.clipped() }
+                .chartYAxis { percentAxis }
+                .chartXAxis { timeAxis(timeDomain(start: start, end: end)) }
+                .frame(height: 104)
             }
+        }
+    }
+
+    /// The x range every time chart shares, so dates line up card to card:
+    /// the last 24 hours, or whole local days for 7d / 30d.
+    private func timeDomain(start: Date, end: Date) -> ClosedRange<Date> {
+        range == .day ? start...end : dayDomain(end: end)
+    }
+
+    /// The 24 whole local hours the hourly token bars cover.
+    private func hourDomain(end: Date) -> ClosedRange<Date> {
+        let calendar = Calendar.current
+        let hour = calendar.dateInterval(of: .hour, for: end)?.start ?? end
+        return hour.addingTimeInterval(-23 * 3600)...hour.addingTimeInterval(3600)
+    }
+
+    /// "since Oct 4" when quota history began inside the range, so an empty
+    /// left side reads as "not recorded yet", not "no usage".
+    @ViewBuilder
+    private func recordingSince(start: Date) -> some View {
+        if let first = series.compactMap({ $0.samples.map(\.t).min() }).min(),
+           first.timeIntervalSince(start) > max(range.interval * 0.1, 3600) {
+            Text("since \(first.formatted(range == .day ? .dateTime.hour().minute() : .dateTime.month(.abbreviated).day()))")
+                .font(.system(size: 9.5, weight: .medium))
+                .foregroundStyle(DS.C.textMuted)
+                .lineLimit(1)
+        }
+    }
+
+    /// Whole local days, so the first and last day bars aren't cut in half.
+    private func dayDomain(end: Date) -> ClosedRange<Date> {
+        let calendar = Calendar.current
+        let today = calendar.startOfDay(for: end)
+        let first = calendar.date(byAdding: .day, value: -(range.dayCount - 1), to: today) ?? today
+        let last = calendar.date(byAdding: .day, value: 1, to: today) ?? end
+        return first...last
+    }
+
+    /// The 95% line a window counts as "hit limit" at (see the stat tile).
+    @ChartContentBuilder
+    private var limitRule: some ChartContent {
+        RuleMark(y: .value("Limit", 95))
+            .foregroundStyle(DS.C.textMuted.opacity(0.8))
+            .lineStyle(StrokeStyle(lineWidth: 0.8, dash: [3, 3]))
+    }
+
+    @AxisContentBuilder
+    private var percentAxis: some AxisContent {
+        AxisMarks(position: .leading, values: [0, 50, 100]) { value in
+            AxisGridLine().foregroundStyle(DS.C.borderSoft)
+            AxisValueLabel { Text("\(value.as(Int.self) ?? 0)%").font(.system(size: 8.5)) }
         }
     }
 
@@ -472,6 +599,7 @@ private struct HistoryContent: View {
         let subtitle = "\(TokenFormat.compact(overall.tokens)) tokens" + (overall.costUSD.map { " · $\(String(format: "%.2f", $0))" } ?? "")
         let reading = series.contains(where: \.isFetchingTokens)
         let unit: Calendar.Component = hourlyView ? .hour : .day
+        let tokenDomain = hourlyView ? hourDomain(end: now) : dayDomain(end: now)
         var info = hourlyView
             ? "Tokens in each of the last 24 hours (your local time)"
             : "Tokens per day (your local time) over the \(range.longLabel)"
@@ -505,27 +633,17 @@ private struct HistoryContent: View {
                         AxisValueLabel { Text(TokenFormat.compact(value.as(Int.self) ?? 0)).font(.system(size: 8.5)) }
                     }
                 }
-                .chartXAxis { tokenAxis }
+                .chartXScale(domain: tokenDomain)
+                .chartXAxis { tokenAxis(tokenDomain) }
                 .frame(height: 96)
             }
         }
     }
 
     @AxisContentBuilder
-    private var tokenAxis: some AxisContent {
-        switch range {
-        case .day:
-            AxisMarks(values: .stride(by: .hour, count: 6)) { _ in
-                AxisValueLabel(format: .dateTime.hour()).font(.system(size: 8.5))
-            }
-        case .week:
-            AxisMarks(values: .stride(by: .day)) { _ in
-                AxisValueLabel(format: .dateTime.weekday(.narrow)).font(.system(size: 8.5))
-            }
-        case .month:
-            AxisMarks(values: .stride(by: .day, count: 7)) { _ in
-                AxisValueLabel(format: .dateTime.day().month(.abbreviated)).font(.system(size: 8.5))
-            }
+    private func tokenAxis(_ domain: ClosedRange<Date>) -> some AxisContent {
+        AxisMarks(values: axisDates(domain)) { _ in
+            AxisValueLabel(format: axisFormat).font(.system(size: 8.5))
         }
     }
 
@@ -538,7 +656,7 @@ private struct HistoryContent: View {
         let kinds = ToolID.allCases.filter { kind in grid.rows.contains { $0.cells.contains { ($0?.parts[kind] ?? 0) > 0 } } }
         let showsBoth = grid.rows.contains { $0.cells.contains { $0.map { BusyHoursGrid.tint(of: $0) == nil } ?? false } }
         let scope = combined
-            ? " Orange is Claude and purple is Codex; a square used by both (neither above 80% of its tokens) is pink."
+            ? " Orange is Claude and blue is Codex; a square used by both (neither above 80% of its tokens) is purple."
             : ""
         let info: String
         switch range {
@@ -565,8 +683,8 @@ private struct HistoryContent: View {
     private func busyLegend(kinds: [ToolID], both: Bool) -> some View {
         if !kinds.isEmpty {
             HStack(spacing: 7) {
-                ForEach(kinds) { kind in swatch(kind.shortName, DS.C.accent(kind)) }
-                if both { swatch("Both", DS.C.bothAccent) }
+                ForEach(kinds) { kind in swatch(kind.shortName, DS.C.history(kind)) }
+                if both { swatch("Both", DS.C.historyBoth) }
             }
         }
     }
@@ -580,40 +698,71 @@ private struct HistoryContent: View {
 
     // MARK: - Helpers
 
-    /// Session-line color: usage blue for a single account, the account's
-    /// brand color when several share a chart (added accounts a shade lighter).
+    /// The account's tool color; on a shared chart an added account is a
+    /// shade lighter so two accounts of one tool stay apart.
     private func lineColor(_ entry: HistorySeries) -> Color {
-        guard combined else { return colorfulBars ? DS.C.usageBlue : DS.C.barPlain }
-        return DS.C.accent(entry.tool).opacity(entry.tool.isDefault ? 1 : 0.55)
+        DS.C.history(entry.tool.kind).opacity(combined && !entry.tool.isDefault ? 0.55 : 1)
     }
 
     private func tokenColor(_ entry: HistorySeries) -> Color {
-        DS.C.accent(entry.tool).opacity(entry.tool.isDefault ? 0.85 : 0.5)
+        DS.C.history(entry.tool.kind).opacity(entry.tool.isDefault ? 0.85 : 0.5)
     }
 
     @AxisContentBuilder
-    private var timeAxis: some AxisContent {
-        switch range {
-        case .day:
-            AxisMarks(values: .stride(by: .hour, count: 6)) { _ in
-                AxisGridLine().foregroundStyle(DS.C.borderSoft)
-                AxisValueLabel(format: .dateTime.hour()).font(.system(size: 8.5))
-            }
-        case .week:
-            AxisMarks(values: .stride(by: .day)) { _ in
-                AxisGridLine().foregroundStyle(DS.C.borderSoft)
-                AxisValueLabel(format: .dateTime.weekday(.narrow)).font(.system(size: 8.5))
-            }
-        case .month:
-            AxisMarks(values: .stride(by: .day, count: 7)) { _ in
-                AxisGridLine().foregroundStyle(DS.C.borderSoft)
-                AxisValueLabel(format: .dateTime.day().month(.abbreviated)).font(.system(size: 8.5))
-            }
+    private func timeAxis(_ domain: ClosedRange<Date>) -> some AxisContent {
+        AxisMarks(values: axisDates(domain)) { _ in
+            AxisGridLine().foregroundStyle(DS.C.borderSoft)
+            AxisValueLabel(format: axisFormat).font(.system(size: 8.5))
         }
     }
 
-    static func usageInfo(combined: Bool) -> String {
-        "How much of the quota was used over time. The solid line is the 5-hour window — it drops back to 0 when the window resets; the dashed line is the weekly quota. Gaps are times QuotaWarmer wasn't checking (Mac asleep or app closed)."
+    private var axisFormat: Date.FormatStyle {
+        switch range {
+        case .day: return .dateTime.hour()
+        case .week: return .dateTime.weekday(.narrow)
+        case .month: return .dateTime.day().month(.abbreviated)
+        }
+    }
+
+    /// Tick dates for a time axis: every 6th clock hour (24h), every day
+    /// (7d) or every 7th day from the first (30d). Ticks in the last stretch
+    /// of the axis are dropped — their centred label would be cut off at the
+    /// card's edge ("O…").
+    private func axisDates(_ domain: ClosedRange<Date>) -> [Date] {
+        let calendar = Calendar.current
+        let span = domain.upperBound.timeIntervalSince(domain.lowerBound)
+        let step: (component: Calendar.Component, count: Int, margin: Double)
+        switch range {
+        case .day: step = (.hour, 6, 0.07)
+        case .week: step = (.day, 1, 0.04)
+        case .month: step = (.day, 7, 0.06)
+        }
+        let limit = domain.upperBound.addingTimeInterval(-span * step.margin)
+        var first: Date
+        if range == .day {
+            // The first whole hour that's a multiple of 6.
+            first = calendar.dateInterval(of: .hour, for: domain.lowerBound)?.start ?? domain.lowerBound
+            if first < domain.lowerBound { first = first.addingTimeInterval(3600) }
+            while calendar.component(.hour, from: first) % 6 != 0 { first = first.addingTimeInterval(3600) }
+        } else {
+            first = calendar.startOfDay(for: domain.lowerBound)
+            if first < domain.lowerBound, let next = calendar.date(byAdding: .day, value: 1, to: first) { first = next }
+        }
+        var dates: [Date] = []
+        var tick = first
+        while tick <= limit {
+            dates.append(tick)
+            guard let next = calendar.date(byAdding: step.component, value: step.count, to: tick) else { break }
+            tick = next
+        }
+        return dates
+    }
+
+    static func usageInfo(combined: Bool, session: Bool = true) -> String {
+        (session
+            ? "How much of the quota was used over time. The solid line is the 5-hour window — it drops back to 0 when the window resets; the dashed line is the weekly quota."
+            : "How much of the weekly quota was used over time. Over 30 days the 5-hour line resets too often to read, so see the chart below for each window's peak.")
+            + " Gaps are times QuotaWarmer wasn't checking (Mac asleep or app closed); a faint dotted line bridges the weekly quota across gaps of up to 12 hours."
             + (combined ? " Each account has its own color." : "")
     }
 
@@ -760,7 +909,7 @@ private struct HourHeatmap: View {
     let grid: BusyHoursGrid
 
     private func color(for cell: BusyHoursGrid.Cell) -> Color {
-        BusyHoursGrid.tint(of: cell).map { DS.C.accent($0) } ?? DS.C.bothAccent
+        BusyHoursGrid.tint(of: cell).map { DS.C.history($0) } ?? DS.C.historyBoth
     }
 
     var body: some View {

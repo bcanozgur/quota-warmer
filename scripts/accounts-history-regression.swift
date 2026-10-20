@@ -249,6 +249,18 @@ struct AccountsHistoryRegression {
         expect(session.map(\.value), [0.1, 0.2, 0.3], "nil values are skipped, order is by time")
         expect(session.map(\.segment), [0, 0, 1], "a gap longer than 45 min starts a new segment")
         expect(Set(session.map(\.id)).count, session.count, "point ids are unique")
+
+        let h: TimeInterval = 3600
+        let weekly = UsageHistory.chartPoints([
+            QuotaSample(t: t0, s: nil, w: 0.2, r: nil),
+            QuotaSample(t: t0.addingTimeInterval(8 * h), s: nil, w: 0.3, r: nil),    // overnight gap
+            QuotaSample(t: t0.addingTimeInterval(30 * h), s: nil, w: 0.4, r: nil),   // too long to bridge
+            QuotaSample(t: t0.addingTimeInterval(32 * h), s: nil, w: 0.05, r: nil),  // reset inside the gap
+        ]) { $0.w }
+        let bridges = UsageHistory.bridges(weekly)
+        expect(bridges.map(\.from.value), [0.2], "only a short, non-dropping gap is bridged")
+        expect(bridges.map(\.to.value), [0.3], "the bridge ends at the next segment's first point")
+        expect(UsageHistory.joiningBridges(weekly).map(\.segment), [0, 0, 1, 2], "a bridged gap shares one fill; the rest stay apart")
     }
 
     static func testHistoryStore() {
@@ -343,6 +355,18 @@ struct AccountsHistoryRegression {
         expect(recent.last?.hour, utc.date(from: DateComponents(year: 2026, month: 6, day: 15, hour: 12)), "the newest hour is now")
         expect(recent.first?.hour, utc.date(from: DateComponents(year: 2026, month: 6, day: 14, hour: 13)), "the oldest is 23 hours back")
         expect(recent.map(\.tokens).reduce(0, +), 150, "the 24h strip only holds the last 24 hours")
+
+        let fiveHours: TimeInterval = 5 * 3600
+        let peakWindows = [
+            QuotaWindowSummary(resetAt: utc.startOfDay(for: now).addingTimeInterval(-86400 + 9 * 3600), duration: fiveHours, peakUsed: 0.4, samples: 3),
+            QuotaWindowSummary(resetAt: utc.startOfDay(for: now).addingTimeInterval(-86400 + 20 * 3600), duration: fiveHours, peakUsed: 0.9, samples: 3),
+            // Opens 22:00 the day before yesterday, resets after midnight: counts for the day it opened.
+            QuotaWindowSummary(resetAt: utc.startOfDay(for: now).addingTimeInterval(-86400 + 3 * 3600), duration: fiveHours, peakUsed: 0.2, samples: 2),
+        ]
+        let peaks = UsageHistory.dailyPeaks(peakWindows, days: 3, now: now, calendar: utc)
+        expect(peaks.map(\.day), (0..<3).reversed().map { utc.date(byAdding: .day, value: -$0, to: utc.startOfDay(for: now))! }, "3 local days, today last")
+        expect(peaks.map(\.peak), [0.2, 0.9, nil], "each day keeps its fullest window, by the day it opened")
+        expect(peaks.map(\.windows), [1, 2, 0], "and counts the windows that opened")
 
         let merged = UsageHistory.mergeHourly([summary.hourly, [TokenUsageHour(hour: monday10, tokens: 5)]])
         expect(merged.map(\.tokens), [7, 155], "accounts add up per hour in All")

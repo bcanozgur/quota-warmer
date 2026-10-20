@@ -99,6 +99,16 @@ enum DS {
         }
         /// Busy hours used by both Claude and Codex: between the two accents.
         static let bothAccent = Color(light: 0xC2408A, dark: 0xB0588E)
+
+        /// History tab: one fixed color per tool across every chart — Claude
+        /// orange, Codex blue — so a series is recognisable at a glance and
+        /// never reads as a usage level.
+        static func history(_ tool: ToolID) -> Color {
+            tool == .claude ? claudeAccent : historyCodex
+        }
+        /// History busy hours shared by both tools: between orange and blue.
+        static let historyBoth = Color(light: 0x8B5CC7, dark: 0x8E72C4)
+        private static let historyCodex = Color(light: 0x2C84DB, dark: 0x4A86CC)
         private static let claudeAccent = Color(light: 0xE6610D, dark: 0xCB6A2F)   // Anthropic orange
         private static let codexAccent  = Color(light: 0x613DE6, dark: 0x7F6CD0)   // OpenAI indigo
     }
