@@ -49,34 +49,18 @@
         }
       }
     },
-    " Each account is drawn in its own color, see-through where windows overlap.": {
+    " Orange is Claude and blue is Codex; a square used by both (neither above 80% of its tokens) is purple.": {
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": " Each account is drawn in its own color, see-through where windows overlap."
+            "value": " Orange is Claude and blue is Codex; a square used by both (neither above 80% of its tokens) is purple."
           }
         },
         "tr": {
           "stringUnit": {
             "state": "translated",
-            "value": " Her hesap kendi renginde çizilir; pencereler üst üste geldiğinde yarı saydam görünür."
-          }
-        }
-      }
-    },
-    " Orange is Claude and purple is Codex; a square used by both (neither above 80% of its tokens) is pink.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": " Orange is Claude and purple is Codex; a square used by both (neither above 80% of its tokens) is pink."
-          }
-        },
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": " Turuncu Claude, mor Codex; ikisinin de kullandığı kare (hiçbiri token’ının %80’inden fazlasını kullanmadıysa) pembe olur."
+            "value": " Turuncu Claude, mavi Codex’tir; ikisinin de kullandığı (hiçbirinin token’larının %80’ini aşmadığı) kare mor renktedir."
           }
         }
       }
@@ -3313,34 +3297,66 @@
         }
       }
     },
-    "How much of the quota was used over time. The solid line is the 5-hour window — it drops back to 0 when the window resets; the dashed line is the weekly quota. Gaps are times QuotaWarmer wasn't checking (Mac asleep or app closed).": {
+    "How much of the quota was used over time. The solid line is the 5-hour window — it drops back to 0 when the window resets; the dashed line is the weekly quota. Gaps are times QuotaWarmer wasn't checking (Mac asleep or app closed); a faint dotted line bridges the weekly quota across gaps of up to 12 hours.": {
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "How much of the quota was used over time. The solid line is the 5-hour window — it drops back to 0 when the window resets; the dashed line is the weekly quota. Gaps are times QuotaWarmer wasn't checking (Mac asleep or app closed)."
+            "value": "How much of the quota was used over time. The solid line is the 5-hour window — it drops back to 0 when the window resets; the dashed line is the weekly quota. Gaps are times QuotaWarmer wasn't checking (Mac asleep or app closed); a faint dotted line bridges the weekly quota across gaps of up to 12 hours."
           }
         },
         "tr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Zaman içinde kotanın ne kadarının kullanıldığı. Düz çizgi 5 saatlik penceredir — pencere sıfırlandığında 0’a döner; kesikli çizgi haftalık kotadır. Boşluklar QuotaWarmer’ın kontrol etmediği zamanlardır (Mac uykudayken ya da uygulama kapalıyken)."
+            "value": "Kotanın zaman içinde ne kadarının kullanıldığı. Düz çizgi 5 saatlik penceredir — pencere sıfırlandığında 0’a döner; kesikli çizgi haftalık kotadır. Boşluklar QuotaWarmer’ın kontrol etmediği zamanlardır (Mac uykudayken ya da uygulama kapalıyken); soluk noktalı bir çizgi, haftalık kotayı 12 saate kadar olan boşluklar boyunca birleştirir."
           }
         }
       }
     },
-    "How much of the quota was used over time. The solid line is the 5-hour window — it drops back to 0 when the window resets; the dashed line is the weekly quota. Gaps are times QuotaWarmer wasn't checking (Mac asleep or app closed). Each account has its own color.": {
+    "How much of the quota was used over time. The solid line is the 5-hour window — it drops back to 0 when the window resets; the dashed line is the weekly quota. Gaps are times QuotaWarmer wasn't checking (Mac asleep or app closed); a faint dotted line bridges the weekly quota across gaps of up to 12 hours. Each account has its own color.": {
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "How much of the quota was used over time. The solid line is the 5-hour window — it drops back to 0 when the window resets; the dashed line is the weekly quota. Gaps are times QuotaWarmer wasn't checking (Mac asleep or app closed). Each account has its own color."
+            "value": "How much of the quota was used over time. The solid line is the 5-hour window — it drops back to 0 when the window resets; the dashed line is the weekly quota. Gaps are times QuotaWarmer wasn't checking (Mac asleep or app closed); a faint dotted line bridges the weekly quota across gaps of up to 12 hours. Each account has its own color."
           }
         },
         "tr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Zaman içinde kotanın ne kadarının kullanıldığı. Düz çizgi 5 saatlik penceredir — pencere sıfırlandığında 0’a döner; kesikli çizgi haftalık kotadır. Boşluklar QuotaWarmer’ın kontrol etmediği zamanlardır (Mac uykudayken ya da uygulama kapalıyken). Her hesabın kendi rengi vardır."
+            "value": "Kotanın zaman içinde ne kadarının kullanıldığı. Düz çizgi 5 saatlik penceredir — pencere sıfırlandığında 0’a döner; kesikli çizgi haftalık kotadır. Boşluklar QuotaWarmer’ın kontrol etmediği zamanlardır (Mac uykudayken ya da uygulama kapalıyken); soluk noktalı bir çizgi, haftalık kotayı 12 saate kadar olan boşluklar boyunca birleştirir. Her hesabın kendi rengi vardır."
+          }
+        }
+      }
+    },
+    "How much of the weekly quota was used over time. Over 30 days the 5-hour line resets too often to read, so see the chart below for each window's peak. Gaps are times QuotaWarmer wasn't checking (Mac asleep or app closed); a faint dotted line bridges the weekly quota across gaps of up to 12 hours.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "How much of the weekly quota was used over time. Over 30 days the 5-hour line resets too often to read, so see the chart below for each window's peak. Gaps are times QuotaWarmer wasn't checking (Mac asleep or app closed); a faint dotted line bridges the weekly quota across gaps of up to 12 hours."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Haftalık kotanın zaman içinde ne kadarının kullanıldığı. 30 günde 5 saatlik çizgi okunamayacak kadar sık sıfırlandığı için her pencerenin zirvesi için alttaki grafiğe bakın. Boşluklar QuotaWarmer’ın kontrol etmediği zamanlardır (Mac uykudayken ya da uygulama kapalıyken); soluk noktalı bir çizgi, haftalık kotayı 12 saate kadar olan boşluklar boyunca birleştirir."
+          }
+        }
+      }
+    },
+    "How much of the weekly quota was used over time. Over 30 days the 5-hour line resets too often to read, so see the chart below for each window's peak. Gaps are times QuotaWarmer wasn't checking (Mac asleep or app closed); a faint dotted line bridges the weekly quota across gaps of up to 12 hours. Each account has its own color.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "How much of the weekly quota was used over time. Over 30 days the 5-hour line resets too often to read, so see the chart below for each window's peak. Gaps are times QuotaWarmer wasn't checking (Mac asleep or app closed); a faint dotted line bridges the weekly quota across gaps of up to 12 hours. Each account has its own color."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Haftalık kotanın zaman içinde ne kadarının kullanıldığı. 30 günde 5 saatlik çizgi okunamayacak kadar sık sıfırlandığı için her pencerenin zirvesi için alttaki grafiğe bakın. Boşluklar QuotaWarmer’ın kontrol etmediği zamanlardır (Mac uykudayken ya da uygulama kapalıyken); soluk noktalı bir çizgi, haftalık kotayı 12 saate kadar olan boşluklar boyunca birleştirir. Her hesabın kendi rengi vardır."
           }
         }
       }
@@ -3709,6 +3725,22 @@
           "stringUnit": {
             "state": "translated",
             "value": "Açık"
+          }
+        }
+      }
+    },
+    "Limit": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Limit"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sınır"
           }
         }
       }
@@ -4593,18 +4625,66 @@
         }
       }
     },
-    "One bar per 5-hour window, spanning the hours it was open; its height is the most of the window that was used before it reset.%@": {
+    "One bar per 5-hour window, spanning the hours it was open; its height is the most of the window that was used before it reset. The dashed line is the 95% limit.": {
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "One bar per 5-hour window, spanning the hours it was open; its height is the most of the window that was used before it reset.%@"
+            "value": "One bar per 5-hour window, spanning the hours it was open; its height is the most of the window that was used before it reset. The dashed line is the 95% limit."
           }
         },
         "tr": {
           "stringUnit": {
             "state": "translated",
-            "value": "5 saatlik pencere başına bir çubuk; açık kaldığı saatleri kapsar; yüksekliği, sıfırlanmadan önce pencerenin en çok kullanılan kısmıdır.%@"
+            "value": "5 saatlik pencere başına bir çubuk; açık kaldığı saatleri kapsar; yüksekliği, sıfırlanmadan önce pencerenin en çok kullanılan kısmıdır. Kesikli çizgi %95 sınırıdır."
+          }
+        }
+      }
+    },
+    "One bar per 5-hour window, spanning the hours it was open; its height is the most of the window that was used before it reset. The dashed line is the 95% limit. Each account has its own color, see-through where windows overlap.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "One bar per 5-hour window, spanning the hours it was open; its height is the most of the window that was used before it reset. The dashed line is the 95% limit. Each account has its own color, see-through where windows overlap."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "5 saatlik pencere başına bir çubuk; açık kaldığı saatleri kapsar; yüksekliği, sıfırlanmadan önce pencerenin en çok kullanılan kısmıdır. Kesikli çizgi %95 sınırıdır. Her hesabın kendi rengi vardır; pencerelerin çakıştığı yerlerde yarı saydamdır."
+          }
+        }
+      }
+    },
+    "One bar per day: the fullest 5-hour window that opened that day, as the most of it used before it reset. The dashed line is the 95% limit.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "One bar per day: the fullest 5-hour window that opened that day, as the most of it used before it reset. The dashed line is the 95% limit."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Gün başına bir çubuk: o gün açılan en dolu 5 saatlik pencere, sıfırlanmadan önce en çok kullanılan kısmıyla. Kesikli çizgi %95 sınırıdır."
+          }
+        }
+      }
+    },
+    "One bar per day: the fullest 5-hour window that opened that day, as the most of it used before it reset. The dashed line is the 95% limit. Accounts sit side by side.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "One bar per day: the fullest 5-hour window that opened that day, as the most of it used before it reset. The dashed line is the 95% limit. Accounts sit side by side."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Gün başına bir çubuk: o gün açılan en dolu 5 saatlik pencere, sıfırlanmadan önce en çok kullanılan kısmıyla. Kesikli çizgi %95 sınırıdır. Hesaplar yan yana gösterilir."
           }
         }
       }
@@ -4829,6 +4909,38 @@
           "stringUnit": {
             "state": "translated",
             "value": "Zirve %@ token"
+          }
+        }
+      }
+    },
+    "Peak 5-hour window per day": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Peak 5-hour window per day"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Gün başına zirve 5 saatlik pencere"
+          }
+        }
+      }
+    },
+    "Peak 5h window per day": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Peak 5h window per day"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Gün başına zirve 5sa pencere"
           }
         }
       }
@@ -7665,6 +7777,22 @@
         }
       }
     },
+    "Weekly quota used": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Weekly quota used"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kullanılan haftalık kota"
+          }
+        }
+      }
+    },
     "Weeks at weekly limit": {
       "localizations": {
         "en": {
@@ -8397,6 +8525,22 @@
           "stringUnit": {
             "state": "translated",
             "value": "azalıyor"
+          }
+        }
+      }
+    },
+    "since %@": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "since %@"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ itibarıyla"
           }
         }
       }

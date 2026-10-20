@@ -51,6 +51,13 @@ struct QuotaWindowSummary: Identifiable, Equatable {
     var hitLimit: Bool { peakUsed >= 0.95 }
 }
 
+/// The fullest 5-hour window that opened on one local day.
+struct DailyPeak: Equatable {
+    let day: Date
+    let peak: Double?
+    let windows: Int
+}
+
 /// Totals shown in the History tab's stat row.
 struct UsageHistoryStats: Equatable {
     let windowCount: Int
@@ -144,6 +151,39 @@ enum UsageHistory {
         return points
     }
 
+    /// A short unmeasured stretch between two segments of a slow series
+    /// (the weekly quota), drawn faint so overnight sleep doesn't chop it up.
+    struct ChartBridge: Identifiable, Equatable {
+        let from: ChartPoint
+        let to: ChartPoint
+        var id: String { "b-\(from.id)" }
+    }
+
+    /// Bridges between consecutive segments at most `maxGap` apart. A drop
+    /// across the gap means a reset happened at an unknown time inside it,
+    /// so that gap stays open rather than drawing a slope that never was.
+    static func bridges(_ points: [ChartPoint], maxGap: TimeInterval = 12 * 3600) -> [ChartBridge] {
+        zip(points, points.dropFirst()).compactMap { from, to in
+            guard to.segment != from.segment,
+                  to.t.timeIntervalSince(from.t) <= maxGap,
+                  to.value >= from.value else { return nil }
+            return ChartBridge(from: from, to: to)
+        }
+    }
+
+    /// `points` with each bridged gap joined into one segment, for a fill
+    /// that follows the same line `bridges` draws.
+    static func joiningBridges(_ points: [ChartPoint], maxGap: TimeInterval = 12 * 3600) -> [ChartPoint] {
+        let joined = Set(bridges(points, maxGap: maxGap).map(\.to.segment))
+        var segment = 0
+        var last: Int?
+        return points.map { point in
+            if let last, point.segment != last, !joined.contains(point.segment) { segment += 1 }
+            last = point.segment
+            return ChartPoint(t: point.t, value: point.value, segment: segment)
+        }
+    }
+
     // MARK: - Busy hours
 
     /// Tokens per (weekday, hour) over `hours` at or after `since`: 168 cells,
@@ -199,6 +239,20 @@ enum UsageHistory {
         let byDay = Dictionary(grouping: hours) { calendar.startOfDay(for: $0.hour) }
         return (0..<days).reversed().compactMap { back in
             calendar.date(byAdding: .day, value: -back, to: today).map { total(byDay[$0] ?? [], at: $0) }
+        }
+    }
+
+    /// One entry per local calendar day for the last `days` days (today
+    /// last): the fullest 5-hour window that opened that day and how many
+    /// opened. `peak` is nil on a day with no window.
+    static func dailyPeaks(_ windows: [QuotaWindowSummary], days: Int, now: Date, calendar: Calendar) -> [DailyPeak] {
+        let today = calendar.startOfDay(for: now)
+        let byDay = Dictionary(grouping: windows) { calendar.startOfDay(for: $0.startAt) }
+        return (0..<days).reversed().compactMap { back in
+            calendar.date(byAdding: .day, value: -back, to: today).map { day in
+                let opened = byDay[day] ?? []
+                return DailyPeak(day: day, peak: opened.map(\.peakUsed).max(), windows: opened.count)
+            }
         }
     }
 
