@@ -67,6 +67,7 @@ jobs:
             Sources/QuotaWarmer/Models/ProviderAccount.swift \
             Sources/QuotaWarmer/Models/UsageHistory.swift \
             Sources/QuotaWarmer/Models/QuotaDisplay.swift \
+            Sources/QuotaWarmer/Models/QuotaAlerts.swift \
             Sources/QuotaWarmer/Models/AppearanceMode.swift \
             Sources/QuotaWarmer/Models/TimeInput.swift \
             Sources/QuotaWarmer/Services/DiagnosticLogger.swift \

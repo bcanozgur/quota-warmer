@@ -621,7 +621,10 @@ final class AppState: ObservableObject {
             lastSuccessfulPollAt = Date()
             state.quotaSnapshot = snapshot
             // Removed mid-fetch: don't recreate the deleted history file.
-            if toolStates[tool] != nil { UsageHistoryStore.shared.record(snapshot, for: tool) }
+            if toolStates[tool] != nil {
+                UsageHistoryStore.shared.record(snapshot, for: tool)
+                evaluateQuotaAlerts(for: tool, snapshot: snapshot)
+            }
             state.sourceHealth = snapshot.freshness() == .fresh ? .healthy : .stale
             state.authStatus = .available
             state.healthMessage = snapshot.message ?? snapshot.primarySource
@@ -655,6 +658,30 @@ final class AppState: ObservableObject {
         }
 
         state.isFetchingQuota = false
+    }
+
+    /// Settings → Alerts (session/weekly used% thresholds, pace warning).
+    var quotaAlertSettings: QuotaAlertSettings { QuotaAlertSettings.load() }
+
+    /// Posts any session/weekly/pace warning a fresh snapshot makes due, each at
+    /// most once per window (see `QuotaAlertPolicy`). Silent while paused.
+    private func evaluateQuotaAlerts(for tool: ProviderID, snapshot: QuotaSnapshot) {
+        guard !globalPassive else { return }
+        let marks = QuotaAlertMark.load(storageKey: tool.storageKey)
+        let evaluation = QuotaAlertPolicy.evaluate(
+            snapshot: snapshot,
+            settings: quotaAlertSettings,
+            marks: marks,
+            fiveHourDuration: tool.windowDuration,
+            weeklyDuration: tool.weeklyWindowDuration
+        )
+        if evaluation.marks != marks {
+            QuotaAlertMark.save(evaluation.marks, storageKey: tool.storageKey)
+        }
+        for alert in evaluation.alerts {
+            notifications.notifyQuotaAlert(alert, tool: tool)
+            DiagnosticLogger.append("quota_alert tool=\(tool.rawValue) kind=\(alert.kind.rawValue) used=\(alert.usedPercent)")
+        }
     }
 
     private func refreshTokenUsage(for tool: ProviderID, force: Bool = false) {

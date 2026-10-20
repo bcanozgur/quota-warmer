@@ -7,6 +7,13 @@ struct SettingsTabView: View {
     @AppStorage("refreshInterval")   private var refreshInterval: Int    = 300
     @AppStorage("notifyWarning")     private var notifyWarning: Bool     = true
     @AppStorage("notifyActivated")   private var notifyActivated: Bool   = true
+    @AppStorage(QuotaAlertSettings.sessionEnabledKey) private var alertSession: Bool = true
+    @AppStorage(QuotaAlertSettings.sessionFirstKey)   private var alertSessionFirst: Int = QuotaAlertSettings.defaultSessionThresholds[0]
+    @AppStorage(QuotaAlertSettings.sessionSecondKey)  private var alertSessionSecond: Int = QuotaAlertSettings.defaultSessionThresholds[1]
+    @AppStorage(QuotaAlertSettings.weeklyEnabledKey)  private var alertWeekly: Bool = true
+    @AppStorage(QuotaAlertSettings.weeklyFirstKey)    private var alertWeeklyFirst: Int = QuotaAlertSettings.defaultWeeklyThresholds[0]
+    @AppStorage(QuotaAlertSettings.weeklySecondKey)   private var alertWeeklySecond: Int = QuotaAlertSettings.defaultWeeklyThresholds[1]
+    @AppStorage(QuotaAlertSettings.paceEnabledKey)    private var alertPace: Bool = true
     @State private var launchAtLogin: Bool = SMAppService.mainApp.status == .enabled
     @State private var launchAtLoginError: String?
     @State private var historyExpanded = false
@@ -131,6 +138,34 @@ struct SettingsTabView: View {
                     row(icon: "checkmark.circle", title: "Window Activated",
                         subtitle: "After warmup succeeds") {
                         Toggle("", isOn: $notifyActivated)
+                            .toggleStyle(.switch).scaleEffect(0.75).tint(DS.C.green)
+                    }
+
+                    Divider().background(DS.C.border).padding(.leading, 36)
+
+                    row(icon: "gauge.with.dots.needle.67percent", title: "5h Usage",
+                        subtitle: "Alert at % used") {
+                        thresholdPill($alertSessionFirst, enabled: alertSession)
+                        thresholdPill($alertSessionSecond, enabled: alertSession)
+                        Toggle("", isOn: $alertSession)
+                            .toggleStyle(.switch).scaleEffect(0.75).tint(DS.C.green)
+                    }
+
+                    Divider().background(DS.C.border).padding(.leading, 36)
+
+                    row(icon: "calendar.badge.exclamationmark", title: "Weekly Usage",
+                        subtitle: "Alert at % used") {
+                        thresholdPill($alertWeeklyFirst, enabled: alertWeekly)
+                        thresholdPill($alertWeeklySecond, enabled: alertWeekly)
+                        Toggle("", isOn: $alertWeekly)
+                            .toggleStyle(.switch).scaleEffect(0.75).tint(DS.C.green)
+                    }
+
+                    Divider().background(DS.C.border).padding(.leading, 36)
+
+                    row(icon: "speedometer", title: "Pace Warning",
+                        subtitle: "5h quota runs out before reset") {
+                        Toggle("", isOn: $alertPace)
                             .toggleStyle(.switch).scaleEffect(0.75).tint(DS.C.green)
                     }
                 }
@@ -427,6 +462,24 @@ struct SettingsTabView: View {
         }
         .padding(.horizontal, DS.Space.md)
         .padding(.vertical, DS.Space.sm + 2)
+    }
+
+    /// Click-to-cycle used% threshold (50 → … → 95 → 50), matching the
+    /// app's other cycle controls instead of a popup menu in the scaled panel.
+    private func thresholdPill(_ value: Binding<Int>, enabled: Bool) -> some View {
+        Button(action: { value.wrappedValue = QuotaAlertSettings.nextThreshold(after: value.wrappedValue) }) {
+            Text("\(value.wrappedValue)%")
+                .font(.system(size: 9, weight: .semibold).monospacedDigit())
+                .lineLimit(1)
+                .fixedSize()
+                .padding(.horizontal, 6).padding(.vertical, 4)
+                .background(DS.C.surfaceHigh, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+                .foregroundStyle(enabled ? DS.C.text : DS.C.textMuted)
+        }
+        .buttonStyle(PressableButtonStyle())
+        .disabled(!enabled)
+        .help("Click to change the threshold")
+        .accessibilityLabel(Text("Alert at \(value.wrappedValue) percent used. Activate to change."))
     }
 
     private func segmentedPicker(

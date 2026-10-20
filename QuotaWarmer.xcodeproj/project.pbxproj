@@ -32,6 +32,7 @@
 		AE93A125268295B8FEFE106B /* DS.swift in Sources */ = {isa = PBXBuildFile; fileRef = EA95269FE22AE9471F2D23BA /* DS.swift */; };
 		AF4A75FD5837B3CE14D9654D /* SleepGuard.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5671B1D539CA7F63B3146770 /* SleepGuard.swift */; };
 		B26ECE071262E827974ADF29 /* ModelCatalog.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2ED6A0B93CBD320D269C645 /* ModelCatalog.swift */; };
+		B64C10EDD08BE7058842D94F /* QuotaAlerts.swift in Sources */ = {isa = PBXBuildFile; fileRef = 627C4B1A863EBEBCD11D305E /* QuotaAlerts.swift */; };
 		C5A94740BD8B9C128E344EFB /* WarmupRunner.swift in Sources */ = {isa = PBXBuildFile; fileRef = F4D8BDF7070D1A323481D7BE /* WarmupRunner.swift */; };
 		C7A75684B732A7F922EBB865 /* MainTabView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6F3B64B4293CFBD14217DA2B /* MainTabView.swift */; };
 		D49ED7E3B5EAB4587153F230 /* claude-models.json in Resources */ = {isa = PBXBuildFile; fileRef = 708576E3C4101A8F6BF23DD1 /* claude-models.json */; };
@@ -57,6 +58,7 @@
 		49B746DCC20AD7D805F1500B /* ProviderAccount.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProviderAccount.swift; sourceTree = "<group>"; };
 		4DD0A6F158460741008A6DC8 /* Components.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Components.swift; sourceTree = "<group>"; };
 		5671B1D539CA7F63B3146770 /* SleepGuard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SleepGuard.swift; sourceTree = "<group>"; };
+		627C4B1A863EBEBCD11D305E /* QuotaAlerts.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuotaAlerts.swift; sourceTree = "<group>"; };
 		6605B93E21CDFAC205269177 /* TimeInput.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TimeInput.swift; sourceTree = "<group>"; };
 		6F3B64B4293CFBD14217DA2B /* MainTabView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MainTabView.swift; sourceTree = "<group>"; };
 		708576E3C4101A8F6BF23DD1 /* claude-models.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "claude-models.json"; sourceTree = "<group>"; };
@@ -117,6 +119,7 @@
 			children = (
 				9D9A237728C8CC1E981C24F6 /* AppearanceMode.swift */,
 				49B746DCC20AD7D805F1500B /* ProviderAccount.swift */,
+				627C4B1A863EBEBCD11D305E /* QuotaAlerts.swift */,
 				1577681C89107051CD944BCA /* QuotaDisplay.swift */,
 				AB074D737482A5E4EA69E4E1 /* QuotaModels.swift */,
 				6605B93E21CDFAC205269177 /* TimeInput.swift */,
@@ -267,6 +270,7 @@
 				252FDEFA11D9ECBE5ABAE3C1 /* NotificationManager.swift in Sources */,
 				0D33EE868A2197DAE6DDD2EB /* OnboardingView.swift in Sources */,
 				3E253C1A1EE7E9A61FB598F7 /* ProviderAccount.swift in Sources */,
+				B64C10EDD08BE7058842D94F /* QuotaAlerts.swift in Sources */,
 				85F055597B6499A00DD4D7A8 /* QuotaDisplay.swift in Sources */,
 				1D83B5DD2E67DCE8549663EF /* QuotaModels.swift in Sources */,
 				E6D7A521F2B96CA5A3DB00C7 /* QuotaProvider.swift in Sources */,

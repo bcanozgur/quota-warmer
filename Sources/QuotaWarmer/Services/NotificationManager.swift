@@ -61,6 +61,20 @@ class NotificationManager {
         UNUserNotificationCenter.current().add(req)
     }
 
+    func notifyQuotaAlert(_ alert: QuotaAlert, tool: ProviderID) {
+        let content = UNMutableNotificationContent()
+        content.title = alert.title(toolName: tool.displayName)
+        content.body  = alert.body
+        content.sound = .default
+
+        let req = UNNotificationRequest(
+            identifier: "quotaAlert.\(alert.kind.rawValue).\(tool.rawValue).\(Int(Date().timeIntervalSince1970))",
+            content: content,
+            trigger: nil
+        )
+        UNUserNotificationCenter.current().add(req)
+    }
+
     func notifyMorningCatchUp(onBattery: Bool) {
         let content = UNMutableNotificationContent()
         content.title = "Morning Pre-warm — Caught Up"
