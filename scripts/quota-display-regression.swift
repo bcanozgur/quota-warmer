@@ -23,6 +23,7 @@ struct QuotaDisplayRegression {
         testTimeInput()
         testColorfulSetting()
         testQuotaAlerts()
+        testOnboardingFlow()
 
         if failures.isEmpty {
             print("Quota display regressions passed (\(checks) checks)")
@@ -278,6 +279,39 @@ struct QuotaDisplayRegression {
         expect(QuotaDisplay.colorLevel(remainingFraction: 0, hasMetric: false, settling: false, colorful: true), .normal, "on + no data stays calm blue, not red")
         expect(QuotaDisplay.colorLevel(remainingFraction: 0.02, hasMetric: true, settling: true, colorful: true), .normal, "on + settling stays calm blue")
         expect(QuotaDisplay.colorLevel(remainingFraction: 0.02, hasMetric: true, settling: false, colorful: true), .critical, "on + 98% used is red")
+    }
+
+    // MARK: - Onboarding
+
+    static func testOnboardingFlow() {
+        let v = OnboardingFlow.currentVersion
+        func d(_ completed: Int?, prior: Bool, missing: Bool, dismissed: Bool = false) -> OnboardingFlow.Decision {
+            OnboardingFlow.launchDecision(completedVersion: completed, hadPriorSettings: prior,
+                                          anyCLIMissing: missing, bannerDismissed: dismissed)
+        }
+        expect(d(nil, prior: false, missing: false), .init(showGuide: true, showMissingCLIBanner: false, markCompleted: false), "first launch shows the guide")
+        expect(d(nil, prior: false, missing: true), .init(showGuide: true, showMissingCLIBanner: false, markCompleted: false), "first launch with missing CLI: guide only")
+        expect(d(nil, prior: true, missing: false), .init(showGuide: false, showMissingCLIBanner: false, markCompleted: true), "upgrade is not forced into the guide")
+        expect(d(nil, prior: true, missing: true), .init(showGuide: false, showMissingCLIBanner: true, markCompleted: true), "upgrade with missing CLI keeps banner")
+        expect(d(nil, prior: true, missing: true, dismissed: true).showMissingCLIBanner, false, "dismissed banner stays hidden")
+        expect(d(v, prior: true, missing: false), .init(showGuide: false, showMissingCLIBanner: false, markCompleted: false), "completed: nothing")
+        expect(d(v, prior: true, missing: true), .init(showGuide: false, showMissingCLIBanner: true, markCompleted: false), "completed + missing CLI: banner")
+        expect(d(v, prior: true, missing: true, dismissed: true).showMissingCLIBanner, false, "completed + dismissed: nothing")
+        expect(d(v + 1, prior: true, missing: false).showGuide, false, "newer completed version: nothing")
+
+        check(!OnboardingFlow.hasPriorSettings(keys: []), "no keys: fresh install")
+        check(!OnboardingFlow.hasPriorSettings(keys: ["NSWindow Frame x", "AppleLanguages", "com.apple.foo"]), "system keys are not prior settings")
+        check(OnboardingFlow.hasPriorSettings(keys: ["AppleLanguages", "toolMode.claude"]), "toolMode key is a prior setting")
+        check(OnboardingFlow.hasPriorSettings(keys: ["refreshInterval"]), "refreshInterval is a prior setting")
+
+        expect(OnboardingStep.allCases.count, 5, "five guide steps")
+        expect(OnboardingStep.welcome.previous, nil, "welcome has no previous")
+        expect(OnboardingStep.welcome.next, .cliCheck, "welcome → CLI check")
+        expect(OnboardingStep.optional.next, nil, "last step has no next")
+        check(OnboardingStep.optional.isLast && OnboardingStep.welcome.isFirst, "first/last flags")
+        for tool in ToolID.allCases {
+            check(OnboardingFlow.installCommand(for: tool).hasPrefix("npm install -g "), "install command for \(tool.rawValue)")
+        }
     }
 
     // MARK: - Wake-time field

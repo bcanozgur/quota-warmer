@@ -280,6 +280,21 @@ class WarmupRunner {
         return await resolveCLI(named: name) == nil
     }
 
+    /// Resolved CLI path plus `--version` output (nil when the CLI is missing).
+    /// Used by the welcome guide; shares `resolveCLI` with warm-ups.
+    func cliInfo(_ tool: ToolID) async -> (path: String, version: String?)? {
+        let name = tool == .claude ? "claude" : "codex"
+        guard let url = await resolveCLI(named: name) else { return nil }
+        let result = await runShellCommand(
+            "\(name) --version",
+            pathPrefix: url.deletingLastPathComponent().path,
+            currentDirectoryURL: nil,
+            timeout: 10
+        )
+        let line = result.output.split(separator: "\n").first.map { String($0).trimmingCharacters(in: .whitespaces) }
+        return (url.path, result.exitCode == 0 ? line : nil)
+    }
+
     private func claudeAuthenticationStatus(pathPrefix: String, envPrefix: String) async -> CLIAuthenticationStatus {
         let result = await runShellCommand(
             envPrefix + "claude auth status",

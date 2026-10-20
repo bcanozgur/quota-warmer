@@ -32,3 +32,5 @@ Never commit credentials, tokens, Keychain exports, or local auth files such as 
 Use project skills under `.agents/skills/` for non-trivial work: `quotawarmer-quota-correctness` for quota/warm-up semantics and `quotawarmer-macos-runtime` for menu bar runtime/UI verification.
 
 Project agents live under `.agents/agents/`. Use `quotawarmer-quota-engineer` for quota and warm-up fixes, and `quotawarmer-runtime-verifier` for independent proof that a user-visible macOS fix is installed and running.
+
+`scripts/quota-display-regression.swift` also compiles `Models/OnboardingFlow.swift` (first-run guide eligibility: first launch, upgrade, missing CLI, completed); add a case whenever that logic changes. See CLAUDE.md for the full compile list.

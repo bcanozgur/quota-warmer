@@ -136,6 +136,17 @@ struct MenuContent: View {
 
     @ViewBuilder
     private var mainContent: some View {
+        if appState.showWelcomeGuide {
+            WelcomeGuideView()
+                .frame(width: DS.contentWidth)
+                .frame(maxHeight: .infinity)
+        } else {
+            tabContent
+        }
+    }
+
+    @ViewBuilder
+    private var tabContent: some View {
         switch appState.selectedTab {
         case .main:
             MainTabView()

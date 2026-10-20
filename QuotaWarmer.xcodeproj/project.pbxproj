@@ -7,8 +7,10 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		02360AC38D1A7CA624E81137 /* WelcomeGuideView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4EF5E1D93AD32696B52BFCBC /* WelcomeGuideView.swift */; };
 		05F1FB14EBC371E06BE9E39A /* QuotaWarmerApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 983850953D9EC6CDFC1DE171 /* QuotaWarmerApp.swift */; };
 		0D33EE868A2197DAE6DDD2EB /* OnboardingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1F346F22AD123AA6C32975A6 /* OnboardingView.swift */; };
+		11B4D0237A2B537F437E5315 /* OnboardingFlow.swift in Sources */ = {isa = PBXBuildFile; fileRef = D7D2041414DD952EC90B55D4 /* OnboardingFlow.swift */; };
 		1D83B5DD2E67DCE8549663EF /* QuotaModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB074D737482A5E4EA69E4E1 /* QuotaModels.swift */; };
 		242099BB055E5B570D3E0ED3 /* ToolTabView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A9538D4356A015407DACDA16 /* ToolTabView.swift */; };
 		252FDEFA11D9ECBE5ABAE3C1 /* NotificationManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8AA0B158FEC9459E92677A33 /* NotificationManager.swift */; };
@@ -59,6 +61,7 @@
 		3739BD62D7E5AAF6EB84DC3C /* AppState+Ext.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "AppState+Ext.swift"; sourceTree = "<group>"; };
 		49B746DCC20AD7D805F1500B /* ProviderAccount.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProviderAccount.swift; sourceTree = "<group>"; };
 		4DD0A6F158460741008A6DC8 /* Components.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Components.swift; sourceTree = "<group>"; };
+		4EF5E1D93AD32696B52BFCBC /* WelcomeGuideView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WelcomeGuideView.swift; sourceTree = "<group>"; };
 		5671B1D539CA7F63B3146770 /* SleepGuard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SleepGuard.swift; sourceTree = "<group>"; };
 		627C4B1A863EBEBCD11D305E /* QuotaAlerts.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuotaAlerts.swift; sourceTree = "<group>"; };
 		636C2E45CA01AC9E534BAED8 /* QuotaStatus.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuotaStatus.swift; sourceTree = "<group>"; };
@@ -82,6 +85,7 @@
 		AB074D737482A5E4EA69E4E1 /* QuotaModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuotaModels.swift; sourceTree = "<group>"; };
 		AF63A150FD6571486EE0C5B5 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		D76B9243E050B459482C242A /* SettingsTabView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsTabView.swift; sourceTree = "<group>"; };
+		D7D2041414DD952EC90B55D4 /* OnboardingFlow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OnboardingFlow.swift; sourceTree = "<group>"; };
 		E94AAC800581DE96B2F6ED29 /* MenuBarLabel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MenuBarLabel.swift; sourceTree = "<group>"; };
 		EA5F1077252CA9BA28AE19CD /* UpdateChecker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UpdateChecker.swift; sourceTree = "<group>"; };
 		EA95269FE22AE9471F2D23BA /* DS.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DS.swift; sourceTree = "<group>"; };
@@ -123,6 +127,7 @@
 			children = (
 				9D9A237728C8CC1E981C24F6 /* AppearanceMode.swift */,
 				7D95C8268ED2E35DCC765A35 /* AutoWarmDecision.swift */,
+				D7D2041414DD952EC90B55D4 /* OnboardingFlow.swift */,
 				49B746DCC20AD7D805F1500B /* ProviderAccount.swift */,
 				627C4B1A863EBEBCD11D305E /* QuotaAlerts.swift */,
 				1577681C89107051CD944BCA /* QuotaDisplay.swift */,
@@ -166,6 +171,7 @@
 				1F346F22AD123AA6C32975A6 /* OnboardingView.swift */,
 				D76B9243E050B459482C242A /* SettingsTabView.swift */,
 				A9538D4356A015407DACDA16 /* ToolTabView.swift */,
+				4EF5E1D93AD32696B52BFCBC /* WelcomeGuideView.swift */,
 			);
 			path = Views;
 			sourceTree = "<group>";
@@ -275,6 +281,7 @@
 				2769B7FA38A99171E15AC939 /* MenuContent.swift in Sources */,
 				B26ECE071262E827974ADF29 /* ModelCatalog.swift in Sources */,
 				252FDEFA11D9ECBE5ABAE3C1 /* NotificationManager.swift in Sources */,
+				11B4D0237A2B537F437E5315 /* OnboardingFlow.swift in Sources */,
 				0D33EE868A2197DAE6DDD2EB /* OnboardingView.swift in Sources */,
 				3E253C1A1EE7E9A61FB598F7 /* ProviderAccount.swift in Sources */,
 				B64C10EDD08BE7058842D94F /* QuotaAlerts.swift in Sources */,
@@ -293,6 +300,7 @@
 				8FCB391B05386B0AB0BCB5DB /* UsageHistory.swift in Sources */,
 				E33391F5D262478D2FC88C1E /* WakeScheduler.swift in Sources */,
 				C5A94740BD8B9C128E344EFB /* WarmupRunner.swift in Sources */,
+				02360AC38D1A7CA624E81137 /* WelcomeGuideView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

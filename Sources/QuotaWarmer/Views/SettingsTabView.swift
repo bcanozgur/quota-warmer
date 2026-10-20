@@ -190,6 +190,16 @@ struct SettingsTabView: View {
                     }
                 }
 
+                group("WELCOME") {
+                    row(icon: "hand.wave", title: "Welcome Guide",
+                        subtitle: "Modes, CLI check and permissions") {
+                        Button("Show Welcome Guide") { appState.openWelcomeGuide() }
+                            .buttonStyle(.plain)
+                            .font(.system(size: 10, weight: .medium))
+                            .foregroundStyle(DS.C.blue)
+                    }
+                }
+
                 group("HISTORY") {
                     historyContent
                 }
