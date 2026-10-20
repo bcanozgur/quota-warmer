@@ -1,22 +1,6 @@
 {
   "sourceLanguage": "en",
   "strings": {
-    " ": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": " "
-          }
-        },
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": " "
-          }
-        }
-      }
-    },
     " (%@ reading)": {
       "localizations": {
         "en": {
@@ -1393,18 +1377,18 @@
         }
       }
     },
-    "About": {
+    "About %@": {
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "About"
+            "value": "About %@"
           }
         },
         "tr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Hakkında"
+            "value": "%@ hakkında"
           }
         }
       }
@@ -6124,7 +6108,7 @@
         "tr": {
           "stringUnit": {
             "state": "translated",
-            "value": "%@ göster"
+            "value": "Göster: %@"
           }
         }
       }

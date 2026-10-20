@@ -900,7 +900,7 @@ struct InfoButton: View {
             .padding(10)
             .frame(width: 220, alignment: .leading)
         }
-        .accessibilityLabel(Text("About") + Text(" ") + Text(title))
+        .accessibilityLabel(Text("About \(Text(title))"))
         .accessibilityHint(Text(text))
     }
 }
