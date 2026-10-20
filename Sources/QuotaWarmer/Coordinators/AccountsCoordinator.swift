@@ -13,10 +13,10 @@ final class AccountsCoordinator {
 
         var errorDescription: String? {
             switch self {
-            case .invalidName: return "Give the account a name."
-            case .invalidHome: return "The folder must be an absolute path without quotes."
-            case .duplicateHome: return "Another account already uses this folder."
-            case .createFailed(let reason): return "Could not create the folder: \(reason)"
+            case .invalidName: return String(localized: "Give the account a name.")
+            case .invalidHome: return String(localized: "The folder must be an absolute path without quotes.")
+            case .duplicateHome: return String(localized: "Another account already uses this folder.")
+            case .createFailed(let reason): return String(localized: "Could not create the folder: \(reason)")
             }
         }
     }

@@ -65,18 +65,18 @@ struct QuotaReadingEntity: AppEntity {
 
     static func summary(for status: QuotaStatusProvider) -> String {
         guard status.session != nil || status.weekly != nil else {
-            return "\(status.name): no quota reading yet."
+            return String(localized: "\(status.name): no quota reading yet.")
         }
         func part(_ label: String, _ window: QuotaStatusWindow?) -> String? {
             guard let window else { return nil }
-            if window.settling { return "\(label) just reset" }
-            if window.idle { return "\(label) not started (100% left)" }
-            return "\(label) \(window.usedPercent)% used, \(window.remainingPercent)% left"
+            if window.settling { return String(localized: "\(label) just reset") }
+            if window.idle { return String(localized: "\(label) not started (100% left)") }
+            return String(localized: "\(label) \(window.usedPercent)% used, \(window.remainingPercent)% left")
         }
-        let body = [part("Session", status.session), part("Weekly", status.weekly)]
+        let body = [part(String(localized: "Session"), status.session), part(String(localized: "Weekly"), status.weekly)]
             .compactMap { $0 }.joined(separator: "; ")
-        let stale = status.freshness == "fresh" ? "" : " (\(status.freshness) reading)"
-        return "\(status.name): \(body)\(stale)."
+        let stale = status.freshness == "fresh" ? "" : String(localized: " (\(status.freshness) reading)")
+        return String(localized: "\(status.name): \(body)\(stale).")
     }
 }
 

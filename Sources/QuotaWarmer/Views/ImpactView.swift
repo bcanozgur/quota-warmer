@@ -145,7 +145,7 @@ struct ImpactView: View {
         if claims.manual > 0 { parts.append(String(localized: "\(claims.manual) manual")) }
         if claims.intent > 0 { parts.append(String(localized: "\(claims.intent) shortcut")) }
         if claims.unattributed > 0 { parts.append(String(localized: "\(claims.unattributed) earlier")) }
-        let period: LocalizedStringKey = range == .all ? "week" : "day"
+        let period = range == .all ? String(localized: "week") : String(localized: "day")
         return card(
             title: "Windows claimed",
             info: "How many windows were opened by a warm-up each \(period). Auto = fresh window detected; morning = the daily pre-warm; manual = you pressed Warm up.",

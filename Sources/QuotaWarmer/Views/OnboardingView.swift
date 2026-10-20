@@ -19,6 +19,8 @@ struct OnboardingView: View {
                         .foregroundStyle(DS.C.textMuted)
                 }
                 .buttonStyle(.plain)
+                .help("Dismiss setup")
+                .accessibilityLabel(Text("Dismiss setup"))
             }
             .padding(.horizontal, DS.Space.md)
             .padding(.vertical, 8)
@@ -74,6 +76,7 @@ struct OnboardingView: View {
         return HStack(spacing: DS.Space.sm) {
             Image(tool == .claude ? "ClaudeCode" : "Codex")
                 .resizable().scaledToFit().frame(width: 16, height: 16)
+                .accessibilityHidden(true)
             Text(tool.shortName)
                 .font(.system(size: 11, weight: .medium)).foregroundStyle(DS.C.text)
             Spacer()

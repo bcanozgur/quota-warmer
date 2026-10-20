@@ -2,6 +2,7 @@ import SwiftUI
 
 struct MainTabView: View {
     @EnvironmentObject var appState: AppState
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     // Session-only display state — never persisted, so every popover open
     // starts with both provider sections expanded (empty = nothing collapsed).
     @State private var collapsedTools: Set<ProviderID> = []
@@ -60,7 +61,7 @@ struct MainTabView: View {
                 }
             }
             .opacity(fetching ? 0.4 : 1)
-            .animation(.easeOut(duration: 0.15), value: fetching)
+            .animation(reduceMotion ? nil : .easeOut(duration: 0.15), value: fetching)
             StatusBadge(text: paused ? "Paused" : "Active", color: stateColor)
 
             IconButton(

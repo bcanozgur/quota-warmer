@@ -16,20 +16,20 @@ struct HotKeySettingsSection: View {
             line(icon: "keyboard", title: "Global Hotkey",
                  subtitle: hotKey.registrationFailed ? "Unavailable — already used by another app"
                      : (enabled && spec.isValid ? "\(spec.display) opens QuotaWarmer" : "Open the popover from anywhere")) {
-                Toggle("", isOn: $enabled)
+                Toggle(isOn: $enabled) { Text("Global hotkey") }
+                    .labelsHidden()
                     .toggleStyle(.switch).scaleEffect(0.75).tint(DS.C.green)
-                    .accessibilityLabel(Text("Global hotkey"))
             }
             if enabled {
                 Divider().background(DS.C.border).padding(.leading, 36)
                 line(icon: "command", title: "Keys",
                      subtitle: spec.isValid ? "Click to change" : "Include ⌃, ⌥ or ⌘") {
                     HStack(spacing: 4) {
-                        modifierPill("⌃", .control)
-                        modifierPill("⌥", .option)
-                        modifierPill("⇧", .shift)
-                        modifierPill("⌘", .command)
-                        pill(HotKeySpec.letters.first { $0.code == keyCode }?.label ?? "?", on: true) { cycleKey() }
+                        modifierPill("⌃", .control, name: "Control")
+                        modifierPill("⌥", .option, name: "Option")
+                        modifierPill("⇧", .shift, name: "Shift")
+                        modifierPill("⌘", .command, name: "Command")
+                        pill(HotKeySpec.letters.first { $0.code == keyCode }?.label ?? "?", name: "Key", on: true) { cycleKey() }
                     }
                 }
             }
@@ -39,9 +39,9 @@ struct HotKeySettingsSection: View {
         .onChange(of: modifiers) { _, _ in hotKey.reload() }
     }
 
-    private func modifierPill(_ glyph: String, _ flag: HotKeySpec.Modifiers) -> some View {
+    private func modifierPill(_ glyph: String, _ flag: HotKeySpec.Modifiers, name: LocalizedStringKey) -> some View {
         let isOn = HotKeySpec.Modifiers(rawValue: modifiers).contains(flag)
-        return pill(glyph, on: isOn) {
+        return pill(glyph, name: name, on: isOn) {
             var current = HotKeySpec.Modifiers(rawValue: modifiers)
             if isOn { current.remove(flag) } else { current.insert(flag) }
             modifiers = current.rawValue
@@ -54,7 +54,8 @@ struct HotKeySettingsSection: View {
         keyCode = letters[(index + 1) % letters.count].code
     }
 
-    private func pill(_ text: String, on: Bool, action: @escaping () -> Void) -> some View {
+    /// `name` is what VoiceOver reads ("Control", "Key"); the glyph is visual only.
+    private func pill(_ text: String, name: LocalizedStringKey, on: Bool, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Text(text)
                 .font(.system(size: 11, weight: .semibold))
@@ -65,10 +66,13 @@ struct HotKeySettingsSection: View {
                 .overlay(RoundedRectangle(cornerRadius: 7, style: .continuous).stroke(DS.C.border, lineWidth: 1))
         }
         .buttonStyle(PressableButtonStyle())
+        .accessibilityLabel(Text(name))
+        .accessibilityValue(Text(text))
+        .accessibilityAddTraits(on ? .isSelected : [])
     }
 
     private func line<Control: View>(
-        icon: String, title: String, subtitle: String, @ViewBuilder control: () -> Control
+        icon: String, title: LocalizedStringKey, subtitle: LocalizedStringKey, @ViewBuilder control: () -> Control
     ) -> some View {
         HStack(spacing: DS.Space.sm) {
             Image(systemName: icon)

@@ -439,8 +439,8 @@ private struct HistoryContent: View {
                 ))
             }
         }
-        let combinedNote: LocalizedStringKey = combined
-            ? " Each account is drawn in its own color, see-through where windows overlap."
+        let combinedNote = combined
+            ? String(localized: " Each account is drawn in its own color, see-through where windows overlap.")
             : ""
         return card(title: "Peak per 5h window", info: "One bar per 5-hour window, spanning the hours it was open; its height is the most of the window that was used before it reset.\(combinedNote)") {
             if visible.isEmpty {
@@ -495,7 +495,7 @@ private struct HistoryContent: View {
         let subtitle = String(localized: "\(TokenFormat.compact(overall.tokens)) tokens") + (overall.costUSD.map { " · $\(String(format: "%.2f", $0))" } ?? "")
         let reading = series.contains(where: \.isFetchingTokens)
         let unit: Calendar.Component = hourlyView ? .hour : .day
-        let combinedNote: LocalizedStringKey = combined ? " Each account is a segment of the bar." : ""
+        let combinedNote = combined ? String(localized: " Each account is a segment of the bar.") : ""
         let info: LocalizedStringKey = hourlyView
             ? "Tokens in each of the last 24 hours (your local time), from the CLI's local logs on this Mac (input, output and cache), with the estimated API-equivalent cost. Usage on other machines or the web isn't included.\(combinedNote)"
             : "Tokens per day (your local time) over the \(range.longLabel), from the CLI's local logs on this Mac (input, output and cache), with the estimated API-equivalent cost. Usage on other machines or the web isn't included.\(combinedNote)"

@@ -39,6 +39,7 @@ enum AppTab: Hashable {
 struct MenuContent: View {
     @EnvironmentObject var appState: AppState
     @AppStorage(AppearanceMode.defaultsKey) private var appearanceRaw = AppearanceMode.system.rawValue
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private var appearance: AppearanceMode { AppearanceMode(rawValue: appearanceRaw) ?? .system }
 
@@ -115,7 +116,7 @@ struct MenuContent: View {
                 Image(systemName: appearance.symbolName)
                     .font(.system(size: 15, weight: .regular))
                     .foregroundStyle(DS.C.textSub)
-                    .contentTransition(.symbolEffect(.replace))
+                    .contentTransition(reduceMotion ? .identity : .symbolEffect(.replace))
             }
 
             SidebarSlot(isSelected: appState.selectedTab == .settings, help: "Settings", shortcut: "3") {

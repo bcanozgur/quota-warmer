@@ -10,6 +10,7 @@ import SwiftUI
 /// slider-style knob marking the window's time (see `QuotaDisplay.thumbFraction`)
 /// — when fill and knob disagree, quota is being spent faster than time.
 struct UsageBar: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     var fraction: Double
     var refreshing: Bool = false
     var height: CGFloat = 8
@@ -24,8 +25,9 @@ struct UsageBar: View {
         // repeatForever animation: that animation also caught every layout change
         // made while it ran (countdown ticks, panel resizes) and replayed it forever,
         // so the fill bobbed up and down away from the knob and the row titles.
-        TimelineView(.animation(paused: !refreshing)) { context in
-            bar(fillOpacity: refreshing ? pulseOpacity(at: context.date) : 1)
+        // Reduce Motion: no pulse; the fill stays solid while a refresh runs.
+        TimelineView(.animation(paused: !refreshing || reduceMotion)) { context in
+            bar(fillOpacity: refreshing && !reduceMotion ? pulseOpacity(at: context.date) : 1)
         }
         .frame(height: height)
         .accessibilityHidden(true)

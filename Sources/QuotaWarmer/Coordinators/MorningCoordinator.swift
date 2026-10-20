@@ -63,7 +63,7 @@ final class MorningCoordinator {
         scheduler.cancelMorning()
         morningReapplyTask?.cancel()
         let result = await wakeScheduler.cancel()
-        host.morningStatus = result.success ? "Morning pre-warm is off." : result.message
+        host.morningStatus = result.success ? String(localized: "Morning pre-warm is off.") : result.message
         host.events.addHistory(tool: nil, kind: .quotaFetch, title: "Morning pre-warm off", detail: result.message)
     }
 
@@ -74,9 +74,9 @@ final class MorningCoordinator {
         if result.success {
             let timeText = String(format: "%02d:%02d", host.settings.morningHour, host.settings.morningMinute)
             if WakeScheduler.isOnACPower() {
-                host.morningStatus = "Mac will wake at \(timeText) and start your window."
+                host.morningStatus = String(localized: "Mac will wake at \(timeText) and start your window.")
             } else {
-                host.morningStatus = "Scheduled for \(timeText), but on battery with the lid closed the wake may be skipped — your window warms the moment you open the lid."
+                host.morningStatus = String(localized: "Scheduled for \(timeText), but on battery with the lid closed the wake may be skipped — your window warms the moment you open the lid.")
             }
             host.events.addHistory(tool: nil, kind: .quotaFetch, title: "Morning pre-warm scheduled", detail: result.message)
         } else {
@@ -89,14 +89,14 @@ final class MorningCoordinator {
         let days: WakeScheduler.WakeDays = host.settings.morningWeekdaysOnly ? .weekdays : .everyday
         guard wakeScheduler.scheduleMatches(hour: host.settings.morningHour, minute: host.settings.morningMinute, days: days) else {
             let expectedTime = String(format: "%02d:%02d", host.settings.morningHour, host.settings.morningMinute)
-            host.morningStatus = "Morning wake is not installed or was replaced. Toggle Wake & Warm off and on to repair it."
+            host.morningStatus = String(localized: "Morning wake is not installed or was replaced. Toggle Wake & Warm off and on to repair it.")
             DiagnosticLogger.append("morning_wake_schedule_mismatch expected=\(expectedTime) days=\(days.humanLabel)")
             return
         }
         let timeText = String(format: "%02d:%02d", host.settings.morningHour, host.settings.morningMinute)
         host.morningStatus = WakeScheduler.isOnACPower()
-            ? "Mac will wake at \(timeText) and start your window."
-            : "Scheduled for \(timeText); battery and a closed lid can prevent the wake."
+            ? String(localized: "Mac will wake at \(timeText) and start your window.")
+            : String(localized: "Scheduled for \(timeText); battery and a closed lid can prevent the wake.")
     }
 
     func scheduleMorningTimer() {
