@@ -941,7 +941,250 @@ access_token=private-value
             "Claude warmup must let the actual command, not a headless status preflight, determine auth failure"
         )
 
+        testAutoWarmDecision(appStateSource: appStateSource)
+
         print("quota extractor regression tests passed")
+    }
+
+    // MARK: - Auto-warm decision
+
+    /// Every gating rule of `AutoWarmDecision` (the auto-warm brain `AppState`
+    /// calls), each against a fixed clock.
+    private static func testAutoWarmDecision(appStateSource: String) {
+        let now = Date(timeIntervalSince1970: 1_780_000_000)
+        let window: TimeInterval = 5 * 3600
+
+        func snapshot(
+            fetchedAgo: TimeInterval = 0,
+            openedAgo: TimeInterval? = 120,
+            remaining: Double = 1,
+            idle: Bool = false,
+            key: String = "test|K1",
+            hasFiveHour: Bool = true
+        ) -> QuotaSnapshot {
+            let metric = QuotaMetric(
+                name: "5h",
+                usedPercent: 1 - remaining,
+                remainingPercent: remaining,
+                resetAt: openedAgo.map { now.addingTimeInterval(window - $0) },
+                detail: nil,
+                isIdle: idle
+            )
+            return QuotaSnapshot(
+                tool: .codex,
+                fetchedAt: now.addingTimeInterval(-fetchedAgo),
+                primarySource: "test",
+                corroboratingSource: nil,
+                fiveHour: hasFiveHour ? metric : nil,
+                weekly: nil,
+                extras: [],
+                rawWindowKey: key,
+                message: nil
+            )
+        }
+        let openGate = AutoWarmDecision.Gate(
+            isAutoWarmEnabled: true,
+            globalPassive: false,
+            isWarming: false,
+            authStatus: .available,
+            rateLimitGuard: true,
+            backoffUntil: nil
+        )
+        let freshWindow = AutoWarmDecision.Window(
+            sourceHealth: .healthy,
+            snapshot: snapshot(),
+            windowDuration: window,
+            lastAutoWindowKey: nil,
+            lastAutoWarmWindowEndsAt: nil,
+            upcomingMorningAt: nil
+        )
+        func gate(_ edit: (inout AutoWarmDecision.Gate) -> Void) -> AutoWarmDecision {
+            var g = openGate
+            edit(&g)
+            return AutoWarmDecision.gate(g, now: now)
+        }
+        func decide(at time: Date = now, _ edit: (inout AutoWarmDecision.Window) -> Void) -> AutoWarmDecision {
+            var w = freshWindow
+            edit(&w)
+            return AutoWarmDecision.window(w, now: time)
+        }
+
+        // Gate: per-tool and global switches, checked before any quota request.
+        require(AutoWarmDecision.gate(openGate, now: now) == .warm, "Auto-warm gate: an opted-in, idle, signed-in tool passes")
+        require(gate { $0.isAutoWarmEnabled = false } == .skip(.autoWarmOff), "Auto-warm gate: a monitor-only/off tool never warms")
+        require(gate { $0.globalPassive = true } == .skip(.paused), "Auto-warm gate: global pause blocks warm-ups")
+        require(
+            gate { $0.isAutoWarmEnabled = false; $0.globalPassive = true } == .skip(.autoWarmOff),
+            "Auto-warm gate: the per-tool switch is reported before the global pause"
+        )
+        require(gate { $0.isWarming = true } == .skip(.warmupInProgress), "Auto-warm gate: never start a second concurrent warm-up")
+        require(gate { $0.authStatus = .failed } == .skip(.authUnavailable(.failed)), "Auto-warm gate: failed auth blocks warm-ups")
+        require(gate { $0.authStatus = .missing } == .skip(.authUnavailable(.missing)), "Auto-warm gate: missing auth blocks warm-ups")
+        require(gate { $0.authStatus = .unknown } == .warm, "Auto-warm gate: not-yet-checked auth must not block")
+        let backoffEnds = now.addingTimeInterval(60)
+        require(
+            gate { $0.backoffUntil = backoffEnds } == .skip(.backoff(until: backoffEnds)),
+            "Auto-warm gate: an active backoff blocks while the rate-limit guard is on"
+        )
+        require(gate { $0.backoffUntil = now.addingTimeInterval(-1) } == .warm, "Auto-warm gate: an expired backoff no longer blocks")
+        require(gate { $0.backoffUntil = now } == .warm, "Auto-warm gate: a backoff ending exactly now no longer blocks")
+        require(
+            gate { $0.rateLimitGuard = false; $0.backoffUntil = backoffEnds } == .warm,
+            "Auto-warm gate: with the rate-limit guard off, backoff is ignored"
+        )
+
+        // Window: the refreshed quota reading.
+        require(decide { _ in } == .warm, "Auto-warm window: a fresh, full, just-opened window warms")
+        require(decide { $0.sourceHealth = .stale } == .skip(.sourceUnhealthy(.stale)), "Auto-warm window: a stale source never warms")
+        require(
+            decide { $0.sourceHealth = .rateLimited } == .skip(.sourceUnhealthy(.rateLimited)),
+            "Auto-warm window: a rate-limited source never warms"
+        )
+        require(decide { $0.snapshot = nil } == .skip(.noQuotaReading), "Auto-warm window: no snapshot never warms")
+        require(decide { $0.snapshot = snapshot(hasFiveHour: false) } == .skip(.noQuotaReading), "Auto-warm window: no 5h metric never warms")
+        require(decide { $0.snapshot = snapshot(openedAgo: nil) } == .skip(.noQuotaReading), "Auto-warm window: a 5h metric with no reset never warms")
+        require(decide { $0.snapshot = snapshot(fetchedAgo: 5 * 60) } == .warm, "Auto-warm window: a 5-minute-old snapshot is still fresh")
+        require(
+            decide { $0.snapshot = snapshot(fetchedAgo: 5 * 60 + 1) } == .skip(.snapshotNotFresh(.stale)),
+            "Auto-warm window: a stale snapshot never warms"
+        )
+        require(
+            decide { $0.snapshot = snapshot(fetchedAgo: 31 * 60) } == .skip(.snapshotNotFresh(.expired)),
+            "Auto-warm window: an expired snapshot never warms"
+        )
+        require(decide { $0.snapshot = snapshot(remaining: 0.95) } == .warm, "Auto-warm window: exactly 95% left is claimable")
+        require(
+            decide { $0.snapshot = snapshot(remaining: 0.94) } == .skip(.windowInUse(remaining: 0.94)),
+            "Auto-warm window: under 95% left means the window is in use"
+        )
+        require(decide { $0.snapshot = snapshot(openedAgo: 10 * 60) } == .warm, "Auto-warm window: a window opened 10 minutes ago is still claimable")
+        require(
+            decide { $0.snapshot = snapshot(openedAgo: 10 * 60 + 1) } == .skip(.windowNotJustOpened),
+            "Auto-warm window: a window opened over 10 minutes ago is already running"
+        )
+        require(
+            decide { $0.snapshot = snapshot(openedAgo: -60) } == .skip(.windowNotJustOpened),
+            "Auto-warm window: a reset beyond one full window ahead is not a just-opened window"
+        )
+
+        // Morning reservation: the last full window before the pre-warm is kept for it.
+        let morningSoon = now.addingTimeInterval(4 * 3600)
+        require(
+            decide { $0.upcomingMorningAt = morningSoon } == .skip(.reservedForMorning(at: morningSoon)),
+            "Auto-warm window: the window before the morning pre-warm is reserved"
+        )
+        require(
+            decide { $0.upcomingMorningAt = now.addingTimeInterval(window + 1) } == .warm,
+            "Auto-warm window: before the reserved interval auto-warm may run"
+        )
+        require(
+            decide { $0.upcomingMorningAt = morningSoon; $0.lastAutoWindowKey = "test|K1" } == .skip(.reservedForMorning(at: morningSoon)),
+            "Auto-warm window: the morning reservation is reported before dedup"
+        )
+
+        // Dedup: the same window is warmed at most once.
+        require(decide { $0.lastAutoWindowKey = "test|K1" } == .skip(.alreadyWarmedWindow), "Auto-warm dedup: the same window key never warms twice")
+        require(decide { $0.lastAutoWindowKey = "test|K0" } == .warm, "Auto-warm dedup: a new window key warms")
+        let warmedEnds = now.addingTimeInterval(3600)
+        require(
+            decide { $0.lastAutoWindowKey = "test|K0"; $0.lastAutoWarmWindowEndsAt = warmedEnds } == .skip(.warmedWindowActive(until: warmedEnds)),
+            "Auto-warm dedup: a drifting key must not re-warm while the warmed window is open"
+        )
+        require(
+            decide { $0.lastAutoWindowKey = "test|K1"; $0.lastAutoWarmWindowEndsAt = warmedEnds } == .skip(.warmedWindowActive(until: warmedEnds)),
+            "Auto-warm dedup: an open warmed window is the reason reported over a matching key"
+        )
+        require(
+            decide { $0.lastAutoWindowKey = "test|K1"; $0.lastAutoWarmWindowEndsAt = now.addingTimeInterval(-1) } == .skip(.alreadyWarmedWindow),
+            "Auto-warm dedup: a matching key still blocks after the warmed window ended"
+        )
+        require(
+            decide { $0.lastAutoWindowKey = "test|K0"; $0.lastAutoWarmWindowEndsAt = now } == .warm,
+            "Auto-warm dedup: a warmed window ending exactly now no longer blocks"
+        )
+        require(
+            decide { $0.snapshot = snapshot(idle: true, key: "test|idle"); $0.lastAutoWindowKey = "test|idle" } == .warm,
+            "Auto-warm dedup: an idle window ignores its stable key"
+        )
+        require(
+            decide {
+                $0.snapshot = snapshot(idle: true, key: "test|idle")
+                $0.lastAutoWindowKey = "test|idle"
+                $0.lastAutoWarmWindowEndsAt = warmedEnds
+            } == .skip(.warmedWindowActive(until: warmedEnds)),
+            "Auto-warm dedup: an idle window still waits for the warmed window to end"
+        )
+
+        // Same window twice, then the next window: warm, remember, skip, warm again.
+        var flow = freshWindow
+        require(AutoWarmDecision.window(flow, now: now) == .warm, "Auto-warm flow: the first poll of a fresh window warms")
+        let firstReset = flow.snapshot!.fiveHour!.resetAt!
+        flow.lastAutoWindowKey = flow.snapshot!.rawWindowKey
+        flow.lastAutoWarmWindowEndsAt = firstReset
+        require(
+            AutoWarmDecision.window(flow, now: now.addingTimeInterval(60)) == .skip(.warmedWindowActive(until: firstReset)),
+            "Auto-warm flow: the next poll of the same window does not warm again"
+        )
+        let nextWindowNow = firstReset.addingTimeInterval(60)
+        flow.snapshot = QuotaSnapshot(
+            tool: .codex,
+            fetchedAt: nextWindowNow,
+            primarySource: "test",
+            corroboratingSource: nil,
+            fiveHour: QuotaMetric(name: "5h", usedPercent: 0, remainingPercent: 1, resetAt: nextWindowNow.addingTimeInterval(window - 60), detail: nil),
+            weekly: nil,
+            extras: [],
+            rawWindowKey: "test|K2",
+            message: nil
+        )
+        require(AutoWarmDecision.window(flow, now: nextWindowNow) == .warm, "Auto-warm flow: the next window after the reset warms")
+
+        // Both stages together: the gate short-circuits before the window.
+        require(
+            AutoWarmDecision.evaluate(gate: AutoWarmDecision.Gate(
+                isAutoWarmEnabled: true, globalPassive: true, isWarming: false,
+                authStatus: .available, rateLimitGuard: true, backoffUntil: nil
+            ), window: freshWindow, now: now) == .skip(.paused),
+            "Auto-warm evaluate: a paused app skips even a perfect window"
+        )
+        var staleWindow = freshWindow
+        staleWindow.snapshot = snapshot(fetchedAgo: 6 * 60)
+        require(
+            AutoWarmDecision.evaluate(gate: openGate, window: staleWindow, now: now) == .skip(.snapshotNotFresh(.stale)),
+            "Auto-warm evaluate: an open gate still needs a fresh snapshot"
+        )
+        require(AutoWarmDecision.evaluate(gate: openGate, window: freshWindow, now: now) == .warm, "Auto-warm evaluate: all rules pass")
+
+        // Morning pre-warm runs once per calendar day.
+        let morningAt = now
+        let morningRun = MorningWarmupPolicy.decision(
+            now: morningAt.addingTimeInterval(30), scheduledAt: morningAt, dayKey: "2026-6-1",
+            lastSuccessfulDay: "2026-5-31", liveWindowActive: false, sourceFresh: true, windowDuration: window
+        )
+        require(morningRun.shouldRun && !morningRun.caughtUp, "Morning pre-warm: runs on time once a new day starts")
+        let morningRepeat = MorningWarmupPolicy.decision(
+            now: morningAt.addingTimeInterval(60), scheduledAt: morningAt, dayKey: "2026-6-1",
+            lastSuccessfulDay: "2026-6-1", liveWindowActive: false, sourceFresh: true, windowDuration: window
+        )
+        guard case .skip(let repeatReason) = morningRepeat else { fatalError("Morning pre-warm: must not run twice on the same day") }
+        require(repeatReason == .alreadySucceeded, "Morning pre-warm: a second run the same day is skipped as already succeeded")
+        require(
+            AutoWarmSkipReason.morning(.alreadySucceeded).label == "morning pre-warm: alreadySucceeded",
+            "Morning pre-warm: the skip reason surfaces through the auto-warm reason"
+        )
+        require(
+            AutoWarmSkipReason.windowInUse(remaining: 0.42).label == "window in use (42% left)",
+            "Auto-warm reason label: shows how much of the window is left"
+        )
+
+        // AppState must decide through AutoWarmDecision, not a parallel copy of the rules.
+        require(
+            appStateSource.contains("AutoWarmDecision.window(")
+                && appStateSource.contains("AutoWarmDecision.gate(")
+                && !appStateSource.contains("canAttemptManagedWarmup")
+                && !appStateSource.contains("AutoWarmDedup.shouldWarm("),
+            "AppState must route every auto-warm decision through AutoWarmDecision"
+        )
     }
 
     private static func require(_ condition: Bool, _ message: String) {

@@ -58,6 +58,9 @@ final class ToolState: ObservableObject {
     /// won't warm again — a dedup that survives providers whose reported reset
     /// time drifts between polls (e.g. Codex `reset_after_seconds`).
     @Published var lastAutoWarmWindowEndsAt: Date?
+    /// Why the last automatic or morning warm-up evaluation didn't warm; nil
+    /// after one that did (or before any ran). Display-only.
+    @Published private(set) var lastAutoWarmSkip: AutoWarmSkipReason?
     @Published var lastWarmupOutcome: WarmupOutcome = .none
     @Published var warmupLogs: [WarmupLog] = []
     @Published var isLogExpanded = false
@@ -191,10 +194,6 @@ final class ToolState: ObservableObject {
         primaryMetric?.remainingFraction ?? 0
     }
 
-    var canAutoWarmFromSnapshot: Bool {
-        quotaSnapshot?.canAutoWarm(windowDuration: tool.windowDuration) ?? false
-    }
-
     /// The live 5h reading is a not-yet-settled rollover artifact (window just
     /// opened but reports near-empty quota). Views show a neutral "settling"
     /// state instead of an alarming 0% until a follow-up poll lands the real
@@ -205,6 +204,11 @@ final class ToolState: ObservableObject {
 
     var quotaBackoffActive: Bool {
         quotaBackoffUntil.map { $0 > Date() } ?? false
+    }
+
+    func recordAutoWarmDecision(_ decision: AutoWarmDecision) {
+        let reason = decision.skipReason
+        if lastAutoWarmSkip != reason { lastAutoWarmSkip = reason }
     }
 
     func rememberAutoWindow(_ key: String) {
@@ -825,7 +829,9 @@ final class AppState: ObservableObject {
         var caughtUpSuccessfully = false
         for tool in providers where state(for: tool).isAutoWarmEnabled {
             let state = state(for: tool)
-            guard canAttemptManagedWarmup(for: tool) else {
+            let gate = managedWarmupGate(for: tool)
+            guard gate == .warm else {
+                state.recordAutoWarmDecision(gate)
                 logMorningSkip(tool: tool, reason: "managedWarmupBlocked", source: source)
                 continue
             }
@@ -850,10 +856,12 @@ final class AppState: ObservableObject {
 
             guard case .run(let caughtUp) = decision else {
                 if case .skip(let reason) = decision {
+                    state.recordAutoWarmDecision(.skip(.morning(reason)))
                     logMorningSkip(tool: tool, reason: reason.rawValue, source: source)
                 }
                 continue
             }
+            state.recordAutoWarmDecision(.warm)
 
             let previousQuotaFetchedAt = state.quotaSnapshot?.fetchedAt
             let succeeded = await triggerWarmup(
@@ -952,34 +960,36 @@ final class AppState: ObservableObject {
 
     private func attemptAutomaticWarmup(tool: ProviderID, reason: String) async {
         let state = state(for: tool)
-        guard canAttemptManagedWarmup(for: tool) else { return }
+        let gate = managedWarmupGate(for: tool)
+        guard gate == .warm else {
+            state.recordAutoWarmDecision(gate)
+            return
+        }
 
         await refreshQuotaForAutomaticDecision(tool: tool)
-        guard state.sourceHealth == .healthy,
-              state.canAutoWarmFromSnapshot,
-              let snapshot = state.quotaSnapshot else {
-            return
-        }
         let now = Date()
-        if let scheduledAt = upcomingReservedMorningDate(now: now),
-           MorningWarmupPolicy.reservesAutomaticWarmup(
-               now: now,
-               scheduledAt: scheduledAt,
-               windowDuration: tool.windowDuration
-           ) {
-            DiagnosticLogger.append(
-                "auto_warm_reserved_for_morning tool=\(tool.rawValue) scheduledAt=\(ISO8601DateFormatter().string(from: scheduledAt))"
-            )
-            return
-        }
-        guard AutoWarmDedup.shouldWarm(
-            currentWindowKey: snapshot.rawWindowKey,
-            lastWarmedWindowKey: state.lastAutoWindowKey,
-            lastWarmedWindowEndsAt: state.lastAutoWarmWindowEndsAt,
-            currentWindowIsIdle: snapshot.fiveHour?.isIdle == true
-        ) else {
-            if let endsAt = state.lastAutoWarmWindowEndsAt, endsAt > Date() {
+        let decision = AutoWarmDecision.window(
+            AutoWarmDecision.Window(
+                sourceHealth: state.sourceHealth,
+                snapshot: state.quotaSnapshot,
+                windowDuration: tool.windowDuration,
+                lastAutoWindowKey: state.lastAutoWindowKey,
+                lastAutoWarmWindowEndsAt: state.lastAutoWarmWindowEndsAt,
+                upcomingMorningAt: upcomingReservedMorningDate(now: now)
+            ),
+            now: now
+        )
+        state.recordAutoWarmDecision(decision)
+        guard decision == .warm, let snapshot = state.quotaSnapshot else {
+            switch decision.skipReason {
+            case .reservedForMorning(let scheduledAt):
+                DiagnosticLogger.append(
+                    "auto_warm_reserved_for_morning tool=\(tool.rawValue) scheduledAt=\(ISO8601DateFormatter().string(from: scheduledAt))"
+                )
+            case .warmedWindowActive(let endsAt):
                 DiagnosticLogger.append("auto_warm_skipped_active_window tool=\(tool.rawValue) windowEndsAt=\(ISO8601DateFormatter().string(from: endsAt))")
+            default:
+                break
             }
             return
         }
@@ -1000,16 +1010,19 @@ final class AppState: ObservableObject {
         }
     }
 
-    private func canAttemptManagedWarmup(for tool: ProviderID) -> Bool {
+    private func managedWarmupGate(for tool: ProviderID) -> AutoWarmDecision {
         let state = state(for: tool)
-        guard state.isAutoWarmEnabled, !globalPassive, !state.isWarming else { return false }
-        guard state.authStatus != .failed, state.authStatus != .missing else { return false }
-        if UserDefaults.standard.object(forKey: "rateLimitGuard") as? Bool ?? true,
-           let backoffUntil = state.backoffUntil,
-           backoffUntil > Date() {
-            return false
-        }
-        return true
+        return AutoWarmDecision.gate(
+            AutoWarmDecision.Gate(
+                isAutoWarmEnabled: state.isAutoWarmEnabled,
+                globalPassive: globalPassive,
+                isWarming: state.isWarming,
+                authStatus: state.authStatus,
+                rateLimitGuard: UserDefaults.standard.object(forKey: "rateLimitGuard") as? Bool ?? true,
+                backoffUntil: state.backoffUntil
+            ),
+            now: Date()
+        )
     }
 
     private func claimAutoWindowFromPostWarmQuota(for tool: ProviderID, previousFetchedAt: Date?) {
