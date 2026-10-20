@@ -39,6 +39,7 @@ enum AppTab: Hashable {
 struct MenuContent: View {
     @EnvironmentObject var appState: AppState
     @AppStorage(AppearanceMode.defaultsKey) private var appearanceRaw = AppearanceMode.system.rawValue
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private var appearance: AppearanceMode { AppearanceMode(rawValue: appearanceRaw) ?? .system }
 
@@ -80,7 +81,7 @@ struct MenuContent: View {
 
     private var sidebar: some View {
         VStack(spacing: 6) {
-            SidebarSlot(isSelected: appState.selectedTab == .main, help: "Overview") {
+            SidebarSlot(isSelected: appState.selectedTab == .main, help: "Overview", shortcut: "1") {
                 appState.selectedTab = .main
             } icon: {
                 Image(systemName: appState.selectedTab == .main ? "house.fill" : "house")
@@ -98,7 +99,7 @@ struct MenuContent: View {
 
             Spacer()
 
-            SidebarSlot(isSelected: appState.selectedTab == .history, help: "History") {
+            SidebarSlot(isSelected: appState.selectedTab == .history, help: "History", shortcut: "2") {
                 appState.selectedTab = .history
             } icon: {
                 Image(systemName: "chart.bar.xaxis")
@@ -115,10 +116,10 @@ struct MenuContent: View {
                 Image(systemName: appearance.symbolName)
                     .font(.system(size: 15, weight: .regular))
                     .foregroundStyle(DS.C.textSub)
-                    .contentTransition(.symbolEffect(.replace))
+                    .contentTransition(reduceMotion ? .identity : .symbolEffect(.replace))
             }
 
-            SidebarSlot(isSelected: appState.selectedTab == .settings, help: "Settings") {
+            SidebarSlot(isSelected: appState.selectedTab == .settings, help: "Settings", shortcut: "3") {
                 appState.selectedTab = .settings
             } icon: {
                 Image(systemName: "gearshape")
@@ -195,7 +196,9 @@ struct MenuContent: View {
 /// faint highlight. Holds any icon (SF Symbol or template provider glyph).
 struct SidebarSlot<Icon: View>: View {
     let isSelected: Bool
-    let help: String
+    let help: LocalizedStringKey
+    /// Optional ⌘-number key that selects this slot while the panel is focused.
+    var shortcut: KeyEquivalent? = nil
     let action: () -> Void
     @ViewBuilder var icon: () -> Icon
 
@@ -216,6 +219,7 @@ struct SidebarSlot<Icon: View>: View {
                 .frame(width: DS.sidebarWidth, height: 36)
         }
         .buttonStyle(PressableButtonStyle())
+        .modifier(OptionalKeyboardShortcut(key: shortcut))
         .onHover { hovering = $0 }
         .help(help)
         .accessibilityLabel(Text(help))
@@ -237,7 +241,7 @@ struct SidebarToolItem: View {
     let action: () -> Void
 
     var body: some View {
-        SidebarSlot(isSelected: isSelected, help: tool.shortName, action: action) {
+        SidebarSlot(isSelected: isSelected, help: LocalizedStringKey(tool.shortName), action: action) {
             Image(tool.kind.glyphAssetName)
                 .resizable()
                 .renderingMode(.template)
@@ -264,7 +268,7 @@ struct AccountBadge: View {
     var body: some View {
         Text(text)
             .font(.system(size: 8, weight: .heavy, design: .rounded))
-            .foregroundStyle(.white)
+            .foregroundStyle(DS.C.onAccent)
             .frame(minWidth: 12, minHeight: 12)
             .background(color, in: Circle())
             .overlay(Circle().stroke(DS.C.sidebar, lineWidth: 1.5))

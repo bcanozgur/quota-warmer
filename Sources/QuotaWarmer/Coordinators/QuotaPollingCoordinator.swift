@@ -55,7 +55,7 @@ final class QuotaPollingCoordinator {
     var watcherStatusText: String? {
         guard watcherStale, let last = host.lastSuccessfulPollAt else { return nil }
         let minutes = max(1, Int(Date().timeIntervalSince(last) / 60))
-        return "No successful check in \(minutes)m"
+        return String(localized: "No successful check in \(minutes)m")
     }
 
     // MARK: - Status export
@@ -104,9 +104,9 @@ final class QuotaPollingCoordinator {
             await refreshQuotaManually(for: tool)
             return nil
         } catch let error as QuotaProviderError {
-            return error.errorDescription ?? "Could not use the reset."
+            return error.errorDescription ?? String(localized: "Could not use the reset.")
         } catch {
-            return "Could not use the reset."
+            return String(localized: "Could not use the reset.")
         }
     }
 

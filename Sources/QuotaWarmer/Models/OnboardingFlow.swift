@@ -8,11 +8,11 @@ enum OnboardingStep: Int, CaseIterable, Equatable {
 
     var title: String {
         switch self {
-        case .welcome:     return "Welcome"
-        case .cliCheck:    return "Command-line tools"
-        case .modes:       return "Choose a mode"
-        case .permissions: return "Permissions"
-        case .optional:    return "Optional extras"
+        case .welcome:     return String(localized: "Welcome")
+        case .cliCheck:    return String(localized: "Command-line tools")
+        case .modes:       return String(localized: "Choose a mode")
+        case .permissions: return String(localized: "Permissions")
+        case .optional:    return String(localized: "Optional extras")
         }
     }
 

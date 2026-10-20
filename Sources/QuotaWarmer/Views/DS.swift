@@ -50,6 +50,9 @@ enum DS {
         static let surfaceHigh = Color(light: 0xF1F5F9, dark: 0x2F3036)   // quiet button / segmented fill
         static let track       = Color(light: 0xE9EDF2, dark: 0x34363D)   // progress track (no data)
         static let ink         = Color(light: 0x0F172A, dark: 0xF1F3F6)   // selected indicator
+        /// Label on a filled accent/danger surface (Warm, prominent buttons).
+        /// White reads only 2.9:1 on the muted dark accents, so dark text is used there.
+        static let onAccent    = Color(light: 0xFFFFFF, dark: 0x101216)
         /// Pace knob: stays bright on any bar color in both themes.
         static let knob        = Color(light: 0xFFFFFF, dark: 0xE8EAEE)
 
@@ -61,21 +64,23 @@ enum DS {
         // Text
         static let text        = Color(light: 0x0F172A, dark: 0xF1F3F6)   // titles
         static let textSub     = Color(light: 0x475569, dark: 0xB6BCC6)   // body
-        static let textMuted   = Color(light: 0x94A3B8, dark: 0x7D8491)   // meta
+        static let textMuted   = Color(light: 0x66707F, dark: 0x9298A3)   // meta (WCAG AA 4.5:1)
 
-        // Status — dark variants are muted to sit with the toned-down usage
-        // colors while keeping enough contrast on graphite.
-        static let green  = Color(light: 0x16A34A, dark: 0x3E9E58)
-        static let yellow = Color(light: 0xD97706, dark: 0xC98A38)
-        static let red    = Color(light: 0xDC2626, dark: 0xC65550)
-        static let blue   = Color(light: 0x2563EB, dark: 0x4A7FC4)
+        // Status — used as text and as dots. Every value is >= 4.5:1 on the
+        // card surfaces in its theme (WCAG AA text); status is also conveyed by
+        // a label or symbol, never by color alone.
+        static let green  = Color(light: 0x11813A, dark: 0x53A96A)
+        static let yellow = Color(light: 0xA95D05, dark: 0xCA8B3A)
+        static let red    = Color(light: 0xD92525, dark: 0xD5817E)
+        static let blue   = Color(light: 0x2563EB, dark: 0x709AD0)
 
         // Usage bars — claude.ai's light-theme tokens. In dark they are toned
         // down (lower lightness/saturation, same hues) so a full bar doesn't
         // glare against the graphite panel.
-        static let usageBlue   = Color(light: 0x2C84DB, dark: 0x3A73B5)   // --accent-secondary-100
-        static let usageOrange = Color(light: 0xD97757, dark: 0xBA6E55)   // --accent-main-100
-        static let usageRed    = Color(light: 0xB53333, dark: 0xB54848)   // --danger-100
+        // Each fill keeps >= 3:1 against its own track (WCAG 1.4.11).
+        static let usageBlue   = Color(light: 0x2C84DB, dark: 0x5082BD)   // --accent-secondary-100
+        static let usageOrange = Color(light: 0xC96E51, dark: 0xBA6E55)   // --accent-main-100
+        static let usageRed    = Color(light: 0xB53333, dark: 0xC16565)   // --danger-100
         /// Colored track tint behind a usage bar (a touch lighter in dark).
         static let usageTrackOpacity: Double = 0.16
         /// Single-color bar used when Colorful Quota Bars is off: the original
@@ -98,9 +103,9 @@ enum DS {
             tool == .claude ? claudeAccent : codexAccent
         }
         /// Busy hours used by both Claude and Codex: between the two accents.
-        static let bothAccent = Color(light: 0xC2408A, dark: 0xB0588E)
-        private static let claudeAccent = Color(light: 0xE6610D, dark: 0xCB6A2F)   // Anthropic orange
-        private static let codexAccent  = Color(light: 0x613DE6, dark: 0x7F6CD0)   // OpenAI indigo
+        static let bothAccent = Color(light: 0xC2408A, dark: 0xC583AB)
+        private static let claudeAccent = Color(light: 0xBA4F0B, dark: 0xD48554)   // Anthropic orange
+        private static let codexAccent  = Color(light: 0x613DE6, dark: 0x9C8EDB)   // OpenAI indigo
     }
 
     // MARK: - Spacing

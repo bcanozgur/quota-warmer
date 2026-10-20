@@ -59,6 +59,7 @@ struct WelcomeGuideView: View {
             HStack(spacing: 4) {
                 ForEach(OnboardingStep.allCases, id: \.rawValue) { s in
                     Capsule().fill(s.rawValue <= step.rawValue ? DS.C.ink : DS.C.track).frame(height: 3)
+                        .accessibilityHidden(true)
                 }
             }
         }
@@ -80,7 +81,7 @@ struct WelcomeGuideView: View {
         .padding(.horizontal, DS.Space.md).padding(.vertical, 8)
     }
 
-    private func button(_ title: String, prominent: Bool, action: @escaping () -> Void) -> some View {
+    private func button(_ title: LocalizedStringKey, prominent: Bool, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Text(title)
                 .font(.system(size: 11, weight: .medium))
@@ -92,7 +93,7 @@ struct WelcomeGuideView: View {
         .buttonStyle(PressableButtonStyle())
     }
 
-    private func body(_ text: String) -> some View {
+    private func body(_ text: LocalizedStringKey) -> some View {
         Text(text).font(.system(size: 11)).foregroundStyle(DS.C.textSub)
             .fixedSize(horizontal: false, vertical: true)
     }
@@ -136,6 +137,7 @@ struct WelcomeGuideView: View {
             HStack(spacing: DS.Space.sm) {
                 Image(tool == .claude ? "ClaudeCode" : "Codex")
                     .resizable().scaledToFit().frame(width: 16, height: 16)
+                    .accessibilityHidden(true)
                 Text(tool.shortName).font(.system(size: 11, weight: .medium)).foregroundStyle(DS.C.text)
                 Spacer()
                 if !known {
@@ -185,11 +187,13 @@ struct WelcomeGuideView: View {
                     HStack {
                         Text(tool.shortName).font(.system(size: 11, weight: .medium)).foregroundStyle(DS.C.text)
                         Spacer()
-                        Picker("", selection: Binding(
+                        Picker(selection: Binding(
                             get: { appState.state(for: provider).mode },
                             set: { appState.setMode($0, for: provider) }
                         )) {
                             ForEach(ToolMode.allCases, id: \.self) { Text($0.label).tag($0) }
+                        } label: {
+                            Text("\(tool.shortName) mode")
                         }
                         .pickerStyle(.segmented).labelsHidden().frame(width: 210)
                     }
@@ -204,9 +208,9 @@ struct WelcomeGuideView: View {
 
     private func blurb(_ mode: ToolMode) -> String {
         switch mode {
-        case .off:      return "Off — not watched at all."
-        case .monitor:  return "Monitor — shows quota and alerts. Never sends anything. (Default)"
-        case .autoWarm: return "Auto-warm — also sends one minimal \"hi\" through the CLI when a fresh window opens."
+        case .off:      return String(localized: "Off — not watched at all.")
+        case .monitor:  return String(localized: "Monitor — shows quota and alerts. Never sends anything. (Default)")
+        case .autoWarm: return String(localized: "Auto-warm — also sends one minimal \"hi\" through the CLI when a fresh window opens.")
         }
     }
 
@@ -242,9 +246,9 @@ struct WelcomeGuideView: View {
 
     private var notificationLabel: String {
         switch notificationStatus {
-        case .authorized, .provisional, .ephemeral: return "Allowed"
-        case .denied: return "Blocked — enable in System Settings → Notifications"
-        default: return "Not asked yet"
+        case .authorized, .provisional, .ephemeral: return String(localized: "Allowed")
+        case .denied: return String(localized: "Blocked — enable in System Settings → Notifications")
+        default: return String(localized: "Not asked yet")
         }
     }
 
@@ -260,10 +264,11 @@ struct WelcomeGuideView: View {
                             .fixedSize(horizontal: false, vertical: true)
                     }
                     Spacer()
-                    Toggle("", isOn: Binding(
+                    Toggle(isOn: Binding(
                         get: { appState.morningPrewarmEnabled },
                         set: { appState.setMorningPrewarm($0) }
-                    ))
+                    )) { Text("Wake & warm each morning") }
+                    .labelsHidden()
                     .toggleStyle(.switch).scaleEffect(0.75).tint(DS.C.green)
                 }
             }
@@ -278,7 +283,8 @@ struct WelcomeGuideView: View {
                         }
                     }
                     Spacer()
-                    Toggle("", isOn: $launchAtLogin)
+                    Toggle(isOn: $launchAtLogin) { Text("Launch at login") }
+                        .labelsHidden()
                         .toggleStyle(.switch).scaleEffect(0.75).tint(DS.C.green)
                         .onChange(of: launchAtLogin) { _, v in setLaunchAtLogin(v) }
                 }
@@ -317,7 +323,7 @@ struct WelcomeGuideView: View {
             }
             launchError = nil
         } catch {
-            launchError = "Could not change: \(error.localizedDescription)"
+            launchError = String(localized: "Could not change: \(error.localizedDescription)")
         }
         let actual = SMAppService.mainApp.status == .enabled
         UserDefaults.standard.set(actual, forKey: "launchAtLogin")

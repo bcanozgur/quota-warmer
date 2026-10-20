@@ -37,12 +37,13 @@ struct ToolTabView: View {
     }
 
     private var header: some View {
-        PanelHeader(title: toolState.tool.shortName,
+        PanelHeader(title: LocalizedStringKey(toolState.tool.shortName),
                     glyph: toolState.tool.kind.glyphAssetName) {
             if toolState.isFetchingQuota {
                 Image(systemName: "hourglass")
                     .font(.system(size: 11, weight: .medium))
                     .foregroundStyle(DS.C.textSub)
+                    .accessibilityLabel(Text("Updating quota"))
             }
             activeControl
         }
@@ -52,7 +53,8 @@ struct ToolTabView: View {
     private var quotaCard: some View {
         VStack(alignment: .leading, spacing: 10) {
             windowRow(
-                title: "Session",
+                title: String(localized: "Session"),
+                accessibilityName: String(localized: "\(toolState.tool.shortName) 5-hour window"),
                 metric: toolState.primaryMetric,
                 resetAt: toolState.resetAt,
                 windowDuration: toolState.tool.windowDuration
@@ -61,7 +63,8 @@ struct ToolTabView: View {
                 .fill(DS.C.borderSoft)
                 .frame(height: 1)
             windowRow(
-                title: "Weekly",
+                title: String(localized: "Weekly"),
+                accessibilityName: String(localized: "\(toolState.tool.shortName) weekly window"),
                 metric: toolState.weeklyMetric,
                 resetAt: toolState.weeklyMetric?.resetAt,
                 windowDuration: toolState.tool.weeklyWindowDuration
@@ -78,7 +81,9 @@ struct ToolTabView: View {
         .dsCard()
     }
 
-    private func windowRow(title: String, metric: QuotaMetric?, resetAt: Date?, windowDuration: TimeInterval) -> some View {
+    private func windowRow(
+        title: String, accessibilityName: String, metric: QuotaMetric?, resetAt: Date?, windowDuration: TimeInterval
+    ) -> some View {
         let quotaLeft = metric?.remainingFraction ?? 0
         let leftText = ToolStatusCopy.quotaLeftText(for: toolState, metric: metric)
         let pace = QuotaPace.compute(
@@ -90,6 +95,7 @@ struct ToolTabView: View {
         )
         return QuotaWindowRow(
             title: title,
+            accessibilityName: accessibilityName,
             hasMetric: metric != nil,
             quotaLeft: quotaLeft,
             leftText: leftText,
@@ -111,6 +117,7 @@ struct ToolTabView: View {
                     Image(systemName: "hourglass")
                         .font(.system(size: 9, weight: .medium))
                         .foregroundStyle(DS.C.textMuted)
+                        .accessibilityLabel(Text("Updating cost estimate"))
                 }
             }
             VStack(alignment: .leading, spacing: 6) {
@@ -124,7 +131,7 @@ struct ToolTabView: View {
         .dsCard()
     }
 
-    private func tokenUsageRow(_ title: String, usage: TokenUsageDay?) -> some View {
+    private func tokenUsageRow(_ title: LocalizedStringKey, usage: TokenUsageDay?) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: 10) {
             Text(title)
                 .font(.system(size: 11.5, weight: .medium))
@@ -147,7 +154,7 @@ struct ToolTabView: View {
     private func formatCost(_ value: Double?, partial: Double? = nil) -> String {
         guard let value else {
             // Some usage used an unpriced model: show the priced part as a floor.
-            guard let partial else { return "Unavailable" }
+            guard let partial else { return String(localized: "Unavailable") }
             return String(format: "$%.2f+", partial)
         }
         return String(format: "$%.2f", value)
@@ -155,15 +162,16 @@ struct ToolTabView: View {
 
     private func formatTokenCount(_ count: Int) -> String {
         if count >= 1_000_000_000 {
-            return "\(compactCount(count, divisor: 1_000_000_000))B tokens"
+            return String(localized: "\(compactCount(count, divisor: 1_000_000_000))B tokens")
         }
         if count >= 1_000_000 {
-            return "\(compactCount(count, divisor: 1_000_000))M tokens"
+            return String(localized: "\(compactCount(count, divisor: 1_000_000))M tokens")
         }
         if count >= 1_000 {
-            return "\(compactCount(count, divisor: 1_000))K tokens"
+            return String(localized: "\(compactCount(count, divisor: 1_000))K tokens")
         }
-        return "\(Self.integerFormatter.string(from: NSNumber(value: count)) ?? "\(count)") tokens"
+        let number = Self.integerFormatter.string(from: NSNumber(value: count)) ?? "\(count)"
+        return String(localized: "\(number) tokens")
     }
 
     private func compactCount(_ count: Int, divisor: Double) -> String {
@@ -202,7 +210,7 @@ struct ToolTabView: View {
                     .font(.system(size: 12, weight: .semibold))
                     .frame(height: 30)
                     .padding(.horizontal, 14)
-                    .foregroundStyle(.white)
+                    .foregroundStyle(DS.C.onAccent)
                     .background(DS.C.accent(toolState.tool), in: Capsule())
             }
             .buttonStyle(PressableButtonStyle())
@@ -221,6 +229,7 @@ struct ToolTabView: View {
             .buttonStyle(PressableButtonStyle())
             // See MainTabView: a rate-limit backoff must not disable Refresh.
             .disabled(toolState.isFetchingQuota)
+            .keyboardShortcut("r", modifiers: .command)
             .accessibilityLabel(Text("Refresh \(toolState.tool.shortName) quota now"))
         }
     }

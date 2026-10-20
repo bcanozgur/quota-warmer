@@ -122,6 +122,17 @@ struct EventFilter: Equatable {
         case problems = "Problems"
         case other = "Other"
 
+        /// Localized picker label; `rawValue` stays English for persisted state.
+        var title: String {
+            switch self {
+            case .all: return String(localized: "All")
+            case .warmups: return String(localized: "Warm-ups")
+            case .quota: return String(localized: "Quota")
+            case .problems: return String(localized: "Problems")
+            case .other: return String(localized: "Other")
+            }
+        }
+
         func contains(_ kind: HistoryKind) -> Bool {
             switch self {
             case .all: return true

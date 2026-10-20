@@ -39,6 +39,7 @@ struct AutoWarmStatusLine: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
+            .accessibilityValue(Text(toneWord(e.tone)))
             .help(e.popoverLines(now: now).joined(separator: "\n"))
             .popover(isPresented: $showDetail, arrowEdge: .bottom) {
                 VStack(alignment: .leading, spacing: 6) {
@@ -55,6 +56,15 @@ struct AutoWarmStatusLine: View {
                 .frame(maxWidth: 260, alignment: .leading)
                 .padding(DS.Page.cardPadding)
             }
+        }
+    }
+
+    /// The tone is also spoken, not only drawn as an icon and color.
+    private func toneWord(_ tone: AutoWarmExplanation.Tone) -> String {
+        switch tone {
+        case .attention: return String(localized: "needs attention")
+        case .good: return String(localized: "warmed")
+        case .neutral: return String(localized: "waiting")
         }
     }
 

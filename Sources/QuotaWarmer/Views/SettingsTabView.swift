@@ -29,7 +29,8 @@ struct SettingsTabView: View {
     @AppStorage(QuotaDisplay.colorfulBarsKey) private var colorfulBars: Bool = true
 
     private let refreshOptions: [(label: String, value: Int)] = [
-        ("5m", 300), ("10m", 600), ("15m", 900), ("30m", 1800)
+        (String(localized: "5m"), 300), (String(localized: "10m"), 600),
+        (String(localized: "15m"), 900), (String(localized: "30m"), 1800)
     ]
 
     var body: some View {
@@ -50,7 +51,7 @@ struct SettingsTabView: View {
 
                     row(icon: "shield.lefthalf.filled", title: "Rate-limit Guard",
                         subtitle: "Back off after failures") {
-                        Toggle("", isOn: $rateLimitGuard)
+                        Toggle(isOn: $rateLimitGuard) { Text("Rate-limit Guard") }.labelsHidden()
                             .toggleStyle(.switch).scaleEffect(0.75).tint(DS.C.green)
                     }
 
@@ -78,9 +79,8 @@ struct SettingsTabView: View {
                 group("DISPLAY") {
                     row(icon: "paintpalette", title: "Colorful Quota Bars",
                         subtitle: colorfulBars ? "Blue → orange at 50% → red at 80% used" : "Single-color bars") {
-                        Toggle("", isOn: $colorfulBars)
+                        Toggle(isOn: $colorfulBars) { Text("Colorful Quota Bars") }.labelsHidden()
                             .toggleStyle(.switch).scaleEffect(0.75).tint(DS.C.green)
-                            .accessibilityLabel(Text("Colorful quota bars"))
                     }
                 }
 
@@ -91,10 +91,11 @@ struct SettingsTabView: View {
                 group("MORNING PRE-WARM") {
                     row(icon: "sunrise", title: "Wake & Warm Each Morning",
                         subtitle: "Wakes a sleeping Mac to start your window") {
-                        Toggle("", isOn: Binding(
+                        Toggle(isOn: Binding(
                             get: { appState.morningPrewarmEnabled },
                             set: { appState.setMorningPrewarm($0) }
-                        ))
+                        )) { Text("Wake & Warm Each Morning") }
+                        .labelsHidden()
                         .toggleStyle(.switch).scaleEffect(0.75).tint(DS.C.green)
                     }
 
@@ -114,7 +115,7 @@ struct SettingsTabView: View {
 
                     row(icon: "calendar", title: "Weekdays Only",
                         subtitle: "Skip Saturday and Sunday") {
-                        Toggle("", isOn: $morningWeekdaysOnly)
+                        Toggle(isOn: $morningWeekdaysOnly) { Text("Weekdays Only") }.labelsHidden()
                             .toggleStyle(.switch).scaleEffect(0.75).tint(DS.C.green)
                             .onChange(of: morningWeekdaysOnly) { _, _ in appState.morningTimeChanged() }
                     }
@@ -137,7 +138,7 @@ struct SettingsTabView: View {
                 group("ALERTS") {
                     row(icon: "bell.badge", title: "Window Expiring Soon",
                         subtitle: "30 min before reset") {
-                        Toggle("", isOn: $notifyWarning)
+                        Toggle(isOn: $notifyWarning) { Text("Window Expiring Soon") }.labelsHidden()
                             .toggleStyle(.switch).scaleEffect(0.75).tint(DS.C.green)
                     }
 
@@ -145,7 +146,7 @@ struct SettingsTabView: View {
 
                     row(icon: "checkmark.circle", title: "Window Activated",
                         subtitle: "After warmup succeeds") {
-                        Toggle("", isOn: $notifyActivated)
+                        Toggle(isOn: $notifyActivated) { Text("Window Activated") }.labelsHidden()
                             .toggleStyle(.switch).scaleEffect(0.75).tint(DS.C.green)
                     }
 
@@ -155,7 +156,7 @@ struct SettingsTabView: View {
                         subtitle: "Alert at % used") {
                         thresholdPill($alertSessionFirst, enabled: alertSession)
                         thresholdPill($alertSessionSecond, enabled: alertSession)
-                        Toggle("", isOn: $alertSession)
+                        Toggle(isOn: $alertSession) { Text("5h Usage") }.labelsHidden()
                             .toggleStyle(.switch).scaleEffect(0.75).tint(DS.C.green)
                     }
 
@@ -165,7 +166,7 @@ struct SettingsTabView: View {
                         subtitle: "Alert at % used") {
                         thresholdPill($alertWeeklyFirst, enabled: alertWeekly)
                         thresholdPill($alertWeeklySecond, enabled: alertWeekly)
-                        Toggle("", isOn: $alertWeekly)
+                        Toggle(isOn: $alertWeekly) { Text("Weekly Usage") }.labelsHidden()
                             .toggleStyle(.switch).scaleEffect(0.75).tint(DS.C.green)
                     }
 
@@ -173,7 +174,7 @@ struct SettingsTabView: View {
 
                     row(icon: "speedometer", title: "Pace Warning",
                         subtitle: "5h quota runs out before reset") {
-                        Toggle("", isOn: $alertPace)
+                        Toggle(isOn: $alertPace) { Text("Pace Warning") }.labelsHidden()
                             .toggleStyle(.switch).scaleEffect(0.75).tint(DS.C.green)
                     }
                 }
@@ -181,7 +182,7 @@ struct SettingsTabView: View {
                 group("SYSTEM") {
                     row(icon: "power", title: "Launch at Login",
                         subtitle: "Start with macOS") {
-                        Toggle("", isOn: $launchAtLogin)
+                        Toggle(isOn: $launchAtLogin) { Text("Launch at Login") }.labelsHidden()
                             .toggleStyle(.switch).scaleEffect(0.75).tint(DS.C.green)
                             .onChange(of: launchAtLogin) { _, v in
                                 updateLaunchAtLogin(v)
@@ -353,6 +354,7 @@ struct SettingsTabView: View {
             }
             .buttonStyle(PressableButtonStyle())
             .accessibilityLabel(Text(historyExpanded ? "Collapse history" : "Expand history"))
+            .accessibilityAddTraits(.isButton)
 
             if historyExpanded {
                 Divider().background(DS.C.border).padding(.leading, 36)
@@ -406,7 +408,7 @@ struct SettingsTabView: View {
                 get: { historyFilter.group },
                 set: { historyFilter.group = $0; historyVisible = 25 }
             )) {
-                ForEach(EventFilter.Group.allCases, id: \.self) { Text($0.rawValue).tag($0) }
+                ForEach(EventFilter.Group.allCases, id: \.self) { Text($0.title).tag($0) }
             }
         }
         .labelsHidden()
@@ -443,7 +445,7 @@ struct SettingsTabView: View {
             }
             launchAtLoginError = nil
         } catch {
-            launchAtLoginError = "Launch at Login could not be changed: \(error.localizedDescription)"
+            launchAtLoginError = String(localized: "Launch at Login could not be changed: \(error.localizedDescription)")
         }
 
         let actual = SMAppService.mainApp.status == .enabled
@@ -459,7 +461,7 @@ struct SettingsTabView: View {
             .padding(.top, DS.Page.top)
     }
 
-    private func group<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
+    private func group<Content: View>(_ title: LocalizedStringKey, @ViewBuilder content: () -> Content) -> some View {
         VStack(alignment: .leading, spacing: 0) {
             Text(title)
                 .dsSectionLabel()
@@ -477,8 +479,8 @@ struct SettingsTabView: View {
 
     private func row<Control: View>(
         icon: String,
-        title: String,
-        subtitle: String,
+        title: LocalizedStringKey,
+        subtitle: LocalizedStringKey,
         @ViewBuilder control: () -> Control
     ) -> some View {
         HStack(spacing: DS.Space.sm) {
@@ -503,7 +505,7 @@ struct SettingsTabView: View {
         .padding(.vertical, DS.Space.sm - 1)
     }
 
-    private func privacyLine(_ title: String, _ detail: String) -> some View {
+    private func privacyLine(_ title: LocalizedStringKey, _ detail: LocalizedStringKey) -> some View {
         VStack(alignment: .leading, spacing: 2) {
             Text(title)
                 .font(.system(size: 10, weight: .semibold))
@@ -516,14 +518,14 @@ struct SettingsTabView: View {
     }
 
     /// Full-width, always-visible explanatory row for the HOW IT WORKS group.
-    private func transparencyRow(_ title: String, _ detail: String) -> some View {
+    private func transparencyRow(_ title: LocalizedStringKey, _ detail: LocalizedStringKey) -> some View {
         privacyLine(title, detail)
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, DS.Space.md)
             .padding(.vertical, DS.Space.sm + 2)
     }
 
-    private func infoRow(title: String, detail: String) -> some View {
+    private func infoRow(title: LocalizedStringKey, detail: LocalizedStringKey) -> some View {
         HStack(spacing: DS.Space.sm) {
             Image(systemName: "info.circle")
                 .font(.system(size: 12))

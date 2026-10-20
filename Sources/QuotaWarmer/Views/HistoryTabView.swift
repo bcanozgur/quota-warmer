@@ -102,6 +102,7 @@ struct HistoryTabView: View {
                 }
                 .buttonStyle(PressableButtonStyle())
                 .accessibilityLabel(Text("Show \(option.accessibilityLabel)"))
+                .accessibilityAddTraits(selected ? .isSelected : [])
             }
         }
         .padding(2)
@@ -118,7 +119,7 @@ struct HistoryTabView: View {
                         .font(.system(size: 10, weight: .semibold))
                 }
                 ForEach(appState.providers) { tool in
-                    chip(title: tool.shortName, selected: tool == selectedProvider, color: DS.C.accent(tool)) {
+                    chip(title: LocalizedStringKey(tool.shortName), selected: tool == selectedProvider, color: DS.C.accent(tool)) {
                         providerKey = tool.storageKey
                     } icon: {
                         Image(tool.kind.glyphAssetName)
@@ -133,7 +134,7 @@ struct HistoryTabView: View {
     }
 
     private func chip<Icon: View>(
-        title: String,
+        title: LocalizedStringKey,
         selected: Bool,
         color: Color,
         action: @escaping () -> Void,
@@ -153,6 +154,8 @@ struct HistoryTabView: View {
             .overlay(Capsule().stroke(selected ? .clear : DS.C.border, lineWidth: 1))
         }
         .buttonStyle(PressableButtonStyle())
+        .accessibilityLabel(Text(title))
+        .accessibilityAddTraits(selected ? .isSelected : [])
     }
 }
 
@@ -189,18 +192,18 @@ enum HistoryRange: String, CaseIterable, Identifiable {
 
     var label: String {
         switch self {
-        case .day: return "24h"
-        case .week: return "7d"
-        case .month: return "30d"
+        case .day: return String(localized: "24h")
+        case .week: return String(localized: "7d")
+        case .month: return String(localized: "30d")
         }
     }
 
     /// "last 7 days", for card titles.
     var longLabel: String {
         switch self {
-        case .day: return "last 24 hours"
-        case .week: return "last 7 days"
-        case .month: return "last 30 days"
+        case .day: return String(localized: "last 24 hours")
+        case .week: return String(localized: "last 7 days")
+        case .month: return String(localized: "last 30 days")
         }
     }
 
@@ -259,7 +262,7 @@ private struct HistoryContent: View {
     // MARK: - Stats
 
     private func statRow(_ stats: UsageHistoryStats, weekly: Double?) -> some View {
-        let scope = combined ? " across all accounts" : ""
+        let scope = combined ? String(localized: " across all accounts") : ""
         return HStack(spacing: 8) {
             statTile("Windows", value: "\(stats.windowCount)",
                      info: "How many 5-hour quota windows were opened\(scope) in this range. A window starts with your first message (or a warm-up) and resets 5 hours later.")
@@ -275,7 +278,7 @@ private struct HistoryContent: View {
         }
     }
 
-    private func statTile(_ title: String, value: String, info: String, tint: Color? = nil) -> some View {
+    private func statTile(_ title: LocalizedStringKey, value: String, info: LocalizedStringKey, tint: Color? = nil) -> some View {
         VStack(alignment: .leading, spacing: 3) {
             Text(title)
                 .dsSectionLabel()
@@ -377,7 +380,16 @@ private struct HistoryContent: View {
             }
             .chartXAxis { timeAxis }
             .frame(height: 120)
+            .accessibilityLabel(Text("Quota used over \(range.longLabel)"))
+            .accessibilityValue(Text(usageSummary))
         }
+    }
+
+    /// One-line spoken summary of the usage chart: the most-used window peak in range.
+    private var usageSummary: String {
+        let peaks = series.flatMap(\.windows).filter { $0.resetAt >= Date().addingTimeInterval(-range.interval) }
+        guard let peak = peaks.map(\.peakUsed).max() else { return String(localized: "No readings in this range") }
+        return String(localized: "Highest window peak \(Int((peak * 100).rounded()))%")
     }
 
     @ViewBuilder
@@ -385,7 +397,7 @@ private struct HistoryContent: View {
         if combined {
             HStack(spacing: 8) {
                 ForEach(series) { entry in
-                    legendItem(entry.tool.shortName, color: lineColor(entry), dashed: false)
+                    legendItem(LocalizedStringKey(entry.tool.shortName), color: lineColor(entry), dashed: false)
                 }
                 legendItem("Weekly", color: DS.C.textSub, dashed: true)
             }
@@ -397,7 +409,7 @@ private struct HistoryContent: View {
         }
     }
 
-    private func legendItem(_ label: String, color: Color, dashed: Bool) -> some View {
+    private func legendItem(_ label: LocalizedStringKey, color: Color, dashed: Bool) -> some View {
         HStack(spacing: 4) {
             Capsule()
                 .stroke(color, style: StrokeStyle(lineWidth: 1.5, dash: dashed ? [2, 2] : []))
@@ -427,9 +439,10 @@ private struct HistoryContent: View {
                 ))
             }
         }
-        var info = "One bar per 5-hour window, spanning the hours it was open; its height is the most of the window that was used before it reset."
-        if combined { info += " Each account is drawn in its own color, see-through where windows overlap." }
-        return card(title: "Peak per 5h window", info: info) {
+        let combinedNote = combined
+            ? String(localized: " Each account is drawn in its own color, see-through where windows overlap.")
+            : ""
+        return card(title: "Peak per 5h window", info: "One bar per 5-hour window, spanning the hours it was open; its height is the most of the window that was used before it reset.\(combinedNote)") {
             if visible.isEmpty {
                 Text("No opened windows in this range.")
                     .font(.system(size: 10.5))
@@ -459,6 +472,8 @@ private struct HistoryContent: View {
                 }
                 .chartXAxis { timeAxis }
                 .frame(height: 96)
+                .accessibilityLabel(Text("Peak per 5-hour window"))
+                .accessibilityValue(Text("\(visible.count) windows in range"))
             }
         }
     }
@@ -477,14 +492,13 @@ private struct HistoryContent: View {
             return (entry, buckets)
         }
         let overall = UsageHistory.total(bars.flatMap(\.1), at: now)
-        let subtitle = "\(TokenFormat.compact(overall.tokens)) tokens" + (overall.costUSD.map { " · $\(String(format: "%.2f", $0))" } ?? "")
+        let subtitle = String(localized: "\(TokenFormat.compact(overall.tokens)) tokens") + (overall.costUSD.map { " · $\(String(format: "%.2f", $0))" } ?? "")
         let reading = series.contains(where: \.isFetchingTokens)
         let unit: Calendar.Component = hourlyView ? .hour : .day
-        var info = hourlyView
-            ? "Tokens in each of the last 24 hours (your local time)"
-            : "Tokens per day (your local time) over the \(range.longLabel)"
-        info += ", from the CLI's local logs on this Mac (input, output and cache), with the estimated API-equivalent cost. Usage on other machines or the web isn't included."
-        if combined { info += " Each account is a segment of the bar." }
+        let combinedNote = combined ? String(localized: " Each account is a segment of the bar.") : ""
+        let info: LocalizedStringKey = hourlyView
+            ? "Tokens in each of the last 24 hours (your local time), from the CLI's local logs on this Mac (input, output and cache), with the estimated API-equivalent cost. Usage on other machines or the web isn't included.\(combinedNote)"
+            : "Tokens per day (your local time) over the \(range.longLabel), from the CLI's local logs on this Mac (input, output and cache), with the estimated API-equivalent cost. Usage on other machines or the web isn't included.\(combinedNote)"
         return card(title: hourlyView ? "Hourly tokens" : "Daily tokens", info: info, trailing: Text(subtitle)
             .font(.system(size: 9.5, weight: .medium))
             .monospacedDigit()
@@ -507,6 +521,8 @@ private struct HistoryContent: View {
                         }
                     }
                 }
+                .accessibilityLabel(Text(hourlyView ? "Hourly tokens" : "Daily tokens"))
+                .accessibilityValue(Text(subtitle))
                 .chartYAxis {
                     AxisMarks(position: .leading, values: .automatic(desiredCount: 3)) { value in
                         AxisGridLine().foregroundStyle(DS.C.borderSoft)
@@ -546,16 +562,16 @@ private struct HistoryContent: View {
         let kinds = ToolID.allCases.filter { kind in grid.rows.contains { $0.cells.contains { ($0?.parts[kind] ?? 0) > 0 } } }
         let showsBoth = grid.rows.contains { $0.cells.contains { $0.map { BusyHoursGrid.tint(of: $0) == nil } ?? false } }
         let scope = combined
-            ? " Orange is Claude and purple is Codex; a square used by both (neither above 80% of its tokens) is pink."
+            ? String(localized: " Orange is Claude and purple is Codex; a square used by both (neither above 80% of its tokens) is pink.")
             : ""
-        let info: String
+        let info: LocalizedStringKey
         switch range {
         case .day:
-            info = "Tokens in each of the last 24 hours (your local time), the newest on the right. Darker squares mean more tokens; hover a square for its total." + scope
+            info = "Tokens in each of the last 24 hours (your local time), the newest on the right. Darker squares mean more tokens; hover a square for its total.\(scope)"
         case .week:
-            info = "Each row is one of the last 7 days, today at the bottom; each column is an hour of the day, 00 to 23 (your local time). Darker squares mean more tokens; hover a square for its total." + scope
+            info = "Each row is one of the last 7 days, today at the bottom; each column is an hour of the day, 00 to 23 (your local time). Darker squares mean more tokens; hover a square for its total.\(scope)"
         case .month:
-            info = "Your usual week: rows are weekdays, columns the hours 00 to 23 (your local time), and each square adds up that weekday and hour over the last 30 days — so it shows when you tend to use the CLI. Darker squares mean more tokens; hover a square for its total." + scope
+            info = "Your usual week: rows are weekdays, columns the hours 00 to 23 (your local time), and each square adds up that weekday and hour over the last 30 days — so it shows when you tend to use the CLI. Darker squares mean more tokens; hover a square for its total.\(scope)"
         }
         return card(title: "Busy hours · \(range.label)", info: info, trailing: busyLegend(kinds: combined ? kinds : [], both: combined && showsBoth)) {
             if grid.peak == 0 {
@@ -573,13 +589,13 @@ private struct HistoryContent: View {
     private func busyLegend(kinds: [ToolID], both: Bool) -> some View {
         if !kinds.isEmpty {
             HStack(spacing: 7) {
-                ForEach(kinds) { kind in swatch(kind.shortName, DS.C.accent(kind)) }
+                ForEach(kinds) { kind in swatch(LocalizedStringKey(kind.shortName), DS.C.accent(kind)) }
                 if both { swatch("Both", DS.C.bothAccent) }
             }
         }
     }
 
-    private func swatch(_ label: String, _ color: Color) -> some View {
+    private func swatch(_ label: LocalizedStringKey, _ color: Color) -> some View {
         HStack(spacing: 3) {
             RoundedRectangle(cornerRadius: 2, style: .continuous).fill(color).frame(width: 8, height: 8)
             Text(label).font(.system(size: 9, weight: .medium)).foregroundStyle(DS.C.textMuted).lineLimit(1)
@@ -620,20 +636,21 @@ private struct HistoryContent: View {
         }
     }
 
-    static func usageInfo(combined: Bool) -> String {
-        "How much of the quota was used over time. The solid line is the 5-hour window — it drops back to 0 when the window resets; the dashed line is the weekly quota. Gaps are times QuotaWarmer wasn't checking (Mac asleep or app closed)."
-            + (combined ? " Each account has its own color." : "")
+    static func usageInfo(combined: Bool) -> LocalizedStringKey {
+        combined
+            ? "How much of the quota was used over time. The solid line is the 5-hour window — it drops back to 0 when the window resets; the dashed line is the weekly quota. Gaps are times QuotaWarmer wasn't checking (Mac asleep or app closed). Each account has its own color."
+            : "How much of the quota was used over time. The solid line is the 5-hour window — it drops back to 0 when the window resets; the dashed line is the weekly quota. Gaps are times QuotaWarmer wasn't checking (Mac asleep or app closed)."
     }
 
     private func percent(_ fraction: Double) -> String { "\(Int((fraction * 100).rounded()))%" }
 
-    private func card<Content: View>(title: String, info: String, @ViewBuilder content: () -> Content) -> some View {
+    private func card<Content: View>(title: LocalizedStringKey, info: LocalizedStringKey, @ViewBuilder content: () -> Content) -> some View {
         card(title: title, info: info, trailing: EmptyView(), content: content)
     }
 
     private func card<Trailing: View, Content: View>(
-        title: String,
-        info: String,
+        title: LocalizedStringKey,
+        info: LocalizedStringKey,
         trailing: Trailing,
         @ViewBuilder content: () -> Content
     ) -> some View {
@@ -642,7 +659,7 @@ private struct HistoryContent: View {
                 Text(title).dsSectionLabel().lineLimit(1).fixedSize()
                 Spacer(minLength: 6)
                 trailing
-                InfoButton(title: title.capitalized, text: info)
+                InfoButton(title: title, text: info)
             }
             content()
         }
@@ -717,7 +734,7 @@ struct BusyHoursGrid {
         case .day:
             let hours = UsageHistory.recentHours(hourly, count: 24, now: now, calendar: calendar)
             let cells: [Cell?] = hours.map {
-                Cell(value: $0.tokens, tooltip: "\(hourText($0.hour, calendar)) · \(TokenFormat.compact($0.tokens)) tokens")
+                Cell(value: $0.tokens, tooltip: String(localized: "\(hourText($0.hour, calendar)) · \(TokenFormat.compact($0.tokens)) tokens"))
             }
             // Label every column whose clock hour is a multiple of 6.
             let axis = hours.enumerated().compactMap { index, entry -> (column: Int, label: String)? in
@@ -736,9 +753,9 @@ struct BusyHoursGrid {
             let rows = UsageHistory.dayRows(hourly, days: 7, now: now, calendar: calendar).map { row in
                 let isToday = calendar.isDate(row.day, inSameDayAs: now)
                 let cells: [Cell?] = row.cells.enumerated().map { hour, value in
-                    value.map { Cell(value: $0, tooltip: "\(full.string(from: row.day)) \(hour):00 · \(TokenFormat.compact($0)) tokens") }
+                    value.map { Cell(value: $0, tooltip: String(localized: "\(full.string(from: row.day)) \(hour):00 · \(TokenFormat.compact($0)) tokens")) }
                 }
-                return Row(label: isToday ? "Today" : formatter.string(from: row.day), cells: cells)
+                return Row(label: isToday ? String(localized: "Today") : formatter.string(from: row.day), cells: cells)
             }
             return BusyHoursGrid(rows: rows, axis: hourAxis, cellHeight: 9, labelWidth: 38)
 
@@ -751,7 +768,7 @@ struct BusyHoursGrid {
                 let name = symbols[weekday - 1]
                 let cells: [Cell?] = (0..<24).map { hour in
                     let value = totals[(weekday - 1) * 24 + hour]
-                    return Cell(value: value, tooltip: "\(name) \(hour):00 · \(TokenFormat.compact(value)) tokens over 30 days")
+                    return Cell(value: value, tooltip: String(localized: "\(name) \(hour):00 · \(TokenFormat.compact(value)) tokens over 30 days"))
                 }
                 return Row(label: name, cells: cells)
             }
@@ -801,6 +818,11 @@ private struct HourHeatmap: View {
                 }
             }
         }
+        // The cells are color-only; the tooltip detail stays visual, and the
+        // spoken summary gives the peak so the grid is not silent.
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(Text("Busy hours heatmap"))
+        .accessibilityValue(Text("Peak \(TokenFormat.compact(peak)) tokens"))
     }
 
     /// Hour labels centred over their columns (24 equal columns, 2pt gaps).
@@ -846,8 +868,8 @@ enum TokenFormat {
 /// again or move away to close). A popover rather than `.help`, whose tooltip
 /// is slow and unreliable in this non-activating panel.
 struct InfoButton: View {
-    let title: String
-    let text: String
+    let title: LocalizedStringKey
+    let text: LocalizedStringKey
 
     @State private var hovering = false
     @State private var pinned = false
@@ -878,7 +900,7 @@ struct InfoButton: View {
             .padding(10)
             .frame(width: 220, alignment: .leading)
         }
-        .accessibilityLabel(Text("About \(title)"))
+        .accessibilityLabel(Text("About") + Text(" ") + Text(title))
         .accessibilityHint(Text(text))
     }
 }
