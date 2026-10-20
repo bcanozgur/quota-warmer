@@ -77,6 +77,7 @@ jobs:
             Sources/QuotaWarmer/Models/AppearanceMode.swift \
             Sources/QuotaWarmer/Models/TimeInput.swift \
             Sources/QuotaWarmer/Models/OnboardingFlow.swift \
+            Sources/QuotaWarmer/Models/IntegrationCommand.swift \
             Sources/QuotaWarmer/Services/DiagnosticLogger.swift \
             Sources/QuotaWarmer/Services/ModelCatalog.swift \
             Sources/QuotaWarmer/Services/CredentialStore.swift \

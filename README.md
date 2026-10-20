@@ -166,6 +166,27 @@ The file's format is versioned by `schemaVersion` (currently 1); see
 `Sources/QuotaWarmer/Models/QuotaStatus.swift`. Consumers should judge freshness from `fetchedAt`,
 since the file is only rewritten when a check succeeds.
 
+## URL Scheme, Shortcuts & Hotkey
+
+**URL scheme** — `quotawarmer://` is read/open/refresh only. Any web page can open a URL, so
+links can never send a warm-up or change a mode or setting; unknown actions and parameters are ignored.
+
+```text
+quotawarmer://open[?tab=main|history|settings]
+quotawarmer://refresh[?provider=claude|codex|<account key>]
+```
+
+`refresh` only polls monitored accounts, respects the rate-limit backoff, and is limited to once
+per account per 30 s. Try it with `open "quotawarmer://refresh?provider=claude"`.
+
+**Shortcuts / Spotlight** — QuotaWarmer provides App Intents: *Get Quota* (session/weekly used and
+left %, reset times, freshness, for a chosen account), *Refresh Quota*, *Set Mode* (Off / Monitor /
+Auto-warm), *Pause Auto-warm*, *Resume Auto-warm* and *Warm Up Now* (asks for confirmation, then uses
+the same path as the popover's Warm button). Find them in the Shortcuts app under QuotaWarmer.
+
+**Global hotkey** — Settings → Shortcuts. Off by default; opens the popover from anywhere
+(default ⌃⌥Q once enabled). Uses a system hotkey, so no Accessibility permission is needed.
+
 ## Build From Source
 
 Install XcodeGen, generate the project, and open it in Xcode:
@@ -193,7 +214,7 @@ scripts/local-package.command
 Run the regression suites (standalone `swiftc` builds — the same ones CI runs; see `.github/workflows/ci.yml` for the exact file lists):
 
 - `scripts/quota-extractor-regression.swift` — quota parsing, warm-up commands, cost estimates
-- `scripts/quota-display-regression.swift` — left/used display, bar colors, menu-bar text, theme cycle, wake-time input
+- `scripts/quota-display-regression.swift` — left/used display, bar colors, menu-bar text, theme cycle, wake-time input, `quotawarmer://` URL parsing, hotkey spec
 - `scripts/accounts-history-regression.swift` — multi-account identity, quota history, the `status.json` export
 
 ## Project Structure

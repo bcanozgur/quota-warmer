@@ -17,7 +17,7 @@ Use Swift 5.9 conventions: 4-space indentation, `PascalCase` for types, `camelCa
 
 ## Testing Guidelines
 
-There is no standalone XCTest target. The primary regression gate is `scripts/quota-extractor-regression.swift`, which protects live quota payload parsing, fallback behavior, and warm-up command assumptions. Add payload-shaped cases whenever changing `QuotaProvider`, `MetricExtractor`, `ToolID`, `CredentialStore`, or `WarmupRunner`. It also covers every auto-warm gating rule in `Models/AutoWarmDecision.swift`; add a case whenever a warm-up rule changes. `Models/AutoWarmExplanation.swift` (the user-facing "why no warm-up" text) is covered by `scripts/quota-display-regression.swift`.
+There is no standalone XCTest target. The primary regression gate is `scripts/quota-extractor-regression.swift`, which protects live quota payload parsing, fallback behavior, and warm-up command assumptions. `scripts/quota-display-regression.swift` also pins the `quotawarmer://` URL parser (`Models/IntegrationCommand.swift`): the URL scheme is read/open/refresh only, so keep dangerous URLs rejected. Add payload-shaped cases whenever changing `QuotaProvider`, `MetricExtractor`, `ToolID`, `CredentialStore`, or `WarmupRunner`. It also covers every auto-warm gating rule in `Models/AutoWarmDecision.swift`; add a case whenever a warm-up rule changes. `Models/AutoWarmExplanation.swift` (the user-facing "why no warm-up" text) is covered by `scripts/quota-display-regression.swift`.
 
 ## Commit & Pull Request Guidelines
 

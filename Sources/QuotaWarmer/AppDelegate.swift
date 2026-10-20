@@ -17,6 +17,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var cancellables = Set<AnyCancellable>()
     private var lastCloseAt: Date = .distantPast
 
+    override init() {
+        super.init()
+        IntegrationBridge.appState = appState
+    }
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         NotificationManager.shared.requestPermission()
         AppearanceMode.stored().apply()
@@ -39,6 +44,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             .sink { [weak self] in self?.refreshButtonImage() }
             .store(in: &cancellables)
         appState.onUITick = { [weak self] in self?.refreshButtonImage() }
+
+        GlobalHotKey.shared.onPress = { [weak self] in self?.togglePanelFromHotKey() }
+        GlobalHotKey.shared.reload()
+    }
+
+    // MARK: - Integrations
+
+    /// `quotawarmer://` links (see `IntegrationURLHandler`: read/open/refresh only).
+    func application(_ application: NSApplication, open urls: [URL]) {
+        IntegrationURLHandler.handle(urls, appState: appState) { [weak self] tab in
+            if let tab { self?.appState.selectedTab = tab }
+            self?.showPanelIfHidden()
+        }
+    }
+
+    private func togglePanelFromHotKey() {
+        if panel?.isVisible == true {
+            closePanel()
+        } else {
+            showPanel()
+        }
+    }
+
+    private func showPanelIfHidden() {
+        if panel?.isVisible != true { showPanel() }
     }
 
     private var lastImageKey: String?

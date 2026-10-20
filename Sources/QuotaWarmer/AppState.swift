@@ -1109,7 +1109,7 @@ final class AppState: ObservableObject {
     }
 
     @discardableResult
-    private func triggerWarmup(tool: ProviderID, mode: String) async -> Bool {
+    func triggerWarmup(tool: ProviderID, mode: String) async -> Bool {
         let state = state(for: tool)
         guard !state.isWarming else { return false }
 
