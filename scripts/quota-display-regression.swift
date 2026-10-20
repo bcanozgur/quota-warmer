@@ -23,6 +23,7 @@ struct QuotaDisplayRegression {
         testTimeInput()
         testColorfulSetting()
         testQuotaAlerts()
+        testIntegrationURLs()
 
         if failures.isEmpty {
             print("Quota display regressions passed (\(checks) checks)")
@@ -513,6 +514,63 @@ struct QuotaDisplayRegression {
         expect(kinds(result), [.session], "Claude 96% used: one 5h alert, weekly under threshold")
         expect(result.alerts.map(\.usedPercent), [96], "Claude 96% used alerts with the displayed percent")
         expect(result.marks["session"]?.windowKey, claude.rawWindowKey, "5h mark keyed on rawWindowKey")
+    }
+
+    // MARK: - quotawarmer:// URLs
+
+    static func testIntegrationURLs() {
+        func parse(_ string: String) -> IntegrationCommand? {
+            URL(string: string).flatMap(IntegrationURL.parse)
+        }
+        expect(parse("quotawarmer://open"), .open(tab: nil), "open without tab")
+        expect(parse("quotawarmer://open/"), .open(tab: nil), "open with trailing slash")
+        expect(parse("quotawarmer://open?tab=main"), .open(tab: .main), "open main")
+        expect(parse("quotawarmer://open?tab=history"), .open(tab: .history), "open history")
+        expect(parse("quotawarmer://open?tab=Settings"), .open(tab: .settings), "tab is case-insensitive")
+        expect(parse("QuotaWarmer://OPEN"), .open(tab: nil), "scheme and action are case-insensitive")
+        expect(parse("quotawarmer://refresh"), .refresh(provider: nil), "refresh all")
+        expect(parse("quotawarmer://refresh?provider=claude"), .refresh(provider: "claude"), "refresh claude")
+        expect(parse("quotawarmer://refresh?provider=codex"), .refresh(provider: "codex"), "refresh codex")
+        expect(parse("quotawarmer://refresh?provider=claude.work-2"), .refresh(provider: "claude.work-2"), "refresh account key")
+
+        // Rejected: everything that could change state, plus malformed input.
+        let rejected = [
+            "quotawarmer://warm", "quotawarmer://warm?provider=claude", "quotawarmer://warmup",
+            "quotawarmer://mode?provider=claude&mode=autoWarm", "quotawarmer://setmode?mode=autoWarm",
+            "quotawarmer://pause", "quotawarmer://resume", "quotawarmer://settings?refreshInterval=60",
+            "quotawarmer://open?tab=settings&mode=autoWarm", "quotawarmer://open?tab=settings&tab=main",
+            "quotawarmer://open?tab=nope", "quotawarmer://open?tab=", "quotawarmer://open?warm=1",
+            "quotawarmer://refresh?provider=claude&force=1", "quotawarmer://refresh?provider=",
+            "quotawarmer://refresh?provider=a%20b", "quotawarmer://refresh?provider=../../etc",
+            "quotawarmer://refresh?provider=claude;rm", "quotawarmer://open/warm", "quotawarmer://open/x?tab=main",
+            "quotawarmer://open#warm", "quotawarmer://user:pw@open", "quotawarmer://open:80",
+            "quotawarmer:open", "quotawarmer:///open", "quotawarmer://", "https://open?tab=main",
+            "quotawarmer2://open", "file:///open"
+        ]
+        for string in rejected { expectNil(parse(string), "rejected \(string)") }
+        expectNil(parse("quotawarmer://refresh?provider=" + String(repeating: "a", count: 81)), "overlong provider key rejected")
+
+        var throttle = IntegrationRefreshThrottle()
+        let t0 = Date(timeIntervalSince1970: 1_000_000)
+        check(throttle.allow("claude", now: t0), "first external refresh allowed")
+        check(!throttle.allow("claude", now: t0.addingTimeInterval(5)), "repeat within 30s throttled")
+        check(throttle.allow("codex", now: t0.addingTimeInterval(5)), "other provider unaffected")
+        check(throttle.allow("claude", now: t0.addingTimeInterval(31)), "allowed again after 30s")
+
+        let valid = HotKeySpec(keyCode: 0x0C, modifiers: [.control, .option])
+        check(valid.isValid, "ctrl+opt+Q is valid")
+        expect(valid.display, "⌃⌥Q", "hotkey display")
+        check(!HotKeySpec(keyCode: 0x0C, modifiers: []).isValid, "bare key rejected")
+        check(!HotKeySpec(keyCode: 0x0C, modifiers: [.shift]).isValid, "shift-only rejected")
+        check(!HotKeySpec(keyCode: 0x7F, modifiers: [.command]).isValid, "unknown key code rejected")
+        let suite = UserDefaults(suiteName: "qw-hotkey-regression")!
+        suite.removePersistentDomain(forName: "qw-hotkey-regression")
+        expectNil(HotKeySpec.stored(suite), "hotkey off by default")
+        suite.set(true, forKey: HotKeySpec.enabledKey)
+        expect(HotKeySpec.stored(suite), valid, "enabled hotkey uses defaults")
+        suite.set(0, forKey: HotKeySpec.modifiersKey)
+        expectNil(HotKeySpec.stored(suite), "enabled but invalid modifiers → no hotkey")
+        suite.removePersistentDomain(forName: "qw-hotkey-regression")
     }
 
     // MARK: - Helpers

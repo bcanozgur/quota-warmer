@@ -80,6 +80,10 @@ struct SettingsTabView: View {
                     }
                 }
 
+                group("SHORTCUTS") {
+                    HotKeySettingsSection()
+                }
+
                 group("MORNING PRE-WARM") {
                     row(icon: "sunrise", title: "Wake & Warm Each Morning",
                         subtitle: "Wakes a sleeping Mac to start your window") {
