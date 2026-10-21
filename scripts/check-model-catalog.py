@@ -52,35 +52,37 @@ def parse_price(cell):
 
 
 def table_rows(markdown, heading):
-    return table(markdown, heading)[1]
+    return tables(markdown, heading)[0][1]
 
 
-def table(markdown, heading):
-    """The first table under `heading`: (header cells or None, body rows)."""
+def tables(markdown, heading):
+    """The tables directly under `heading`, as (header cells or None, body
+    rows) pairs. Tables separated only by blank lines belong to the heading;
+    the next heading or a line of text ends it."""
     try:
         section = markdown.split(heading, 1)[1]
     except IndexError:
         raise ValueError(f"{heading!r} not found")
-    header, rows = None, []
-    started = False
+    found = []
     for line in section.splitlines():
-        if line.startswith("#"):
-            break
+        if not line.strip():
+            continue
         if not line.startswith("|"):
-            if started:
+            if line.startswith("#") or found:
                 break
             continue
-        started = True
         cells = [cell.strip() for cell in line.strip().strip("|").split("|")]
         if cells[0].lower() == "model":
-            header = header or cells
+            found.append((cells, []))
             continue
         if set(cells[0]) <= set("-: "):
             continue
-        rows.append(cells)
-    if not rows:
+        if not found:
+            found.append((None, []))
+        found[-1][1].append(cells)
+    if not any(rows for _, rows in found):
         raise ValueError(f"no rows under {heading!r}")
-    return header, rows
+    return found
 
 
 def clean_name(cell):
@@ -152,10 +154,23 @@ def openai_price(cells, index):
 
 
 def parse_openai(markdown, upstream):
-    """Columns are found by header name (see `openai_columns`). A `-` cached or
-    cache-write price means no discount, so it falls back to the input price."""
+    """Every table under the heading is read (the per-context table, then the
+    flat Input/Output/Cached input one). Columns are found by header name (see
+    `openai_columns`). A `-` cached or cache-write price means no discount, so
+    it falls back to the input price."""
     include = re.compile(upstream.get("include") or ".*")
-    header, body = table(markdown, "### Standard pricing data")
+    rows = []
+    for header, body in tables(markdown, "### Standard pricing data"):
+        rows.extend(parse_openai_table(header, body, include))
+    seen = set()
+    for row in rows:
+        if normalize(row["id"]) in seen:
+            raise ValueError(f"model {row['id']!r} is listed twice")
+        seen.add(normalize(row["id"]))
+    return rows
+
+
+def parse_openai_table(header, body, include):
     columns = openai_columns(header)
     rows = []
     for cells in body:
