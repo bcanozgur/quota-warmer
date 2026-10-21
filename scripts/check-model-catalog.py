@@ -52,11 +52,16 @@ def parse_price(cell):
 
 
 def table_rows(markdown, heading):
+    return table(markdown, heading)[1]
+
+
+def table(markdown, heading):
+    """The first table under `heading`: (header cells or None, body rows)."""
     try:
         section = markdown.split(heading, 1)[1]
     except IndexError:
         raise ValueError(f"{heading!r} not found")
-    rows = []
+    header, rows = None, []
     started = False
     for line in section.splitlines():
         if line.startswith("#"):
@@ -67,12 +72,15 @@ def table_rows(markdown, heading):
             continue
         started = True
         cells = [cell.strip() for cell in line.strip().strip("|").split("|")]
-        if cells[0].lower() == "model" or set(cells[0]) <= set("-: "):
+        if cells[0].lower() == "model":
+            header = header or cells
+            continue
+        if set(cells[0]) <= set("-: "):
             continue
         rows.append(cells)
     if not rows:
         raise ValueError(f"no rows under {heading!r}")
-    return rows
+    return header, rows
 
 
 def clean_name(cell):
@@ -100,22 +108,69 @@ def parse_anthropic(markdown, upstream):
     return rows
 
 
+def openai_columns(header):
+    """Map the OpenAI table's header to column indexes, by name, so a reordered
+    table still parses. Short-context input, output and cached input are
+    required; a layout without them raises. The first (shortest-lived) cache
+    write column is the catalog's write price. Long-context input/output are
+    optional and only check the catalog's `longContext` multipliers."""
+    if not header:
+        raise ValueError("pricing table has no header row")
+    columns = {}
+    for index, title in enumerate(header[1:], start=1):
+        title = title.lower()
+        scope = "long" if title.startswith("long") else "short"
+        if "write" in title:
+            kind = "write"
+        elif "cached" in title:
+            kind = "cached"
+        elif "input" in title:
+            kind = "input"
+        elif "output" in title:
+            kind = "output"
+        else:
+            raise ValueError(f"unknown pricing column {title!r} in {header}")
+        columns.setdefault((scope, kind), index)
+    missing = [kind for kind in ("input", "output", "cached") if ("short", kind) not in columns]
+    if missing:
+        raise ValueError(f"pricing table header lacks short-context {', '.join(missing)}: {header}")
+    return columns
+
+
+def openai_price(cells, index):
+    """`$x` -> x; `-` or empty -> None (no price for that column); anything
+    else is a format change and raises."""
+    if index is None:
+        return None
+    cell = cells[index] if index < len(cells) else ""
+    if cell.strip() in ("", "-"):
+        return None
+    price = parse_price(cell)
+    if price is None:
+        raise ValueError(f"unreadable price {cell!r} in row {cells}")
+    return price
+
+
 def parse_openai(markdown, upstream):
-    """Columns: model, short input, short cached input, short cache writes,
-    short output, then the long-context equivalents. A `-` cached or cache-write
-    price means no discount, so it falls back to the input price."""
+    """Columns are found by header name (see `openai_columns`). A `-` cached or
+    cache-write price means no discount, so it falls back to the input price."""
     include = re.compile(upstream.get("include") or ".*")
+    header, body = table(markdown, "### Standard pricing data")
+    columns = openai_columns(header)
     rows = []
-    for cells in table_rows(markdown, "### Standard pricing data"):
-        if len(cells) < 5:
-            continue
+    for cells in body:
+        if len(cells) != len(header):
+            raise ValueError(f"row has {len(cells)} cells, header has {len(header)}: {cells}")
         name = clean_name(cells[0])
         if not include.search(name):
             continue
-        base_input, cached, cache_write, output = (parse_price(cell) for cell in cells[1:5])
+        price = {key: openai_price(cells, index) for key, index in columns.items()}
+        base_input, output = price[("short", "input")], price[("short", "output")]
         if base_input is None or output is None:
             raise ValueError(f"missing price in row {cells}")
-        write = cache_write if cache_write is not None else base_input
+        cached = price[("short", "cached")]
+        write = price.get(("short", "write"))
+        write = write if write is not None else base_input
         prices = {
             "input": base_input,
             "cacheWrite5m": write,
@@ -123,7 +178,12 @@ def parse_openai(markdown, upstream):
             "cacheRead": cached if cached is not None else base_input,
             "output": output,
         }
-        rows.append({"id": name, "name": name, "status": "available", "prices": prices})
+        row = {"id": name, "name": name, "status": "available", "prices": prices}
+        long_input, long_output = price.get(("long", "input")), price.get(("long", "output"))
+        if long_input is not None and long_output is not None:
+            row["longContext"] = {"inputMultiplier": long_input / base_input,
+                                  "outputMultiplier": long_output / output}
+        rows.append(row)
     return rows
 
 
@@ -194,6 +254,19 @@ def compare(catalog, rows):
         entry = next((m for m in catalog["models"] if normalize(m["id"]) == normalize(model)), None)
         if entry and normalize(entry["id"]) in retired:
             notes.append(f"Warm-up model `{model}` is marked retired on the pricing page.")
+    long_context = catalog.get("longContext")
+    if long_context:
+        for row in rows:
+            published = row.get("longContext")
+            if not published or normalize(row["id"]) not in by_id:
+                continue
+            diff = {key: value for key, value in published.items()
+                    if abs(float(long_context.get(key, 0)) - value) > 1e-6}
+            if diff:
+                detail = ", ".join(f"{key} {number(long_context.get(key))} → {number(round(value, 4))}"
+                                   for key, value in diff.items())
+                notes.append(f"Long-context pricing for `{row['id']}` differs from the catalog's `longContext`: "
+                             f"{detail}. The catalog applies one multiplier to every model; review it by hand.")
     return findings, notes
 
 
@@ -214,7 +287,7 @@ def report(tool, url, findings, notes, fixed):
             out.append(f"- **{row['name']}** (`{row['id']}`): {detail}")
         out.append("")
     if notes:
-        out.append("### Warm-up model")
+        out.append("### Notes")
         out.extend(f"- {note}" for note in notes)
         out.append("")
     if fixed:
