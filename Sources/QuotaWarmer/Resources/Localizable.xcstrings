@@ -3585,6 +3585,22 @@
         }
       }
     },
+    "Language": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Language"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Dil"
+          }
+        }
+      }
+    },
     "Last 30 Days": {
       "localizations": {
         "en": {
@@ -5761,6 +5777,54 @@
         }
       }
     },
+    "Restart": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Restart"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Yeniden başlat"
+          }
+        }
+      }
+    },
+    "Restart QuotaWarmer in the chosen language": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Restart QuotaWarmer in the chosen language"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "QuotaWarmer’ı seçilen dilde yeniden başlat"
+          }
+        }
+      }
+    },
+    "Restart to apply": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Restart to apply"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Uygulamak için yeniden başlat"
+          }
+        }
+      }
+    },
     "Resume Auto-warm": {
       "localizations": {
         "en": {
@@ -6669,6 +6733,22 @@
           "stringUnit": {
             "state": "translated",
             "value": "Sistem"
+          }
+        }
+      }
+    },
+    "System follows macOS": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "System follows macOS"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sistem, macOS dilini izler"
           }
         }
       }

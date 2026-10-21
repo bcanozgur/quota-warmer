@@ -15,6 +15,7 @@ let package = Package(
             name: "QuotaWarmerCore",
             path: "Sources/QuotaWarmer",
             sources: [
+                "Models/AppLanguage.swift",
                 "Models/AppSettings.swift",
                 "Models/AppearanceMode.swift",
                 "Models/AutoWarmDecision.swift",

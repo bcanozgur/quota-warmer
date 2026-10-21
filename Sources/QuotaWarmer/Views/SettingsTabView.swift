@@ -27,6 +27,7 @@ struct SettingsTabView: View {
     @AppStorage("morningPrewarmMinute")       private var morningMinute: Int       = 0
     @AppStorage("morningPrewarmWeekdaysOnly") private var morningWeekdaysOnly: Bool = true
     @AppStorage(QuotaDisplay.colorfulBarsKey) private var colorfulBars: Bool = true
+    @State private var language = AppLanguage.stored()
 
     private let refreshOptions: [(label: String, value: Int)] = [
         (String(localized: "5m"), 300), (String(localized: "10m"), 600),
@@ -77,6 +78,29 @@ struct SettingsTabView: View {
                 }
 
                 group("DISPLAY") {
+                    row(icon: "globe", title: "Language",
+                        subtitle: language == AppLanguage.atLaunch ? "System follows macOS" : "Restart to apply") {
+                        HStack(spacing: 6) {
+                            languagePicker
+                            if language != AppLanguage.atLaunch {
+                                Button(action: relaunch) {
+                                    Text("Restart")
+                                        .font(.system(size: 9.5, weight: .semibold))
+                                        .lineLimit(1)
+                                        .fixedSize()
+                                        .padding(.horizontal, 9)
+                                        .frame(height: 22)
+                                        .background(DS.C.ink, in: Capsule())
+                                        .foregroundStyle(DS.C.bg)
+                                }
+                                .buttonStyle(PressableButtonStyle())
+                                .help("Restart QuotaWarmer in the chosen language")
+                            }
+                        }
+                    }
+
+                    Divider().background(DS.C.border).padding(.leading, 36)
+
                     row(icon: "paintpalette", title: "Colorful Quota Bars",
                         subtitle: colorfulBars ? "Blue → orange at 50% → red at 80% used" : "Single-color bars") {
                         Toggle(isOn: $colorfulBars) { Text("Colorful Quota Bars") }.labelsHidden()
@@ -557,6 +581,32 @@ struct SettingsTabView: View {
         .disabled(!enabled)
         .help("Click to change the threshold")
         .accessibilityLabel(Text("Alert at \(value.wrappedValue) percent used. Activate to change."))
+    }
+
+    private var languagePicker: some View {
+        segmentedPicker(
+            options: AppLanguage.allCases.enumerated().map { (label: $1.label, value: $0) },
+            selected: Binding(
+                get: { AppLanguage.allCases.firstIndex(of: language) ?? 0 },
+                set: { language = AppLanguage.allCases[$0] }
+            )
+        ) { language.store() }
+        .accessibilityLabel(Text("Language"))
+    }
+
+    /// Starts a fresh copy once this one has quit (the language is read only
+    /// at launch), then quits.
+    private func relaunch() {
+        let path = Bundle.main.bundlePath.replacingOccurrences(of: "'", with: "'\\''")
+        let task = Process()
+        task.executableURL = URL(fileURLWithPath: "/bin/sh")
+        task.arguments = ["-c", "while /bin/kill -0 \(ProcessInfo.processInfo.processIdentifier) 2>/dev/null; do sleep 0.2; done; /usr/bin/open '\(path)'"]
+        do {
+            try task.run()
+            NSApplication.shared.terminate(nil)
+        } catch {
+            NSSound.beep()
+        }
     }
 
     private func segmentedPicker(

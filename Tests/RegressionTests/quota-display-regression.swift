@@ -20,6 +20,7 @@ struct QuotaDisplayRegression {
         testMenuBarText()
         testModePersistence()
         testAppearanceMode()
+        testAppLanguage()
         testTimeInput()
         testColorfulSetting()
         testQuotaAlerts()
@@ -235,6 +236,31 @@ struct QuotaDisplayRegression {
         check(QuotaDisplayMode.defaultsKey(for: .claude) != QuotaDisplayMode.defaultsKey(for: .codex), "per-tool keys differ")
         expect(QuotaDisplayMode.remaining.toggled, .used, "toggle remaining → used")
         expect(QuotaDisplayMode.used.toggled, .remaining, "toggle used → remaining")
+    }
+
+    // MARK: - Language
+
+    static func testAppLanguage() {
+        let suite = "QuotaDisplayRegression.language.\(UUID().uuidString)"
+        guard let defaults = UserDefaults(suiteName: suite) else { fail("could not create defaults suite"); return }
+        defer { defaults.removePersistentDomain(forName: suite) }
+        expect(AppLanguage.stored(defaults: defaults, domain: suite), .system, "language defaults to system")
+        expect(AppLanguage.stored(defaults: defaults, domain: nil), .system, "no bundle id reads as system")
+        for language in [AppLanguage.english, .turkish] {
+            language.store(defaults: defaults)
+            expect(defaults.persistentDomain(forName: suite)?[AppLanguage.defaultsKey] as? [String], [language.rawValue],
+                   "\(language) is stored as the per-app AppleLanguages list")
+            expect(AppLanguage.stored(defaults: defaults, domain: suite), language, "\(language) persists")
+        }
+        AppLanguage.system.store(defaults: defaults)
+        check(defaults.persistentDomain(forName: suite)?[AppLanguage.defaultsKey] == nil, "System removes the per-app override")
+        expect(AppLanguage.stored(defaults: defaults, domain: suite), .system, "and reads back as system")
+        for (stored, expected) in [("tr-TR", AppLanguage.turkish), ("en_GB", .english), ("TR", .turkish), ("de", .system)] {
+            defaults.set([stored, "en"], forKey: AppLanguage.defaultsKey)
+            expect(AppLanguage.stored(defaults: defaults, domain: suite), expected, "a list starting with \(stored) reads as \(expected)")
+        }
+        expect(AppLanguage.turkish.label, "Türkçe", "each language is named in itself")
+        expect(AppLanguage.english.label, "English", "each language is named in itself")
     }
 
     // MARK: - Theme

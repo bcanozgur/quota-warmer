@@ -25,6 +25,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         NotificationManager.shared.requestPermission()
         AppearanceMode.stored().apply()
+        _ = AppLanguage.atLaunch  // pin the launch language before Settings can change it
 
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         if let button = item.button {

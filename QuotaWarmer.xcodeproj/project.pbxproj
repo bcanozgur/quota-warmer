@@ -40,6 +40,7 @@
 		87AB46923736BB0CD28FC099 /* AppState+Ext.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3739BD62D7E5AAF6EB84DC3C /* AppState+Ext.swift */; };
 		895F8C76D3B791F771C366F8 /* IntegrationBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC9C567F97BC3165ECDD14DF /* IntegrationBridge.swift */; };
 		8A78A0AF9DE7B804BAE53247 /* UpdateChecker.swift in Sources */ = {isa = PBXBuildFile; fileRef = EA5F1077252CA9BA28AE19CD /* UpdateChecker.swift */; };
+		8AF382DD025C19DF5A31F4F0 /* AppLanguage.swift in Sources */ = {isa = PBXBuildFile; fileRef = F63713716548C432BF7A35A5 /* AppLanguage.swift */; };
 		8FCB391B05386B0AB0BCB5DB /* UsageHistory.swift in Sources */ = {isa = PBXBuildFile; fileRef = 80E94299AA2ED85FD7D6B3B6 /* UsageHistory.swift */; };
 		94127F41326970A5066C004C /* EventLog.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1DCBDB4DB1F1C51C1F117DCD /* EventLog.swift */; };
 		96139FB348BF9DD32C982148 /* DiagnosticLogger.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0D3454470E2CC3AC8ACED995 /* DiagnosticLogger.swift */; };
@@ -135,6 +136,7 @@
 		F0ECCEAAAD4F2D01A85698B2 /* QuotaProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuotaProvider.swift; sourceTree = "<group>"; };
 		F4D8BDF7070D1A323481D7BE /* WarmupRunner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WarmupRunner.swift; sourceTree = "<group>"; };
 		F5FDFE84B63B04B2AEAD59DB /* QuotaWarmer.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = QuotaWarmer.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		F63713716548C432BF7A35A5 /* AppLanguage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppLanguage.swift; sourceTree = "<group>"; };
 		F8BDF5751BAAA302161C7A04 /* AppSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppSettings.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
@@ -173,6 +175,7 @@
 			isa = PBXGroup;
 			children = (
 				9D9A237728C8CC1E981C24F6 /* AppearanceMode.swift */,
+				F63713716548C432BF7A35A5 /* AppLanguage.swift */,
 				F8BDF5751BAAA302161C7A04 /* AppSettings.swift */,
 				7D95C8268ED2E35DCC765A35 /* AutoWarmDecision.swift */,
 				64FA897739194FEFD2084730 /* AutoWarmExplanation.swift */,
@@ -351,6 +354,7 @@
 				C9E84C2F8C352AAC98DEC9DE /* AccountsCoordinator.swift in Sources */,
 				F20BE3E4612D5587FF1E585D /* AccountsSection.swift in Sources */,
 				737C077D9B36EB603128B662 /* AppDelegate.swift in Sources */,
+				8AF382DD025C19DF5A31F4F0 /* AppLanguage.swift in Sources */,
 				BA17B4868EA7EE3D74A2C111 /* AppSettings.swift in Sources */,
 				87AB46923736BB0CD28FC099 /* AppState+Ext.swift in Sources */,
 				BC7CE657053CA306D4E89A3A /* AppState+Integrations.swift in Sources */,
