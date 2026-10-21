@@ -329,8 +329,33 @@ final class QuotaProvider: QuotaProviding {
     func codexSnapshot(payload: Any, source: String, message: String?) -> QuotaSnapshot {
         if let rateLimit = (payload as? [String: Any])?["rate_limit"] as? [String: Any],
            rateLimit["primary_window"] != nil || rateLimit["secondary_window"] != nil {
-            let fiveHour = codexWindowMetric(rateLimit["primary_window"], defaultName: "5h")
-            let weekly = codexWindowMetric(rateLimit["secondary_window"], defaultName: "Weekly")
+            // Place each window by its length, not its slot: some plans report a
+            // 30-day (or weekly) window as `primary_window`, which read as a
+            // 720h "5h" countdown. A slot is trusted only when the length is unknown.
+            var fiveHour: QuotaMetric?
+            var weekly: QuotaMetric?
+            var extras: [QuotaMetric] = []
+            for (key, defaultName) in [("primary_window", "5h"), ("secondary_window", "Weekly")] {
+                guard let metric = codexWindowMetric(rateLimit[key], defaultName: defaultName) else { continue }
+                let windowSeconds = codexDouble((rateLimit[key] as? [String: Any])?["limit_window_seconds"]) ?? 0
+                let slot: String
+                if windowSeconds <= 0 {
+                    slot = defaultName
+                } else if windowSeconds <= 6 * 3600 {
+                    slot = "5h"
+                } else if windowSeconds >= 6 * 24 * 3600 && windowSeconds <= 8 * 24 * 3600 {
+                    slot = "Weekly"
+                } else {
+                    slot = "extra"
+                }
+                if slot == "5h", fiveHour == nil {
+                    fiveHour = metric
+                } else if slot == "Weekly", weekly == nil {
+                    weekly = metric
+                } else {
+                    extras.append(metric)
+                }
+            }
             // An idle 5h window's projected reset slides every poll, so key it on a
             // stable marker instead of the moving timestamp.
             let fiveHourKey = (fiveHour?.isIdle == true)
@@ -344,7 +369,7 @@ final class QuotaProvider: QuotaProviding {
                 corroboratingSource: nil,
                 fiveHour: fiveHour,
                 weekly: weekly,
-                extras: [],
+                extras: extras,
                 rawWindowKey: keyParts.joined(separator: "|"),
                 message: message
             )
@@ -385,7 +410,9 @@ final class QuotaProvider: QuotaProviding {
         }
 
         let name: String
-        if windowSeconds >= 6 * 24 * 3600 {
+        if windowSeconds > 8 * 24 * 3600 {
+            name = "\(Int((windowSeconds / 86_400).rounded()))d"
+        } else if windowSeconds >= 6 * 24 * 3600 {
             name = "Weekly"
         } else if windowSeconds > 0 && windowSeconds <= 6 * 3600 {
             name = "5h"
@@ -434,6 +461,10 @@ final class QuotaProvider: QuotaProviding {
         }
     }
 
+    /// A 5h window can't reset further out than its length; allow 1h of slack.
+    /// A metric resetting later is some other window, never the 5h one.
+    private static let maxFiveHourResetLead: TimeInterval = 6 * 3600
+
     private func selectFiveHourMetric(from metrics: [QuotaMetric], excluding weekly: QuotaMetric?, now: Date) -> QuotaMetric? {
         let candidates = metrics.filter { $0.id != weekly?.id }
         if let best = bestMetric(from: candidates, minimumScore: 30, scoredBy: { metric in
@@ -449,10 +480,10 @@ final class QuotaProvider: QuotaProviding {
             if metric.remainingPercent != nil { score += 6 }
             if let resetAt = metric.resetAt {
                 let seconds = resetAt.timeIntervalSince(now)
-                if seconds > 0 && seconds <= 8 * 3600 { score += 55 }
+                if seconds > 0 && seconds <= Self.maxFiveHourResetLead { score += 55 }
                 if seconds > 24 * 3600 { score -= 120 }
             }
-            if text.contains("weekly") || text.contains("week") {
+            if isWeeklyText(text) {
                 score -= 120
             }
             return score
@@ -460,10 +491,13 @@ final class QuotaProvider: QuotaProviding {
             return best
         }
 
+        // A weekly bucket (e.g. Claude's seven_day_sonnet) resets within 8h near
+        // the end of its week, so a short reset alone must never make it the 5h
+        // window — with no active 5h window that read as an ~8h "5h" countdown.
         let shortResetCandidates = candidates.filter { metric in
-            guard let resetAt = metric.resetAt else { return false }
+            guard !isWeeklyText(quotaText(metric)), let resetAt = metric.resetAt else { return false }
             let seconds = resetAt.timeIntervalSince(now)
-            return seconds > 0 && seconds <= 8 * 3600
+            return seconds > 0 && seconds <= Self.maxFiveHourResetLead
         }
         return shortResetCandidates.count == 1 ? shortResetCandidates[0] : nil
     }
@@ -482,6 +516,10 @@ final class QuotaProvider: QuotaProviding {
             }
         }
         return best?.metric
+    }
+
+    private func isWeeklyText(_ text: String) -> Bool {
+        text.contains("weekly") || text.contains("week") || text.contains("sevenday") || text.contains("7day")
     }
 
     private func quotaText(_ metric: QuotaMetric) -> String {

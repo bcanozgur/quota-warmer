@@ -169,6 +169,51 @@ access_token=private-value
         require(wham.rawWindowKey == whamLater.rawWindowKey, "Codex window key should not change as usage changes")
 
         let now = Date()
+
+        // Some Codex plans have no 5h window: `primary_window` is a 30-day window
+        // (limit_window_seconds 2592000). Placing it by slot made the "5h"
+        // countdown read ~720h. Windows are placed by their length, not their slot.
+        let codexMonthlyOnlyPayload: [String: Any] = [
+            "rate_limit": [
+                "primary_window": [
+                    "used_percent": 6,
+                    "limit_window_seconds": 2_592_000,
+                    "reset_after_seconds": 2_000_000,
+                    "reset_at": Int(now.addingTimeInterval(2_000_000).timeIntervalSince1970)
+                ],
+                "secondary_window": NSNull()
+            ]
+        ]
+        let codexMonthlyOnly = provider.codexSnapshot(payload: codexMonthlyOnlyPayload, source: "test", message: nil)
+        require(codexMonthlyOnly.fiveHour == nil, "A 30-day Codex window must never be the 5h window")
+        require(codexMonthlyOnly.weekly == nil, "A 30-day Codex window must not be the weekly window")
+        require(codexMonthlyOnly.extras.count == 1, "A 30-day Codex window is kept as an extra")
+        // A weekly window reported in the primary slot still lands in weekly.
+        let codexWeeklyPrimaryPayload: [String: Any] = [
+            "rate_limit": [
+                "primary_window": [
+                    "used_percent": 40,
+                    "limit_window_seconds": 604_800,
+                    "reset_at": Int(now.addingTimeInterval(3 * 86_400).timeIntervalSince1970)
+                ]
+            ]
+        ]
+        let codexWeeklyPrimary = provider.codexSnapshot(payload: codexWeeklyPrimaryPayload, source: "test", message: nil)
+        require(codexWeeklyPrimary.fiveHour == nil, "A weekly Codex primary window must not be the 5h window")
+        requireClose(codexWeeklyPrimary.weekly?.remainingFraction, 0.60, "A weekly Codex primary window lands in weekly")
+
+        // Generic extractor: a 5h window can't reset 7h from now, so an unlabeled
+        // metric resetting that far out must not be taken as the 5h window.
+        let genericFarResetPayload: [String: Any] = [
+            "limits": [
+                ["used": 10, "limit": 100, "resets_at": formatter.string(from: now.addingTimeInterval(7 * 3600))]
+            ]
+        ]
+        let genericFarReset = provider.snapshot(
+            tool: .claude, source: "test", corroboratingSource: nil, payload: genericFarResetPayload, message: nil
+        )
+        require(genericFarReset.fiveHour == nil, "A metric resetting 7h out must not be picked as the 5h window")
+
         let freshWindowPayload: [String: Any] = [
             "rate_limit": [
                 "primary_window": [
@@ -602,6 +647,46 @@ access_token=private-value
             ),
             "Claude idle window must not warm again during the already-claimed duration"
         )
+
+        // With no active 5h window (null five_hour) close to the weekly reset, the
+        // per-model weekly buckets (seven_day_sonnet/opus) reset within 8h. The 5h
+        // selector's "short reset" heuristics used to pick one of them as the 5h
+        // window, so the 5h countdown read ~8h. A seven-day bucket is never the 5h.
+        let nearWeeklyReset = formatter.string(from: now.addingTimeInterval(7.5 * 3600))
+        let claudeIdleNearWeeklyPayload: [String: Any] = [
+            "five_hour": NSNull(),
+            "seven_day": ["utilization": 76.0, "resets_at": nearWeeklyReset],
+            "seven_day_sonnet": ["utilization": 12.0, "resets_at": nearWeeklyReset],
+            "seven_day_opus": ["utilization": 30.0, "resets_at": nearWeeklyReset],
+            "seven_day_oauth_apps": NSNull(),
+            "extra_usage": ["is_enabled": false, "utilization": NSNull()]
+        ]
+        let claudeIdleNearWeekly = provider.claudeSnapshot(
+            payload: claudeIdleNearWeeklyPayload,
+            source: "Claude OAuth usage",
+            corroboratingSource: nil,
+            message: nil
+        )
+        require(claudeIdleNearWeekly.fiveHour?.isIdle == true,
+                "Null five_hour near the weekly reset must be the idle 5h window, not a seven-day bucket")
+        if let reset = claudeIdleNearWeekly.fiveHour?.resetAt {
+            require(reset.timeIntervalSinceNow <= 5 * 3600 + 5,
+                    "Claude 5h countdown must never exceed 5h, was \(reset.timeIntervalSinceNow)s")
+        }
+        requireClose(claudeIdleNearWeekly.weekly?.remainingFraction, 0.24, "Near-reset Claude weekly still parses")
+        // Same buckets next to a real five_hour: five_hour must still win.
+        var claudeActiveNearWeeklyPayload = claudeIdleNearWeeklyPayload
+        claudeActiveNearWeeklyPayload["five_hour"] = [
+            "utilization": 38.0, "resets_at": formatter.string(from: sessionReset)
+        ]
+        let claudeActiveNearWeekly = provider.claudeSnapshot(
+            payload: claudeActiveNearWeeklyPayload,
+            source: "Claude OAuth usage",
+            corroboratingSource: nil,
+            message: nil
+        )
+        requireClose(claudeActiveNearWeekly.fiveHour?.remainingFraction, 0.62, "Real five_hour beats seven-day buckets")
+        require(claudeActiveNearWeekly.fiveHour?.isIdle == false, "Real five_hour must not be idle")
 
         // A freshly-warmed window carries a live reset in the future and *must*
         // confirm the warm-up claim.
