@@ -163,8 +163,7 @@ struct MenuContent: View {
                     toolState: appState.state(for: id),
                     onSetMode: { appState.setMode($0, for: id) },
                     onActivate: { appState.activate(id) },
-                    onRefresh: { Task { await appState.refreshQuotaManually(for: id) } },
-                    isPanelVisible: { appState.isPanelVisible }
+                    onRefresh: { Task { await appState.refreshQuotaManually(for: id) } }
                 )
                 .frame(width: DS.contentWidth)
                 .frame(maxHeight: .infinity)

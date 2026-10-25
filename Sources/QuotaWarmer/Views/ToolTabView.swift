@@ -6,12 +6,14 @@ struct ToolTabView: View {
     let onSetMode: (ToolMode) -> Void
     let onActivate: () -> Void
     let onRefresh: () -> Void
-    /// Read on each tick (not observed): the panel stays alive while hidden,
-    /// and the countdown need not re-render every second then.
-    let isPanelVisible: () -> Bool
 
-    private let ticker = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
-    @State private var now = Date()
+    /// Read fresh on every render, like the overview. AppState's 1 s UI timer
+    /// re-renders this view while the panel is visible (and once on open). A
+    /// view-local `Timer.publish` + `@State` clock froze here: the parent
+    /// rebuilds this struct every second, each rebuild made a new publisher and
+    /// `onReceive` resubscribed before it ever fired, so the countdown and pace
+    /// stayed at the time the tab was opened until it was switched away and back.
+    private var now: Date { Date() }
 
     var body: some View {
         VStack(alignment: .leading, spacing: DS.Page.spacing) {
@@ -33,7 +35,6 @@ struct ToolTabView: View {
         .reportsPanelHeight()
         .frame(maxHeight: .infinity, alignment: .top)
         .background(DS.C.bg)
-        .onReceive(ticker) { t in if isPanelVisible() { now = t } }
     }
 
     private var header: some View {
