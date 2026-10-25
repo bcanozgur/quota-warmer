@@ -461,9 +461,9 @@ final class QuotaProvider: QuotaProviding {
         }
     }
 
-    /// A 5h window can't reset further out than its length; allow 1h of slack.
-    /// A metric resetting later is some other window, never the 5h one.
-    private static let maxFiveHourResetLead: TimeInterval = 6 * 3600
+    /// A 5h window can't reset further out than its length; allow 10 min of
+    /// clock slack. A metric resetting later is some other window, never the 5h one.
+    private static let maxFiveHourResetLead: TimeInterval = 5 * 3600 + 10 * 60
 
     private func selectFiveHourMetric(from metrics: [QuotaMetric], excluding weekly: QuotaMetric?, now: Date) -> QuotaMetric? {
         let candidates = metrics.filter { $0.id != weekly?.id }

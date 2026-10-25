@@ -522,6 +522,11 @@ struct QuotaDisplayRegression {
                                      windowDuration: fiveHours, now: alertNow, fallbackResetText: "")
         expect(pace.runsOutText, "Runs out in 1h 0m", "bar text matches the alert projection")
         close(pace.runsOutIn, 3600, "QuotaPace exposes the run-out seconds")
+        // A reset further out than the window is long belongs to another bucket.
+        let tooFar = QuotaPace.compute(quotaLeft: 0.96, resetAt: alertNow.addingTimeInterval(6 * 3600 + 13 * 60),
+                                       windowDuration: fiveHours, now: alertNow, fallbackResetText: "fallback")
+        expect(tooFar.resetText, "fallback", "a 5h window cannot reset in 6h13m")
+        check(tooFar.timeLeftFraction == nil, "impossible reset draws no pace knob")
 
         // Weekly thresholds, deduped on the weekly reset.
         expect(kinds(evaluate(alertSnapshot(weeklyUsed: 0.74))), [], "74% weekly: no alert")

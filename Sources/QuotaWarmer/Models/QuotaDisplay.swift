@@ -191,6 +191,8 @@ enum QuotaPace {
         var isBehind: Bool { shortPercent != nil }
     }
 
+    static let resetLeadTolerance: TimeInterval = 10 * 60
+
     static func compute(
         quotaLeft: Double,
         resetAt: Date?,
@@ -202,7 +204,11 @@ enum QuotaPace {
         // snapshot hasn't refreshed to the new window yet). Showing "Resets in 0s"
         // for a window that already ended is misleading, so fall back to the
         // neutral freshness text just like the no-reset case.
-        guard let resetAt, resetAt > now else {
+        // A reset further out than the window is long (plus clock slack) cannot
+        // belong to this window — it is some other bucket's boundary, and "Resets
+        // in 6h" on a 5h window is wrong either way — so treat it as unknown.
+        guard let resetAt, resetAt > now,
+              resetAt.timeIntervalSince(now) <= windowDuration + resetLeadTolerance else {
             return Result(timeLeftFraction: nil, resetText: fallbackResetText,
                           shortPercent: nil, runsOutText: nil)
         }
