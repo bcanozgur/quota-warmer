@@ -78,6 +78,20 @@ final class QuotaPollingCoordinator {
 
     // MARK: - Refresh entry points
 
+    /// Seeds each account's snapshot from its newest history sample at launch.
+    /// Without it an expired Claude token after a relaunch left no reading at
+    /// all, so the expired-token warm-up could never see the last window end.
+    func restoreLastKnownSnapshots() async {
+        let since = Date().addingTimeInterval(-8 * 24 * 3600)
+        for tool in host.providers where host.state(for: tool).isMonitored {
+            guard let sample = await UsageHistoryStore.shared.samples(for: tool, since: since).last,
+                  let snapshot = sample.lastKnownSnapshot(tool: tool.kind) else { continue }
+            let state = host.state(for: tool)
+            // A fetch that landed first is newer; keep it.
+            if state.quotaSnapshot == nil { state.quotaSnapshot = snapshot }
+        }
+    }
+
     func refreshAllActivity(allowAutomaticWarmup: Bool = false, includeInactive: Bool = false) {
         host.isRefreshing = true
         let tools = host.providers.filter { includeInactive || host.state(for: $0).isMonitored }

@@ -91,6 +91,7 @@ final class AppState: ObservableObject, CoordinatorHost {
         }
 
         events.loadPersistedHistory()
+        Task { await quota.restoreLastKnownSnapshots() }
         refreshAllActivity(allowAutomaticWarmup: false)
         startQuotaRefreshTimer()
         startUIRefreshTimer()

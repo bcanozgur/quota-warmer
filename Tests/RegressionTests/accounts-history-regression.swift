@@ -258,6 +258,23 @@ struct AccountsHistoryRegression {
         check(QuotaSample(snapshot: snapshot(at: now, sessionUsed: nil, weeklyUsed: nil, resetAt: nil)) == nil,
               "a snapshot with no windows is not recorded")
 
+        // Relaunch with an expired Claude token: the newest sample is the only
+        // reading, and it must still tell whether its window ended.
+        let restored = active?.lastKnownSnapshot(tool: .claude)
+        expect(restored?.fiveHour?.remainingFraction, 0.577, "last known: session remaining is restored")
+        expect(restored?.weekly?.usedPercent, 0.1, "last known: weekly used is restored")
+        expect(restored?.fetchedAt, now, "last known: keeps the sample's time, so it is never fresh")
+        check(restored?.freshness(now: now.addingTimeInterval(3600)) == .expired, "last known: an old sample reads expired")
+        check(restored?.lastKnownWindowEnded(now: now.addingTimeInterval(1800)) == false, "last known: a future reset is a running window")
+        check(restored?.lastKnownWindowEnded(now: now.addingTimeInterval(3600)) == true, "last known: a passed reset is an ended window")
+        let restoredIdle = idle?.lastKnownSnapshot(tool: .claude)
+        check(restoredIdle?.fiveHour?.isIdle == true, "last known: a sample without a reset was idle")
+        check(restoredIdle?.lastKnownWindowEnded(now: now) == true, "last known: an idle reading has no running window")
+        let weeklyOnly = QuotaSample(t: now, s: nil, w: 0.3, r: nil).lastKnownSnapshot(tool: .claude)
+        check(weeklyOnly?.fiveHour == nil, "last known: an unsettled rollover sample restores no 5h window")
+        check(weeklyOnly?.lastKnownWindowEnded(now: now) == false, "last known: no 5h window never counts as ended")
+        check(QuotaSample(t: now, s: nil, w: nil, r: nil).lastKnownSnapshot(tool: .claude) == nil, "last known: an empty sample restores nothing")
+
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .secondsSince1970
         let decoder = JSONDecoder()

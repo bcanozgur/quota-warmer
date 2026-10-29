@@ -35,6 +35,39 @@ struct QuotaSample: Codable, Equatable {
     private static func rounded(_ value: Double) -> Double {
         (min(max(value, 0), 1) * 1000).rounded() / 1000
     }
+
+    /// The last known reading rebuilt after a relaunch, so an expired Claude
+    /// token (no fresh reading until the CLI runs) still leaves a snapshot that
+    /// says whether its window ended. Its `fetchedAt` is the sample's, so it is
+    /// never fresh and never feeds the normal auto-warm path.
+    func lastKnownSnapshot(tool: ToolID) -> QuotaSnapshot? {
+        let fiveHour: QuotaMetric?
+        if let s {
+            // A sample drops the reset only for an idle window.
+            fiveHour = QuotaMetric(
+                name: "5h", usedPercent: s, remainingPercent: 1 - s, resetAt: r,
+                detail: nil, context: r == nil ? "5h idle" : "5h", isIdle: r == nil
+            )
+        } else {
+            fiveHour = nil
+        }
+        let weekly = w.map {
+            QuotaMetric(name: "Weekly", usedPercent: $0, remainingPercent: 1 - $0, resetAt: nil, detail: nil, context: "weekly")
+        }
+        guard fiveHour != nil || weekly != nil else { return nil }
+        let source = "Last known reading"
+        return QuotaSnapshot(
+            tool: tool,
+            fetchedAt: t,
+            primarySource: source,
+            corroboratingSource: nil,
+            fiveHour: fiveHour,
+            weekly: weekly,
+            extras: [],
+            rawWindowKey: [source, r.map { ISO8601DateFormatter().string(from: $0) } ?? "idle"].joined(separator: "|"),
+            message: nil
+        )
+    }
 }
 
 /// One 5-hour window reconstructed from samples.
