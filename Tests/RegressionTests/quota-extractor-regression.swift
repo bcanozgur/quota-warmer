@@ -1206,6 +1206,59 @@ access_token=private-value
             "Auto-warm dedup: an idle window still waits for the warmed window to end"
         )
 
+        // Expired Claude token: no fresh reading until the CLI runs, and the
+        // warm-up is that run. Allowed only once the last known window ended.
+        func expired(_ edit: (inout AutoWarmDecision.Window) -> Void) -> AutoWarmDecision {
+            decide {
+                $0.sourceHealth = .stale
+                $0.awaitingCLITokenRefresh = true
+                $0.snapshot = snapshot(fetchedAgo: 8 * 3600, openedAgo: window + 3600, remaining: 0.2)
+                edit(&$0)
+            }
+        }
+        require(expired { _ in } == .warm, "Expired token: a last window that already reset warms (the CLI run refreshes the token)")
+        require(
+            expired { $0.lastAutoWindowKey = "test|K1" } == .warm,
+            "Expired token: the old window's key must not block (it is the ended window's key)"
+        )
+        require(
+            expired { $0.snapshot = snapshot(fetchedAgo: 3600, openedAgo: 3600, remaining: 0.2) } == .skip(.sourceUnhealthy(.stale)),
+            "Expired token: a last window still running never warms blind"
+        )
+        require(
+            expired { $0.snapshot = snapshot(fetchedAgo: 3600, openedAgo: window, remaining: 0.2) } == .warm,
+            "Expired token: a last window resetting exactly now counts as ended"
+        )
+        require(
+            expired { $0.snapshot = snapshot(fetchedAgo: 3600, idle: true, key: "test|idle") } == .warm,
+            "Expired token: an idle last reading has no running window"
+        )
+        require(expired { $0.snapshot = nil } == .skip(.sourceUnhealthy(.stale)), "Expired token: no last reading never warms")
+        require(
+            expired { $0.snapshot = snapshot(fetchedAgo: 3600, hasFiveHour: false) } == .skip(.sourceUnhealthy(.stale)),
+            "Expired token: a last reading without a 5h metric never warms"
+        )
+        require(
+            expired { $0.awaitingCLITokenRefresh = false } == .skip(.sourceUnhealthy(.stale)),
+            "Expired token: any other unhealthy source still never warms"
+        )
+        require(
+            expired { $0.upcomingMorningAt = morningSoon } == .skip(.reservedForMorning(at: morningSoon)),
+            "Expired token: the window before the morning pre-warm stays reserved"
+        )
+        require(
+            expired { $0.lastAutoWarmWindowEndsAt = warmedEnds } == .skip(.warmedWindowActive(until: warmedEnds)),
+            "Expired token: a warm-up whose re-check still failed is not repeated until its window ends"
+        )
+        require(
+            expired { $0.sourceHealth = .healthy; $0.snapshot = snapshot() } == .warm,
+            "Expired token: a healthy reading takes the normal path"
+        )
+        let rolledOver = snapshot(fetchedAgo: 8 * 3600, openedAgo: window + 3600, remaining: 0.2)
+        let running = snapshot(fetchedAgo: 3600, openedAgo: 3600, remaining: 0.2)
+        require(rolledOver.lastKnownWindowEnded(now: now), "Expired token: a passed reset is an ended window")
+        require(!running.lastKnownWindowEnded(now: now), "Expired token: a future reset is a running window")
+
         // Same window twice, then the next window: warm, remember, skip, warm again.
         var flow = freshWindow
         require(AutoWarmDecision.window(flow, now: now) == .warm, "Auto-warm flow: the first poll of a fresh window warms")
@@ -1259,6 +1312,28 @@ access_token=private-value
         )
         guard case .skip(let repeatReason) = morningRepeat else { fatalError("Morning pre-warm: must not run twice on the same day") }
         require(repeatReason == .alreadySucceeded, "Morning pre-warm: a second run the same day is skipped as already succeeded")
+        let morningExpiredToken = MorningWarmupPolicy.decision(
+            now: morningAt.addingTimeInterval(30), scheduledAt: morningAt, dayKey: "2026-6-1",
+            lastSuccessfulDay: "2026-5-31", liveWindowActive: false, sourceFresh: false,
+            expiredCredentialWindowEnded: true, windowDuration: window
+        )
+        require(
+            morningExpiredToken.shouldRun,
+            "Morning pre-warm: an overnight Claude token expiry with an ended last window still warms"
+        )
+        let morningUnavailable = MorningWarmupPolicy.decision(
+            now: morningAt.addingTimeInterval(30), scheduledAt: morningAt, dayKey: "2026-6-1",
+            lastSuccessfulDay: "2026-5-31", liveWindowActive: false, sourceFresh: false, windowDuration: window
+        )
+        guard case .skip(.quotaSourceUnavailable) = morningUnavailable else {
+            fatalError("Morning pre-warm: an unavailable source without an ended last window must still skip")
+        }
+        let morningExpiredRepeat = MorningWarmupPolicy.decision(
+            now: morningAt.addingTimeInterval(60), scheduledAt: morningAt, dayKey: "2026-6-1",
+            lastSuccessfulDay: "2026-6-1", liveWindowActive: false, sourceFresh: false,
+            expiredCredentialWindowEnded: true, windowDuration: window
+        )
+        require(!morningExpiredRepeat.shouldRun, "Morning pre-warm: the expired-token path still runs once per day")
         require(
             AutoWarmSkipReason.morning(.alreadySucceeded).label == "morning pre-warm: alreadySucceeded",
             "Morning pre-warm: the skip reason surfaces through the auto-warm reason"

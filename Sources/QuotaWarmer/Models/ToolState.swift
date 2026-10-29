@@ -45,6 +45,9 @@ final class ToolState: ObservableObject {
     @Published var tokenUsageSummary: TokenUsageSummary?
     @Published var isFetchingTokenUsage = false
     @Published var sourceHealth: SourceHealth = .unknown
+    /// The last fetch found Claude's access token expired; only the CLI can
+    /// refresh it. Cleared by the next successful fetch.
+    var awaitingCLITokenRefresh = false
     @Published var authStatus: AuthStatus = .unknown
     @Published var healthMessage: String = "not checked"
     @Published var nextRefreshAt: Date?

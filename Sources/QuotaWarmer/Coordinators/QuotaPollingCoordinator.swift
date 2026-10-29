@@ -168,6 +168,7 @@ final class QuotaPollingCoordinator {
             clearAuthRetry(for: state)
             host.lastSuccessfulPollAt = Date()
             state.quotaSnapshot = snapshot
+            state.awaitingCLITokenRefresh = false
             // Removed mid-fetch: don't recreate the deleted history file.
             if host.toolStates[tool] != nil {
                 UsageHistoryStore.shared.record(snapshot, for: tool)
@@ -204,6 +205,13 @@ final class QuotaPollingCoordinator {
             }
         } catch {
             applyQuotaError(error, to: state)
+            // An expired Claude token stays expired until the CLI runs, and a
+            // warm-up runs it. AutoWarmDecision allows that only when the last
+            // known window has already ended.
+            if allowAutomaticWarmup, state.awaitingCLITokenRefresh {
+                state.isFetchingQuota = false
+                await host.warmup.attemptAutomaticWarmup(tool: tool, reason: "expired Claude token, last window ended")
+            }
         }
 
         state.isFetchingQuota = false
@@ -351,6 +359,11 @@ final class QuotaPollingCoordinator {
         let message = error.localizedDescription
         state.errorMessage = message
         state.healthMessage = message
+        if case QuotaProviderError.cliRefreshRequired = error {
+            state.awaitingCLITokenRefresh = true
+        } else {
+            state.awaitingCLITokenRefresh = false
+        }
 
         if let providerError = error as? QuotaProviderError {
             switch providerError {

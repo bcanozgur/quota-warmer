@@ -90,6 +90,9 @@ enum AutoWarmDecision: Equatable {
         /// Today's morning pre-warm time when it is still ahead (nil when the
         /// pre-warm is off, paused, a skipped weekend, or already past).
         var upcomingMorningAt: Date?
+        /// Claude's access token expired and only the CLI can refresh it, so no
+        /// fresh reading is possible until something runs the CLI.
+        var awaitingCLITokenRefresh: Bool = false
     }
 
     static func gate(_ gate: Gate, now: Date) -> AutoWarmDecision {
@@ -106,6 +109,9 @@ enum AutoWarmDecision: Equatable {
     }
 
     static func window(_ window: Window, now: Date) -> AutoWarmDecision {
+        if window.awaitingCLITokenRefresh, window.sourceHealth != .healthy {
+            return expiredCredentialWindow(window, now: now)
+        }
         guard window.sourceHealth == .healthy else { return .skip(.sourceUnhealthy(window.sourceHealth)) }
         guard let snapshot = window.snapshot else { return .skip(.noQuotaReading) }
         guard snapshot.canAutoWarm(now: now, windowDuration: window.windowDuration) else {
@@ -130,6 +136,29 @@ enum AutoWarmDecision: Equatable {
                 return .skip(.warmedWindowActive(until: endsAt))
             }
             return .skip(.alreadyWarmedWindow)
+        }
+        return .warm
+    }
+
+    /// An expired Claude token deadlocks the healthy-source rule: no reading
+    /// until the CLI runs, and the warm-up is what runs it. Warm only when the
+    /// last known reading proves its window already ended, so a live window is
+    /// never warmed blind. The window key can't dedup here (it is the old
+    /// window's), so only the warmed window's end guards repeats.
+    private static func expiredCredentialWindow(_ window: Window, now: Date) -> AutoWarmDecision {
+        guard let snapshot = window.snapshot, snapshot.lastKnownWindowEnded(now: now) else {
+            return .skip(.sourceUnhealthy(window.sourceHealth))
+        }
+        if let morningAt = window.upcomingMorningAt,
+           MorningWarmupPolicy.reservesAutomaticWarmup(
+               now: now,
+               scheduledAt: morningAt,
+               windowDuration: window.windowDuration
+           ) {
+            return .skip(.reservedForMorning(at: morningAt))
+        }
+        if let endsAt = window.lastAutoWarmWindowEndsAt, endsAt > now {
+            return .skip(.warmedWindowActive(until: endsAt))
         }
         return .warm
     }

@@ -167,6 +167,10 @@ final class MorningCoordinator {
             )
             let sourceFresh = state.sourceHealth == .healthy && state.freshness == .fresh
             let liveWindowActive = state.quotaSnapshot?.showsActiveWindow() == true
+            // An overnight token expiry would otherwise skip every morning: the
+            // warm-up's CLI run is what refreshes the token.
+            let expiredCredentialWindowEnded = state.awaitingCLITokenRefresh
+                && state.quotaSnapshot?.lastKnownWindowEnded() == true
             let decision = MorningWarmupPolicy.decision(
                 now: now,
                 scheduledAt: scheduledAt,
@@ -174,6 +178,7 @@ final class MorningCoordinator {
                 lastSuccessfulDay: lastMorningWarmDay(for: tool, todayKey: todayKey),
                 liveWindowActive: liveWindowActive,
                 sourceFresh: sourceFresh,
+                expiredCredentialWindowEnded: expiredCredentialWindowEnded,
                 windowDuration: tool.windowDuration
             )
 

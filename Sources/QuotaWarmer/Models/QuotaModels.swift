@@ -139,6 +139,7 @@ struct MorningWarmupPolicy {
         lastSuccessfulDay: String?,
         liveWindowActive: Bool,
         sourceFresh: Bool,
+        expiredCredentialWindowEnded: Bool = false,
         windowDuration: TimeInterval,
         catchUpHorizon: TimeInterval? = nil,
         catchUpLatenessThreshold: TimeInterval = Self.catchUpLatenessThreshold
@@ -157,7 +158,9 @@ struct MorningWarmupPolicy {
             return .skip(.outsideCatchUpHorizon)
         }
 
-        guard sourceFresh else {
+        // An expired Claude token blocks every reading until the CLI runs; the
+        // warm-up is that run. Allowed only when the last reading's window ended.
+        guard sourceFresh || expiredCredentialWindowEnded else {
             return .skip(.quotaSourceUnavailable)
         }
 
@@ -397,6 +400,16 @@ struct QuotaSnapshot {
     func primaryWindowRolledOver(now: Date = Date()) -> Bool {
         guard let metric = fiveHour, !metric.isIdle, let resetAt = metric.resetAt else { return false }
         return resetAt <= now
+    }
+
+    /// This last-known reading proves no 5-hour window is running any more: the
+    /// window it describes has reset, or it was idle. Used only while Claude's
+    /// access token has expired (no fresh reading is possible until the CLI runs
+    /// and refreshes it), to let a managed warm-up — which runs the CLI and so
+    /// refreshes the token — break that deadlock without warming a live window.
+    func lastKnownWindowEnded(now: Date = Date()) -> Bool {
+        guard let metric = fiveHour else { return false }
+        return metric.isIdle || primaryWindowRolledOver(now: now)
     }
 
     /// True when the 5-hour window's reset says it only *just* opened (almost the

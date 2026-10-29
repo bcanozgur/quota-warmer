@@ -33,7 +33,8 @@ final class WarmupCoordinator {
                 windowDuration: tool.windowDuration,
                 lastAutoWindowKey: state.lastAutoWindowKey,
                 lastAutoWarmWindowEndsAt: state.lastAutoWarmWindowEndsAt,
-                upcomingMorningAt: host.morning.upcomingReservedMorningDate(now: now)
+                upcomingMorningAt: host.morning.upcomingReservedMorningDate(now: now),
+                awaitingCLITokenRefresh: state.awaitingCLITokenRefresh
             ),
             now: now
         )
@@ -146,13 +147,19 @@ final class WarmupCoordinator {
             // surfaced as an idle window with a sliding reset). Record the
             // command's expected reset so the confirm path (evaluateWarmupClaim)
             // has a stable boundary to trust instead of the sliding projection.
+            // A reset already in the past means the re-check still failed (e.g. an
+            // expired Claude token) and only the old window's reading is left.
             let liveMetric = state.primaryMetric
-            if liveMetric?.resetAt == nil || liveMetric?.isIdle == true {
+            let liveResetPassed = liveMetric?.resetAt.map { $0 <= result.date } ?? false
+            if liveMetric?.resetAt == nil || liveMetric?.isIdle == true || liveResetPassed {
                 state.rememberConfirmedWarmup(startedAt: result.date, duration: tool.windowDuration)
             }
             // Remember when this freshly-claimed window resets so the auto path
-            // won't re-warm it on the next poll (see attemptAutomaticWarmup).
-            state.rememberAutoWarmWindowEnd(state.resetAt ?? result.date.addingTimeInterval(tool.windowDuration))
+            // won't re-warm it on the next poll (see attemptAutomaticWarmup). A
+            // past reset would leave the guard open and re-warm every poll.
+            let windowEnd = state.resetAt.flatMap { $0 > result.date ? $0 : nil }
+                ?? result.date.addingTimeInterval(tool.windowDuration)
+            state.rememberAutoWarmWindowEnd(windowEnd)
             // Prove the window actually opened (not just that the command exited
             // zero). Confirmed now, or re-checked after a bounded grace period.
             evaluateWarmupClaim(for: tool, sentAt: result.date, attempt: 0)
