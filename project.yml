@@ -19,7 +19,7 @@ targets:
         CFBundleDisplayName: QuotaWarmer
         CFBundleName: QuotaWarmer
         CFBundleIdentifier: com.quotawarmer.app
-        CFBundleShortVersionString: "1.4.2"
+        CFBundleShortVersionString: "1.4.3"
         CFBundleVersion: "1"
         CFBundleLocalizations:
           - en
