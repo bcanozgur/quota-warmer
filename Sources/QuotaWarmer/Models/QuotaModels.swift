@@ -118,6 +118,20 @@ enum ScheduledWarmupDecision {
     }
 }
 
+/// When to run the Claude CLI's quota-free token refresh
+/// (`ToolID.claudeTokenRefreshCommand`) after a fetch found the token expired.
+/// Throttled so a CLI that can't refresh (signed out, offline) isn't spawned
+/// on every poll.
+enum CLITokenRefreshPolicy {
+    static let minimumInterval: TimeInterval = 10 * 60
+
+    static func shouldAttempt(awaitingCLITokenRefresh: Bool, lastAttemptAt: Date?, now: Date) -> Bool {
+        guard awaitingCLITokenRefresh else { return false }
+        guard let lastAttemptAt else { return true }
+        return now.timeIntervalSince(lastAttemptAt) >= minimumInterval
+    }
+}
+
 struct MorningWarmupPolicy {
     static let catchUpLatenessThreshold: TimeInterval = 15 * 60
 

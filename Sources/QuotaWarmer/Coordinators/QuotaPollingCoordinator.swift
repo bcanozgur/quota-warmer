@@ -219,9 +219,30 @@ final class QuotaPollingCoordinator {
             }
         } catch {
             applyQuotaError(error, to: state)
-            // An expired Claude token stays expired until the CLI runs, and a
-            // warm-up runs it. AutoWarmDecision allows that only when the last
-            // known window has already ended.
+            // An expired Claude token stays expired until the CLI runs. Its
+            // local `/usage` refreshes it without a model call, so try that
+            // (throttled) and re-read before anything else.
+            let now = Date()
+            if CLITokenRefreshPolicy.shouldAttempt(
+                awaitingCLITokenRefresh: state.awaitingCLITokenRefresh,
+                lastAttemptAt: state.lastCLITokenRefreshAttemptAt,
+                now: now
+            ) {
+                state.lastCLITokenRefreshAttemptAt = now
+                let refreshed = await runner.refreshClaudeCLIToken(for: tool)
+                DiagnosticLogger.append("claude_cli_token_refresh tool=\(tool.rawValue) ok=\(refreshed)")
+                if refreshed {
+                    state.isFetchingQuota = false
+                    await refreshQuota(
+                        for: tool,
+                        allowAutomaticWarmup: allowAutomaticWarmup,
+                        reconcileStuckOutcome: reconcileStuckOutcome
+                    )
+                    return
+                }
+            }
+            // Still expired: a warm-up also runs the CLI. AutoWarmDecision
+            // allows that only when the last known window has already ended.
             if allowAutomaticWarmup, state.awaitingCLITokenRefresh {
                 state.isFetchingQuota = false
                 await host.warmup.attemptAutomaticWarmup(tool: tool, reason: "expired Claude token, last window ended")

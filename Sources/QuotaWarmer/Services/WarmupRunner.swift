@@ -190,6 +190,22 @@ class WarmupRunner {
         )
     }
 
+    /// Runs `ToolID.claudeTokenRefreshCommand` so the CLI refreshes and stores
+    /// its own expired token (QuotaWarmer never spends the rotating refresh
+    /// token itself). True when the CLI exited cleanly; the next fetch is the proof.
+    func refreshClaudeCLIToken(for provider: ProviderID) async -> Bool {
+        guard provider.kind == .claude, let cliURL = await resolveCLI(named: "claude") else { return false }
+        let workspace = FileManager.default.temporaryDirectory.appendingPathComponent("QuotaWarmerTokenRefresh", isDirectory: true)
+        try? FileManager.default.createDirectory(at: workspace, withIntermediateDirectories: true)
+        let result = await runShellCommand(
+            Self.environmentPrefix(for: provider) + ToolID.claudeTokenRefreshCommand,
+            pathPrefix: cliURL.deletingLastPathComponent().path,
+            currentDirectoryURL: workspace,
+            timeout: 30
+        )
+        return result.exitCode == 0
+    }
+
     /// `CLAUDE_CONFIG_DIR='/Users/me/.claude-work' ` for an added account, empty
     /// for the default one. Set on the command line rather than the process
     /// environment so a login shell profile cannot override it.

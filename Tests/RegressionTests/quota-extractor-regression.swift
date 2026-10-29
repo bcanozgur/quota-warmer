@@ -1334,6 +1334,32 @@ access_token=private-value
             expiredCredentialWindowEnded: true, windowDuration: window
         )
         require(!morningExpiredRepeat.shouldRun, "Morning pre-warm: the expired-token path still runs once per day")
+
+        // Expired Claude token: the CLI's local `/usage` refreshes it without a
+        // model call. Throttled, and guarded so an older CLI can't spend quota.
+        let refreshInterval = CLITokenRefreshPolicy.minimumInterval
+        require(
+            CLITokenRefreshPolicy.shouldAttempt(awaitingCLITokenRefresh: true, lastAttemptAt: nil, now: now),
+            "CLI token refresh: an expired token with no prior attempt refreshes"
+        )
+        require(
+            !CLITokenRefreshPolicy.shouldAttempt(awaitingCLITokenRefresh: false, lastAttemptAt: nil, now: now),
+            "CLI token refresh: a valid token never spawns the CLI"
+        )
+        require(
+            !CLITokenRefreshPolicy.shouldAttempt(awaitingCLITokenRefresh: true, lastAttemptAt: now.addingTimeInterval(-refreshInterval + 1), now: now),
+            "CLI token refresh: throttled inside the interval"
+        )
+        require(
+            CLITokenRefreshPolicy.shouldAttempt(awaitingCLITokenRefresh: true, lastAttemptAt: now.addingTimeInterval(-refreshInterval), now: now),
+            "CLI token refresh: retries once the interval passed"
+        )
+        let refreshCommand = ToolID.claudeTokenRefreshCommand
+        require(refreshCommand.hasSuffix("-p '/usage'"), "CLI token refresh: runs the local /usage command")
+        require(
+            refreshCommand.contains("--model \(ToolID.claudeTokenRefreshModel) "),
+            "CLI token refresh: an invalid model guards CLIs that would send /usage to the model"
+        )
         require(
             AutoWarmSkipReason.morning(.alreadySucceeded).label == "morning pre-warm: alreadySucceeded",
             "Morning pre-warm: the skip reason surfaces through the auto-warm reason"

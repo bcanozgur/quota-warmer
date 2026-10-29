@@ -48,6 +48,8 @@ final class ToolState: ObservableObject {
     /// The last fetch found Claude's access token expired; only the CLI can
     /// refresh it. Cleared by the next successful fetch.
     var awaitingCLITokenRefresh = false
+    /// When QuotaWarmer last ran the CLI's quota-free token refresh (throttle).
+    var lastCLITokenRefreshAttemptAt: Date?
     @Published var authStatus: AuthStatus = .unknown
     @Published var healthMessage: String = "not checked"
     @Published var nextRefreshAt: Date?

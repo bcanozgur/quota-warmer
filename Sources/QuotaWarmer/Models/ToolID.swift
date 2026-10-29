@@ -82,6 +82,14 @@ enum ToolID: String, CaseIterable, Identifiable, Codable {
         }
     }
 
+    /// Makes the Claude CLI refresh its expired access token without a model
+    /// call: non-interactive `/usage` is a local command. The invalid model is
+    /// the guard: a CLI that doesn't know `/usage` sends it as a prompt, and the
+    /// API rejects the model before any quota is spent or a window opens.
+    static let claudeTokenRefreshModel = "quotawarmer-no-model"
+    static let claudeTokenRefreshCommand =
+        "claude --model \(claudeTokenRefreshModel) --strict-mcp-config --no-session-persistence --max-turns 1 --tools '' -p '/usage'"
+
     func legacyWarmupCommand(model: String) -> String? {
         switch self {
         case .claude: return "claude --model \(model) --no-session-persistence --max-turns 1 --tools '' -p 'hi'"
