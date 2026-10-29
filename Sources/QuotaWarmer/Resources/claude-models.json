@@ -1,18 +1,18 @@
 {
   "schemaVersion": 1,
-  "revision": 2,
-  "updatedAt": "2026-10-08",
+  "revision": 3,
+  "updatedAt": "2026-10-30",
   "source": "https://platform.claude.com/docs/en/about-claude/pricing",
   "upstream": {
     "url": "https://platform.claude.com/docs/en/about-claude/pricing.md",
     "format": "anthropic"
   },
   "warmup": {
-    "models": ["haiku", "claude-haiku-4-5"],
-    "cheapestModel": "haiku-4-5"
+    "models": ["haiku", "claude-haiku-5-5", "claude-haiku-4-5"],
+    "cheapestModel": "haiku-5-5"
   },
   "aliases": {
-    "haiku": "haiku-4-5",
+    "haiku": "haiku-5-5",
     "sonnet": "sonnet-5-5",
     "opus": "opus-5-5",
     "fable": "fable-5-1"

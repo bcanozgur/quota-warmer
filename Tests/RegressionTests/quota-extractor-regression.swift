@@ -1529,7 +1529,9 @@ access_token=private-value
             ("us.anthropic.claude-sonnet-4-5-20250929-v1:0", "sonnet-4-5"),
             ("claude-3-5-haiku-20241022", "haiku-3-5"),
             ("claude-3-haiku-20240307", "3-haiku"),
-            ("haiku", "haiku-4-5"),
+            // The CLI resolves the bare alias to Haiku 5.5 (measured 2026-10-30).
+            ("haiku", "haiku-5-5"),
+            ("claude-haiku-5-5", "haiku-5-5"),
             // Unknown future models must stay unpriced (and get reported), not
             // be priced as the nearest older family (opus-4 is 3x Opus 4.8).
             ("claude-opus-4-9", nil),
